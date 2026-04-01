@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.git
+.env
+.railway
+*.db
+*.sqlite
+dist
+*.egg-info
+BUILD_PROMPT.md

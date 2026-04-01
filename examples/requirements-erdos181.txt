@@ -1,0 +1,4 @@
+# Optional deps for examples/erdos_181_hypercube_ramsey.py
+networkx>=3.0
+matplotlib>=3.8
+python-sat>=0.1.8

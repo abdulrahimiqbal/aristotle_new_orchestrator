@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+.env
+.railway/
+dist/
+*.egg-info/
+.venv/

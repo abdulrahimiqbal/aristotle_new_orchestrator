@@ -1,0 +1,184 @@
+{# Fragment: main campaign view (HTMX swaps into #campaign-panel) #}
+{% set total = progress.target_total %}
+{% set resolved_n = progress.target_resolved %}
+{% set pct = progress.progress_percent %}
+
+<div class="space-y-8">
+  <header class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between border-b border-zinc-800/80 pb-6">
+    <div class="space-y-2 max-w-3xl">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-xs font-medium uppercase tracking-widest text-emerald-400/90">Campaign</span>
+        {% set st = state.campaign.status.value %}
+        <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold
+          {% if st == 'active' %}bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30
+          {% elif st == 'completed' %}bg-zinc-500/20 text-zinc-300 ring-1 ring-zinc-500/40
+          {% elif st == 'paused' %}bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/35
+          {% else %}bg-red-500/15 text-red-300 ring-1 ring-red-500/30{% endif %}">
+          {{ st }}
+        </span>
+      </div>
+      <h1 class="font-display text-2xl sm:text-3xl font-semibold text-zinc-100 leading-tight tracking-tight">
+        {{ state.campaign.prompt[:280] }}{% if state.campaign.prompt|length > 280 %}…{% endif %}
+      </h1>
+      <p class="text-sm text-zinc-500 font-mono">id · {{ state.campaign.id }}</p>
+      <p class="text-xs text-zinc-600 font-mono mt-1 break-all">workspace · {{ state.campaign.workspace_dir }}</p>
+      <p class="text-xs text-zinc-600 mt-1">template · <span class="font-mono text-zinc-400">{{ state.campaign.workspace_template }}</span></p>
+      <p class="text-[11px] text-zinc-600 mt-2 font-mono">runtime · max_exp {{ operator.max_experiments }} · active_cap {{ operator.max_active_experiments }} · tick {{ operator.tick_interval_sec }}s · root {{ operator.workspace_root }}</p>
+    </div>
+    <div class="flex flex-wrap gap-2 shrink-0">
+      {% if state.campaign.status.value == 'active' %}
+      <form action="/api/campaign/{{ selected }}/pause" method="post">
+        <button type="submit" class="rounded-lg bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-700 ring-1 ring-zinc-600/50 transition-colors">
+          Pause
+        </button>
+      </form>
+      {% elif state.campaign.status.value == 'paused' %}
+      <form action="/api/campaign/{{ selected }}/resume" method="post">
+        <button type="submit" class="rounded-lg bg-emerald-600/90 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 ring-1 ring-emerald-400/40 transition-colors">
+          Resume
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <section aria-label="Progress">
+    <div class="flex justify-between text-sm text-zinc-400 mb-2">
+      <span>Targets resolved</span>
+      <span class="font-mono text-zinc-300">{{ resolved_n }} / {{ total }}</span>
+    </div>
+    <div class="h-2 rounded-full bg-zinc-800 overflow-hidden ring-1 ring-zinc-700/50">
+      <div class="h-full rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-emerald-400 transition-all duration-700 ease-out"
+           style="width: {{ pct }}%"></div>
+    </div>
+  </section>
+
+  <section aria-label="Targets">
+    <h2 class="font-display text-lg font-semibold text-zinc-200 mb-4 flex items-center gap-2">
+      <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-violet-500 to-transparent"></span>
+      Targets
+    </h2>
+    <div class="grid gap-4 sm:grid-cols-2">
+      {% for t in state.targets %}
+      <article class="group rounded-xl border border-zinc-800/90 bg-zinc-900/40 p-4 backdrop-blur-sm hover:border-zinc-700/90 transition-colors ring-1 ring-black/20">
+        <div class="flex items-start justify-between gap-2 mb-3">
+          <p class="text-sm text-zinc-200 leading-relaxed font-medium">{{ t.description }}</p>
+          {% set ts = t.status.value %}
+          <span class="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
+            {% if ts == 'verified' %}bg-emerald-500/20 text-emerald-300
+            {% elif ts == 'refuted' %}bg-red-500/20 text-red-300
+            {% elif ts == 'blocked' %}bg-amber-500/20 text-amber-200
+            {% else %}bg-sky-500/20 text-sky-300{% endif %}">
+            {{ ts }}
+          </span>
+        </div>
+        <p class="text-[11px] font-mono text-zinc-600 mb-2">{{ t.id }}</p>
+        {% if t.evidence %}
+        <ul class="text-xs text-zinc-400 space-y-1.5 border-t border-zinc-800/80 pt-3 mt-2 max-h-36 overflow-y-auto custom-scroll">
+          {% for ev in t.evidence %}
+          <li class="pl-2 border-l-2 border-zinc-700">{{ ev }}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-xs text-zinc-600 italic border-t border-zinc-800/80 pt-3 mt-2">No evidence yet.</p>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section aria-label="Lemma ledger">
+    <h2 class="font-display text-lg font-semibold text-zinc-200 mb-4 flex items-center gap-2">
+      <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-amber-500 to-transparent"></span>
+      Recent ledger
+    </h2>
+    {% if state.manager_context_ledger %}
+    <ul class="text-xs text-zinc-400 space-y-2 rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-4 max-h-48 overflow-y-auto custom-scroll">
+      {% for row in state.manager_context_ledger[:30] %}
+      <li class="border-l-2 border-amber-500/40 pl-2">
+        <span class="font-semibold text-amber-200/90">{{ row.status }}</span>
+        <span class="text-zinc-500 font-mono ml-2">{{ row.experiment_id }}</span>
+        <p class="text-zinc-300 mt-0.5">{{ row.label[:400] }}{% if row.label|length > 400 %}…{% endif %}</p>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-zinc-600 italic">No ledger entries yet (completed experiments populate this).</p>
+    {% endif %}
+  </section>
+
+  <section aria-label="Experiments">
+    <h2 class="font-display text-lg font-semibold text-zinc-200 mb-4 flex items-center gap-2">
+      <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-fuchsia-500 to-transparent"></span>
+      Experiments
+    </h2>
+    <div class="overflow-x-auto rounded-xl border border-zinc-800/90 ring-1 ring-black/20">
+      <table class="w-full text-left text-sm">
+        <thead>
+          <tr class="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase tracking-wider text-zinc-500">
+            <th class="px-4 py-3 font-semibold">Objective</th>
+            <th class="px-4 py-3 font-semibold">Status</th>
+            <th class="px-4 py-3 font-semibold">Verdict</th>
+            <th class="px-4 py-3 font-semibold">Timing</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          {% for e in state.experiments %}
+          <tr class="hover:bg-zinc-800/30 transition-colors">
+            <td class="px-4 py-3 text-zinc-300 max-w-md">
+              <span class="line-clamp-2" title="{{ e.objective }}">{{ e.objective }}</span>
+              <span class="block text-[10px] font-mono text-zinc-600 mt-1">{{ e.id }}</span>
+            </td>
+            {% set es = e.status.value %}
+            <td class="px-4 py-3">
+              <span class="text-xs font-medium
+                {% if es == 'completed' %}text-emerald-400
+                {% elif es == 'failed' %}text-red-400
+                {% elif es == 'running' %}text-violet-400
+                {% elif es == 'submitted' %}text-violet-300
+                {% else %}text-zinc-500{% endif %}">{{ es }}</span>
+            </td>
+            <td class="px-4 py-3 text-zinc-400 text-xs font-mono">
+              {% if e.verdict %}{{ e.verdict.value }}{% else %}—{% endif %}
+            </td>
+            <td class="px-4 py-3 text-zinc-500 text-xs font-mono whitespace-nowrap">
+              {% if e.submitted_at %}{{ e.submitted_at.strftime('%m-%d %H:%M') }}{% else %}—{% endif %}
+              {% if e.completed_at %}→ {{ e.completed_at.strftime('%H:%M') }}{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if not state.experiments %}
+      <p class="px-4 py-8 text-center text-sm text-zinc-600">No experiments yet. The manager will schedule Aristotle jobs on the next tick.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section aria-label="Manager log">
+    <h2 class="font-display text-lg font-semibold text-zinc-200 mb-4 flex items-center gap-2">
+      <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-emerald-500 to-transparent"></span>
+      Manager log
+    </h2>
+    <div class="space-y-2">
+      {% for tick in ticks|reverse %}
+      <details class="group rounded-lg border border-zinc-800/80 bg-zinc-900/30 open:bg-zinc-900/50 transition-colors">
+        <summary class="cursor-pointer list-none flex items-center justify-between gap-3 px-4 py-3 text-sm text-zinc-300 hover:text-zinc-100">
+          <span class="font-mono text-xs text-violet-400/90">tick {{ tick.tick_number }}</span>
+          <span class="text-xs text-zinc-500 truncate flex-1 text-right">{{ tick.reasoning[:100] }}{% if tick.reasoning|length > 100 %}…{% endif %}</span>
+          <svg class="w-4 h-4 text-zinc-600 group-open:rotate-180 transition-transform shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="px-4 pb-4 pt-0 border-t border-zinc-800/60">
+          <p class="text-sm text-zinc-400 leading-relaxed whitespace-pre-wrap mt-3">{{ tick.reasoning }}</p>
+          {% if tick.actions_parsed %}
+          <pre class="mt-3 text-[11px] font-mono text-zinc-600 overflow-x-auto rounded bg-black/40 p-3 border border-zinc-800/80">{{ tick.actions_json_pretty }}</pre>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+      {% if not ticks %}
+      <p class="text-sm text-zinc-600 italic">No ticks recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
