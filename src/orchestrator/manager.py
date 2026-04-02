@@ -5,10 +5,16 @@ import logging
 import re
 import time
 
-from orchestrator.aristotle import parse_result, poll, submit
+from orchestrator.aristotle import (
+    parse_experiment_result,
+    poll,
+    submit,
+    with_synthesized_json_if_needed,
+)
 from orchestrator.config import (
     MAX_ACTIVE_EXPERIMENTS,
     MAX_EXPERIMENTS,
+    SYNTHESIZE_STRUCTURED_JSON,
     TICK_INTERVAL,
 )
 from orchestrator.db import Database
@@ -73,19 +79,24 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
         for exp in running:
             if not exp["aristotle_job_id"]:
                 continue
-            status, raw_output = await poll(
+            status, bundle = await poll(
                 exp["aristotle_job_id"],
                 campaign["workspace_dir"],
                 exp["submitted_at"] or "",
             )
             if status == "running":
                 db.update_experiment_running(exp["id"])
-            elif status == "completed" and raw_output:
-                parsed = parse_result(raw_output)
-                summary = await summarize_result(raw_output)
+            elif status == "completed" and bundle:
+                if SYNTHESIZE_STRUCTURED_JSON:
+                    bundle = with_synthesized_json_if_needed(bundle)
+                md = bundle.markdown or ""
+                js = bundle.structured_json_raw
+                raw_for_db = md if md.strip() else (js or "")
+                parsed = parse_experiment_result(md, js)
+                summary = await summarize_result(raw_for_db)
                 db.update_experiment_completed(
                     exp["id"],
-                    result_raw=raw_output,
+                    result_raw=raw_for_db,
                     result_summary=summary,
                     verdict=parsed.verdict.value,
                     parsed_proved_lemmas=parsed.proved_lemmas,
@@ -94,6 +105,13 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                     parsed_blockers=parsed.blockers,
                     parsed_counterexamples=parsed.counterexamples,
                     parsed_error_message=parsed.error_message or "",
+                    result_structured_json=js or "",
+                    parse_schema_version=parsed.parse_schema_version or 0,
+                    parse_source=parsed.parse_source,
+                    parse_warnings=parsed.parse_warnings,
+                )
+                db.increment_ops_counter(
+                    f"parse:{parsed.parse_source}", 1
                 )
                 db.append_ledger_entries(
                     campaign_id,

@@ -20,6 +20,11 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         cols = {r[1] for r in cur.fetchall()}
         assert "parsed_proved_lemmas_json" in cols
         assert "parsed_blockers_json" in cols
+        assert "result_structured_json" in cols
+        assert "parse_source" in cols
+        assert "parse_warnings_json" in cols
+        uv = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert int(uv) >= 3
     finally:
         conn.close()
 

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import tarfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from orchestrator.models import AristotleParsedResult, Verdict
 
@@ -21,6 +24,25 @@ PROJECT_LINE_PATTERN = re.compile(
 SUBPROCESS_TIMEOUT = 20 * 60  # 20 minutes
 GHOST_JOB_TIMEOUT = 2 * 3600  # 2 hours
 STALE_PROGRESS_TIMEOUT = 6 * 3600  # 6 hours
+
+# Machine-readable result artifact (preferred over markdown heuristics).
+STRUCTURED_JSON_NAMES = frozenset(
+    {
+        "aristotle_result.json",
+        "aristotle-result.json",
+    }
+)
+
+# Embedded in synthesized JSON so parse_result_json sets parse_source=markdown_derived.
+RESULT_ORIGIN_ORCHESTRATOR_MARKDOWN_V1 = "orchestrator_markdown_v1"
+
+
+@dataclass(frozen=True)
+class ExtractedArchive:
+    """Content extracted from an Aristotle result archive."""
+
+    markdown: str = ""
+    structured_json_raw: str | None = None
 
 
 def classify_failure(stdout: str, stderr: str) -> tuple[str, str]:
@@ -56,9 +78,16 @@ def _age_seconds(submitted_at: str) -> float | None:
         return None
 
 
-def extract_and_read_summary(archive_path: Path) -> str:
-    """Extract archive and return ARISTOTLE_SUMMARY.md content."""
-    extract_dir = archive_path.with_suffix(".contents")
+def _safe_under_base(path: Path, base: Path) -> bool:
+    try:
+        return str(path.resolve()).startswith(str(base.resolve()))
+    except OSError:
+        return False
+
+
+def _extract_archive_to_dir(archive_path: Path, extract_dir: Path) -> bool:
+    if not archive_path.is_file():
+        return False
     extract_dir.mkdir(parents=True, exist_ok=True)
     base = extract_dir.resolve()
 
@@ -73,7 +102,8 @@ def extract_and_read_summary(archive_path: Path) -> str:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(member, "r") as src, open(dest, "wb") as out:
                     out.write(src.read())
-    elif tarfile.is_tarfile(archive_path):
+        return True
+    if tarfile.is_tarfile(archive_path):
         with tarfile.open(archive_path) as tf:
             for member in tf.getmembers():
                 if member.isdir():
@@ -82,14 +112,181 @@ def extract_and_read_summary(archive_path: Path) -> str:
                 if not str(dest).startswith(str(base)):
                     continue
                 tf.extract(member, extract_dir)
-    else:
-        return ""
+        return True
+    return False
 
+
+def _read_summary_md(extract_dir: Path, base: Path) -> str:
     for path in extract_dir.rglob("*"):
-        if path.is_file() and "ARISTOTLE_SUMMARY" in path.name and path.suffix == ".md":
+        if not path.is_file():
+            continue
+        if not _safe_under_base(path, base):
+            continue
+        if "ARISTOTLE_SUMMARY" in path.name and path.suffix.lower() == ".md":
             return path.read_text(encoding="utf-8", errors="replace")
-
     return ""
+
+
+def _read_structured_json(extract_dir: Path, base: Path) -> str | None:
+    for path in extract_dir.rglob("*.json"):
+        if not path.is_file():
+            continue
+        if not _safe_under_base(path, base):
+            continue
+        if path.name.lower() in STRUCTURED_JSON_NAMES:
+            return path.read_text(encoding="utf-8", errors="replace")
+    return None
+
+
+def extract_archive(archive_path: Path) -> ExtractedArchive:
+    """Extract result archive and read summary markdown + optional ARISTOTLE_RESULT JSON."""
+    extract_dir = archive_path.with_suffix(".contents")
+    if not _extract_archive_to_dir(archive_path, extract_dir):
+        return ExtractedArchive()
+
+    base = extract_dir.resolve()
+    md = _read_summary_md(extract_dir, base)
+    js = _read_structured_json(extract_dir, base)
+    return ExtractedArchive(markdown=md, structured_json_raw=js)
+
+
+def extract_and_read_summary(archive_path: Path) -> str:
+    """Return ARISTOTLE_SUMMARY.md content only (legacy helper)."""
+    return extract_archive(archive_path).markdown
+
+
+def _normalize_str_list(val: Any) -> list[str]:
+    if val is None:
+        return []
+    if isinstance(val, str):
+        s = val.strip()
+        return [s] if s else []
+    if not isinstance(val, list):
+        return []
+    out: list[str] = []
+    for item in val:
+        if isinstance(item, str):
+            s = item.strip()
+            if s:
+                out.append(s)
+        elif isinstance(item, dict):
+            chunk = None
+            for key in ("label", "text", "name", "statement", "detail"):
+                v = item.get(key)
+                if v is not None and str(v).strip():
+                    chunk = str(v).strip()
+                    break
+            if chunk:
+                out.append(chunk)
+    return out
+
+
+def _parse_verdict_str(raw: str | None) -> Verdict | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    key = raw.strip().lower().replace("-", "_")
+    mapping = {
+        "proved": Verdict.PROVED,
+        "partial": Verdict.PARTIAL,
+        "disproved": Verdict.DISPROVED,
+        "inconclusive": Verdict.INCONCLUSIVE,
+        "inconclusive_result": Verdict.INCONCLUSIVE,
+        "infra_error": Verdict.INFRA_ERROR,
+        "infra": Verdict.INFRA_ERROR,
+    }
+    return mapping.get(key)
+
+
+def parse_result_json(data: dict[str, Any]) -> tuple[AristotleParsedResult, list[str]]:
+    """Parse schema v1 `aristotle_result.json` into AristotleParsedResult."""
+    warnings: list[str] = []
+    schema_version = data.get("schema_version")
+    if schema_version is None:
+        warnings.append("structured JSON missing schema_version; assuming 1")
+        sv = 1
+    else:
+        try:
+            sv = int(schema_version)
+        except (TypeError, ValueError):
+            warnings.append("structured JSON schema_version not an integer; assuming 1")
+            sv = 1
+    if sv > 1:
+        warnings.append(
+            f"structured JSON schema_version={sv} newer than supported (1); using v1 field mapping"
+        )
+
+    verdict = _parse_verdict_str(data.get("verdict"))
+    if verdict is None and data.get("verdict") is not None:
+        warnings.append(f"unknown verdict in JSON: {data.get('verdict')!r}")
+        verdict = Verdict.INCONCLUSIVE
+
+    proved = _normalize_str_list(data.get("proved_lemmas"))
+    generated = _normalize_str_list(data.get("generated_lemmas"))
+    unsolved = _normalize_str_list(data.get("unsolved_goals"))
+    blockers = _normalize_str_list(data.get("blockers"))
+    counterexamples = _normalize_str_list(data.get("counterexamples"))
+
+    err = data.get("error") or data.get("error_message") or ""
+    error_message = str(err).strip() if err is not None else ""
+
+    summary_bits: list[str] = []
+    if isinstance(data.get("summary"), str) and data["summary"].strip():
+        summary_bits.append(data["summary"].strip()[:8000])
+
+    origin = data.get("result_origin")
+    if origin == RESULT_ORIGIN_ORCHESTRATOR_MARKDOWN_V1:
+        parse_source = "markdown_derived"
+    elif origin:
+        warnings.append(f"unknown result_origin in JSON: {origin!r}")
+        parse_source = "json"
+    else:
+        parse_source = "json"
+
+    result = AristotleParsedResult(
+        verdict=verdict or Verdict.INCONCLUSIVE,
+        proved_lemmas=proved,
+        generated_lemmas=generated,
+        unsolved_goals=unsolved,
+        blockers=blockers,
+        counterexamples=counterexamples,
+        error_message=error_message,
+        summary_text="\n".join(summary_bits),
+        parse_source=parse_source,
+        parse_schema_version=sv,
+        parse_warnings=warnings,
+    )
+    return result, warnings
+
+
+def parse_experiment_result(
+    markdown: str, structured_json_raw: str | None
+) -> AristotleParsedResult:
+    """Prefer machine-readable JSON; fall back to markdown heuristics."""
+    md = markdown or ""
+    if not (structured_json_raw and structured_json_raw.strip()):
+        return parse_result(md)
+
+    extra_warnings: list[str] = []
+    try:
+        parsed_obj = json.loads(structured_json_raw)
+    except json.JSONDecodeError as e:
+        extra_warnings.append(f"structured JSON decode error: {e}")
+        fb = parse_result(md)
+        fb.parse_warnings = list(fb.parse_warnings) + extra_warnings
+        return fb
+
+    if not isinstance(parsed_obj, dict):
+        extra_warnings.append("structured JSON root is not an object; using markdown")
+        fb = parse_result(md)
+        fb.parse_warnings = list(fb.parse_warnings) + extra_warnings
+        return fb
+
+    parsed, _w = parse_result_json(parsed_obj)
+    if md.strip():
+        parsed.summary_text = md[:8000]
+    elif not parsed.summary_text.strip():
+        parsed.summary_text = structured_json_raw[:8000]
+    return parsed
 
 
 async def submit(objective: str, project_dir: str) -> tuple[str, str]:
@@ -125,11 +322,13 @@ async def submit(objective: str, project_dir: str) -> tuple[str, str]:
     return match.group(1), ""
 
 
-async def poll(job_id: str, project_dir: str, submitted_at: str) -> tuple[str, str | None]:
-    """Check job status. Returns (status, raw_output_or_none).
+async def poll(
+    job_id: str, project_dir: str, submitted_at: str
+) -> tuple[str, ExtractedArchive | None]:
+    """Check job status.
 
-    status is one of: "running", "completed", "failed"
-    raw_output is only set when status is "completed"
+    Returns (status, archive_payload_or_none). status is running|completed|failed.
+    Payload is set only when status is completed and the archive yielded content.
     """
     project_dir = str(Path(project_dir).resolve())
     try:
@@ -183,13 +382,19 @@ async def poll(job_id: str, project_dir: str, submitted_at: str) -> tuple[str, s
     if result_cmd.returncode != 0:
         return "failed", None
 
-    raw_output = extract_and_read_summary(destination)
-    return "completed", raw_output if raw_output else None
+    bundle = extract_archive(destination)
+    if not bundle.markdown.strip() and not (bundle.structured_json_raw or "").strip():
+        return "completed", None
+    return "completed", bundle
 
 
 def parse_result(markdown: str) -> AristotleParsedResult:
     """Parse ARISTOTLE_SUMMARY.md-style content into structured fields."""
-    result = AristotleParsedResult(summary_text=(markdown or "")[:8000])
+    result = AristotleParsedResult(
+        summary_text=(markdown or "")[:8000],
+        parse_source="markdown",
+        parse_schema_version=None,
+    )
 
     if not (markdown or "").strip():
         result.verdict = Verdict.INCONCLUSIVE
@@ -273,3 +478,33 @@ def parse_result(markdown: str) -> AristotleParsedResult:
         result.verdict = Verdict.INCONCLUSIVE
 
     return result
+
+
+def synthesize_structured_json_from_markdown(markdown: str) -> str:
+    """Build schema-v1 JSON from markdown summary parsing (local shim for consistency)."""
+    r = parse_result(markdown)
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "result_origin": RESULT_ORIGIN_ORCHESTRATOR_MARKDOWN_V1,
+        "verdict": r.verdict.value,
+        "proved_lemmas": r.proved_lemmas,
+        "generated_lemmas": r.generated_lemmas,
+        "unsolved_goals": r.unsolved_goals,
+        "blockers": r.blockers,
+        "counterexamples": r.counterexamples,
+    }
+    if r.error_message.strip():
+        payload["error_message"] = r.error_message
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def with_synthesized_json_if_needed(bundle: ExtractedArchive) -> ExtractedArchive:
+    """If the archive had summary markdown but no JSON file, attach synthesized v1 JSON."""
+    if not bundle.markdown.strip():
+        return bundle
+    if (bundle.structured_json_raw or "").strip():
+        return bundle
+    return ExtractedArchive(
+        markdown=bundle.markdown,
+        structured_json_raw=synthesize_structured_json_from_markdown(bundle.markdown),
+    )

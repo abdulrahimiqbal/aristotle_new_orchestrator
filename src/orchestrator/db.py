@@ -159,6 +159,18 @@ class Database:
                 """
             )
             _set_user_version(conn, 2)
+            v = 2
+        if v < 3:
+            v3_cols = [
+                ("result_structured_json", "TEXT NOT NULL DEFAULT ''"),
+                ("parse_schema_version", "INTEGER NOT NULL DEFAULT 0"),
+                ("parse_source", "TEXT NOT NULL DEFAULT ''"),
+                ("parse_warnings_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ]
+            for col, decl in v3_cols:
+                if not _column_exists(conn, "experiments", col):
+                    conn.execute(f"ALTER TABLE experiments ADD COLUMN {col} {decl}")
+            _set_user_version(conn, 3)
 
     def create_campaign(
         self,
@@ -274,6 +286,18 @@ class Database:
                 else None
             ),
             parsed_error_message=err_raw,
+            result_structured_json=str(row["result_structured_json"])
+            if "result_structured_json" in keys and row["result_structured_json"] is not None
+            else "",
+            parse_schema_version=int(row["parse_schema_version"] or 0)
+            if "parse_schema_version" in keys
+            else 0,
+            parse_source=str(row["parse_source"] or "")
+            if "parse_source" in keys
+            else "",
+            parse_warnings=self._parse_json_list(
+                row["parse_warnings_json"] if "parse_warnings_json" in keys else None
+            ),
         )
 
     def _row_tick(self, row: sqlite3.Row) -> Tick:
@@ -303,7 +327,8 @@ class Database:
                 SELECT id, target_id, objective, status, verdict, result_summary,
                   parsed_proved_lemmas_json, parsed_generated_lemmas_json,
                   parsed_unsolved_goals_json, parsed_blockers_json, parsed_counterexamples_json,
-                  parsed_error_message, completed_at
+                  parsed_error_message, completed_at,
+                  parse_source, parse_schema_version
                 FROM experiments
                 WHERE campaign_id = ? AND status = ?
                 ORDER BY datetime(completed_at) DESC, id DESC
@@ -311,29 +336,65 @@ class Database:
                 """,
                 (campaign_id, ExperimentStatus.COMPLETED.value, limit),
             )
-            out: list[dict[str, Any]] = []
-            for r in cur.fetchall():
-                out.append(
-                    {
-                        "id": r["id"],
-                        "target_id": r["target_id"],
-                        "objective": r["objective"],
-                        "status": r["status"],
-                        "verdict": r["verdict"],
-                        "result_summary": r["result_summary"],
-                        "proved_lemmas": self._parse_json_list(r["parsed_proved_lemmas_json"]),
-                        "generated_lemmas": self._parse_json_list(
-                            r["parsed_generated_lemmas_json"]
-                        ),
-                        "unsolved_goals": self._parse_json_list(r["parsed_unsolved_goals_json"]),
-                        "blockers": self._parse_json_list(r["parsed_blockers_json"]),
-                        "counterexamples": self._parse_json_list(
-                            r["parsed_counterexamples_json"]
-                        ),
-                        "error_message": r["parsed_error_message"] or "",
-                        "completed_at": r["completed_at"],
-                    }
+            return [self._structured_experiment_row(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def _structured_experiment_row(self, r: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": r["id"],
+            "target_id": r["target_id"],
+            "objective": r["objective"],
+            "status": r["status"],
+            "verdict": r["verdict"],
+            "result_summary": r["result_summary"],
+            "proved_lemmas": self._parse_json_list(r["parsed_proved_lemmas_json"]),
+            "generated_lemmas": self._parse_json_list(r["parsed_generated_lemmas_json"]),
+            "unsolved_goals": self._parse_json_list(r["parsed_unsolved_goals_json"]),
+            "blockers": self._parse_json_list(r["parsed_blockers_json"]),
+            "counterexamples": self._parse_json_list(r["parsed_counterexamples_json"]),
+            "error_message": r["parsed_error_message"] or "",
+            "completed_at": r["completed_at"],
+            "parse_source": r["parse_source"] if "parse_source" in r.keys() else "",
+            "parse_schema_version": int(r["parse_schema_version"] or 0)
+            if "parse_schema_version" in r.keys()
+            else 0,
+        }
+
+    def get_structured_experiments_for_targets(
+        self,
+        campaign_id: str,
+        target_ids: list[str],
+        limit_per_target: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Recent completed experiments per target (structured fields) for LLM context."""
+        if limit_per_target <= 0 or not target_ids:
+            return {}
+        out: dict[str, list[dict[str, Any]]] = {tid: [] for tid in target_ids}
+        conn = self._connect()
+        try:
+            for tid in target_ids:
+                cur = conn.execute(
+                    """
+                    SELECT id, target_id, objective, status, verdict, result_summary,
+                      parsed_proved_lemmas_json, parsed_generated_lemmas_json,
+                      parsed_unsolved_goals_json, parsed_blockers_json, parsed_counterexamples_json,
+                      parsed_error_message, completed_at,
+                      parse_source, parse_schema_version
+                    FROM experiments
+                    WHERE campaign_id = ? AND target_id = ? AND status = ?
+                    ORDER BY datetime(completed_at) DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (
+                        campaign_id,
+                        tid,
+                        ExperimentStatus.COMPLETED.value,
+                        limit_per_target,
+                    ),
                 )
+                rows = cur.fetchall()
+                out[tid] = [self._structured_experiment_row(r) for r in rows]
             return out
         finally:
             conn.close()
@@ -394,6 +455,12 @@ class Database:
             ctx_led = self.get_recent_ledger_entries(
                 campaign_id, app_config.LLM_LEDGER_ENTRIES_LIMIT
             )
+            tid_list = [t.id for t in targets]
+            ctx_by_target = self.get_structured_experiments_for_targets(
+                campaign_id,
+                tid_list,
+                app_config.LLM_STRUCTURED_EXPERIMENTS_PER_TARGET,
+            )
 
             return CampaignState(
                 campaign=campaign,
@@ -401,6 +468,7 @@ class Database:
                 experiments=experiments,
                 recent_ticks=recent_ticks,
                 manager_context_experiments=ctx_exp,
+                manager_context_experiments_by_target=ctx_by_target,
                 manager_context_ledger=ctx_led,
             )
         finally:
@@ -462,8 +530,13 @@ class Database:
         parsed_blockers: list[str],
         parsed_counterexamples: list[str],
         parsed_error_message: str,
+        result_structured_json: str = "",
+        parse_schema_version: int = 0,
+        parse_source: str = "",
+        parse_warnings: list[str] | None = None,
     ) -> None:
         now = datetime.utcnow().isoformat()
+        pw = parse_warnings if parse_warnings is not None else []
         conn = self._connect()
         try:
             conn.execute(
@@ -472,7 +545,9 @@ class Database:
                 SET status = ?, result_raw = ?, result_summary = ?, verdict = ?, completed_at = ?,
                     parsed_proved_lemmas_json = ?, parsed_generated_lemmas_json = ?,
                     parsed_unsolved_goals_json = ?, parsed_blockers_json = ?,
-                    parsed_counterexamples_json = ?, parsed_error_message = ?
+                    parsed_counterexamples_json = ?, parsed_error_message = ?,
+                    result_structured_json = ?, parse_schema_version = ?, parse_source = ?,
+                    parse_warnings_json = ?
                 WHERE id = ?
                 """,
                 (
@@ -487,6 +562,10 @@ class Database:
                     json.dumps(parsed_blockers),
                     json.dumps(parsed_counterexamples),
                     parsed_error_message or "",
+                    result_structured_json or "",
+                    int(parse_schema_version or 0),
+                    parse_source or "",
+                    json.dumps(pw),
                     experiment_id,
                 ),
             )
@@ -529,19 +608,43 @@ class Database:
         finally:
             conn.close()
 
-    def update_experiment_failed(self, experiment_id: str, error: str) -> None:
+    def update_experiment_failed(
+        self,
+        experiment_id: str,
+        error: str,
+        *,
+        verdict: str | None = None,
+    ) -> None:
         now = datetime.utcnow().isoformat()
         conn = self._connect()
         try:
-            conn.execute(
-                """
-                UPDATE experiments
-                SET status = ?, result_summary = ?, completed_at = ?,
-                    parsed_error_message = ?
-                WHERE id = ?
-                """,
-                (ExperimentStatus.FAILED.value, error, now, error[:8000], experiment_id),
-            )
+            if verdict is not None:
+                conn.execute(
+                    """
+                    UPDATE experiments
+                    SET status = ?, result_summary = ?, completed_at = ?,
+                        parsed_error_message = ?, verdict = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        ExperimentStatus.FAILED.value,
+                        error,
+                        now,
+                        error[:8000],
+                        verdict,
+                        experiment_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE experiments
+                    SET status = ?, result_summary = ?, completed_at = ?,
+                        parsed_error_message = ?
+                    WHERE id = ?
+                    """,
+                    (ExperimentStatus.FAILED.value, error, now, error[:8000], experiment_id),
+                )
             conn.commit()
         finally:
             conn.close()
@@ -612,7 +715,27 @@ class Database:
             created_at=_parse_dt(row["created_at"]) or datetime.utcnow(),
         )
 
+    def abandon_inflight_aristotle_jobs(self, campaign_id: str, reason: str) -> int:
+        """Mark submitted/running experiments failed when the campaign ends anyway."""
+        n = 0
+        for exp in self.get_running_experiments(campaign_id):
+            self.update_experiment_failed(
+                str(exp["id"]),
+                reason,
+                verdict=Verdict.INFRA_ERROR.value,
+            )
+            self.append_target_evidence(
+                str(exp["target_id"]),
+                f"Experiment {exp['id']}: {reason[:240]}",
+            )
+            n += 1
+        return n
+
     def complete_campaign(self, campaign_id: str) -> None:
+        self.abandon_inflight_aristotle_jobs(
+            campaign_id,
+            "Campaign closed before Aristotle returned a final result (in-flight job abandoned).",
+        )
         conn = self._connect()
         try:
             conn.execute(

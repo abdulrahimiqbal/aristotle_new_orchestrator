@@ -79,6 +79,10 @@ class Experiment(BaseModel):
     parsed_blockers: list[str] = Field(default_factory=list)
     parsed_counterexamples: list[str] = Field(default_factory=list)
     parsed_error_message: str = ""
+    result_structured_json: str = ""
+    parse_schema_version: int = 0
+    parse_source: str = ""
+    parse_warnings: list[str] = Field(default_factory=list)
 
 
 class Tick(BaseModel):
@@ -122,6 +126,9 @@ class AristotleParsedResult(BaseModel):
     counterexamples: list[str] = Field(default_factory=list)
     error_message: str = ""
     summary_text: str = ""
+    parse_source: str = "markdown"
+    parse_schema_version: int | None = None
+    parse_warnings: list[str] = Field(default_factory=list)
 
 
 class LedgerEntry(BaseModel):
@@ -143,4 +150,7 @@ class CampaignState(BaseModel):
     experiments: list[Experiment]
     recent_ticks: list[Tick] = Field(default_factory=list)
     manager_context_experiments: list[dict[str, Any]] = Field(default_factory=list)
+    manager_context_experiments_by_target: dict[str, list[dict[str, Any]]] = Field(
+        default_factory=dict
+    )
     manager_context_ledger: list[dict[str, Any]] = Field(default_factory=list)

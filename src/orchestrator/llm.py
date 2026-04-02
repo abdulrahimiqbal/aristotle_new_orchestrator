@@ -153,6 +153,35 @@ def _format_state_for_llm(state: CampaignState) -> str:
         err = row.get("error_message") or ""
         if err:
             lines.append(f"  error_message: {err[:500]}")
+        ps = row.get("parse_source") or ""
+        if ps:
+            lines.append(f"  parse_source: {ps}")
+    lines.append("")
+    lines.append("## Structured results by target (recent per target)")
+    for t in state.targets:
+        rows = state.manager_context_experiments_by_target.get(t.id) or []
+        if not rows:
+            continue
+        lines.append(f"- target={t.id} status={t.status.value}")
+        lines.append(f"  description: {t.description[:500]}{'…' if len(t.description) > 500 else ''}")
+        for row in rows:
+            lines.append(
+                f"  exp={row.get('id')} verdict={row.get('verdict')} "
+                f"parse_source={row.get('parse_source') or 'n/a'}"
+            )
+            for k in (
+                "proved_lemmas",
+                "generated_lemmas",
+                "unsolved_goals",
+                "blockers",
+                "counterexamples",
+            ):
+                vals = row.get(k) or []
+                if isinstance(vals, list) and vals:
+                    lines.append(f"    {k}: {vals[:20]}")
+            err = row.get("error_message") or ""
+            if err:
+                lines.append(f"    error_message: {err[:500]}")
     lines.append("")
     lines.append("## Lemma / obligation ledger (recent)")
     for row in state.manager_context_ledger:
@@ -238,6 +267,8 @@ Key principles:
 - A target is "verified" only when Aristotle returns verdict=proved.
 - A target is "blocked" if 3+ experiments all fail with infra errors or the approach seems fundamentally stuck.
 - The campaign is complete when all targets are verified, refuted, or blocked.
+
+When setting campaign_complete: prefer not to give up while experiments are still submitted/running unless you have waited many ticks with no verdicts; if you do complete anyway, in-flight Aristotle jobs will be marked failed as infrastructure abandonment (consistent DB state).
 
 Use the "Recent structured experiment results" and "Lemma / obligation ledger" sections as authoritative structured memory; do not ignore them in long campaigns.
 

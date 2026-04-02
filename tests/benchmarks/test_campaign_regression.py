@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestrator.aristotle import ExtractedArchive
 from orchestrator.db import Database
 from orchestrator.manager import tick
 
@@ -36,7 +37,7 @@ async def test_tick_marks_completed_persists_parsed_and_ledger(
     campaign_row = {"id": cid, "workspace_dir": ws_dir}
 
     async def _poll(*_a, **_k):
-        return "completed", _MARKDOWN
+        return "completed", ExtractedArchive(markdown=_MARKDOWN)
 
     async def _submit(*_a, **_k):
         return "", "skip"
@@ -49,7 +50,9 @@ async def test_tick_marks_completed_persists_parsed_and_ledger(
     assert exp.status.value == "completed"
     assert exp.verdict is not None
     assert len(exp.parsed_proved_lemmas) >= 1
+    assert exp.parse_source == "markdown_derived"
     assert state.manager_context_experiments
+    assert tid in state.manager_context_experiments_by_target
     led = db.get_recent_ledger_entries(cid, 20)
     assert any(row["experiment_id"] == eid for row in led)
 

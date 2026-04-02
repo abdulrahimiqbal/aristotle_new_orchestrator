@@ -46,6 +46,9 @@ LLM_EVIDENCE_TARGET_TAIL = _int_env("LLM_EVIDENCE_TARGET_TAIL", 24)
 LLM_EXPERIMENT_SUMMARY_CHARS = _int_env("LLM_EXPERIMENT_SUMMARY_CHARS", 4000)
 LLM_TICK_REASONING_CHARS = _int_env("LLM_TICK_REASONING_CHARS", 4000)
 LLM_RECENT_STRUCTURED_EXPERIMENTS = _int_env("LLM_RECENT_STRUCTURED_EXPERIMENTS", 12)
+LLM_STRUCTURED_EXPERIMENTS_PER_TARGET = _int_env(
+    "LLM_STRUCTURED_EXPERIMENTS_PER_TARGET", 3
+)
 LLM_LEDGER_ENTRIES_LIMIT = _int_env("LLM_LEDGER_ENTRIES_LIMIT", 40)
 
 # Summarization of raw Aristotle output
@@ -53,6 +56,10 @@ LLM_SUMMARIZE_INPUT_CHARS = _int_env("LLM_SUMMARIZE_INPUT_CHARS", 50000)
 
 # JSON mode for chat completions
 LLM_JSON_MODE = _bool_env("LLM_JSON_MODE", True)
+
+# When true (default), missing aristotle_result.json is filled by synthesizing schema v1
+# JSON from ARISTOTLE_SUMMARY.md so storage + parsing use one structured path.
+SYNTHESIZE_STRUCTURED_JSON = _bool_env("SYNTHESIZE_STRUCTURED_JSON", True)
 
 # Admin HTTP API (Bearer ADMIN_TOKEN, or X-Admin-Token, or ?admin_token=)
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
