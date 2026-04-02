@@ -150,6 +150,7 @@ async def dashboard(request: Request):
             "ticks": [],
             "progress": None,
             "operator": _operator_runtime_context(),
+            "public_view": False,
         },
     )
 
@@ -173,6 +174,35 @@ async def campaign_detail(request: Request, campaign_id: str):
             "ticks": ticks,
             "progress": progress,
             "operator": _operator_runtime_context(),
+            "public_view": False,
+            **_cartography_context(state),
+        },
+    )
+
+
+@app.get("/p/campaign/{campaign_id}", response_class=HTMLResponse)
+async def public_campaign_detail(request: Request, campaign_id: str):
+    """Read-only campaign view for sharing: no other campaigns listed, no new campaign, no pause/resume."""
+    if not db.campaign_exists(campaign_id):
+        return HTMLResponse("Unknown campaign", status_code=404)
+    try:
+        state = db.get_campaign_state(campaign_id)
+    except ValueError:
+        return HTMLResponse("Unknown campaign", status_code=404)
+    campaigns = [c for c in db.get_all_campaigns() if c.id == campaign_id]
+    ticks = _ticks_view(db.get_recent_ticks(campaign_id, limit=20))
+    progress = _progress_stats(state)
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "campaigns": campaigns,
+            "selected": campaign_id,
+            "state": state,
+            "ticks": ticks,
+            "progress": progress,
+            "operator": _operator_runtime_context(),
+            "public_view": True,
             **_cartography_context(state),
         },
     )
@@ -316,6 +346,35 @@ async def campaign_state_fragment(request: Request, campaign_id: str):
             "ticks": ticks,
             "progress": progress,
             "operator": _operator_runtime_context(),
+            "public_view": False,
+            **_cartography_context(state),
+        },
+    )
+
+
+@app.get("/api/public/campaign/{campaign_id}/state", response_class=HTMLResponse)
+async def public_campaign_state_fragment(request: Request, campaign_id: str):
+    """HTMX fragment for /p/campaign/{id}: same panel as operator view minus workspace path and controls."""
+    if not db.campaign_exists(campaign_id):
+        return HTMLResponse("", status_code=404)
+    try:
+        state = db.get_campaign_state(campaign_id)
+    except ValueError:
+        return HTMLResponse("", status_code=404)
+    ticks = _ticks_view(db.get_recent_ticks(campaign_id, limit=20))
+    progress = _progress_stats(state)
+    campaigns = [c for c in db.get_all_campaigns() if c.id == campaign_id]
+    return templates.TemplateResponse(
+        request,
+        "campaign_panel.html",
+        {
+            "campaigns": campaigns,
+            "selected": campaign_id,
+            "state": state,
+            "ticks": ticks,
+            "progress": progress,
+            "operator": _operator_runtime_context(),
+            "public_view": True,
             **_cartography_context(state),
         },
     )

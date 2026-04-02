@@ -21,6 +21,7 @@ from orchestrator.models import (
 from orchestrator.problem_map_util import (
     coerce_llm_problem_map,
     normalize_move_kind,
+    normalize_node_kind,
     parse_problem_map,
     parse_problem_refs,
 )
@@ -174,8 +175,9 @@ def _format_state_for_llm(state: CampaignState) -> str:
         if isinstance(nodes, list):
             for n in nodes[:24]:
                 if isinstance(n, dict):
+                    nk = normalize_node_kind(n.get("kind"))
                     lines.append(
-                        f"- node id={n.get('id')} status={n.get('status')} "
+                        f"- node id={n.get('id')} kind={nk} status={n.get('status')} "
                         f"label={str(n.get('label', ''))[:300]}"
                     )
         fronts = pmap.get("active_fronts") or []
@@ -431,17 +433,26 @@ async def update_problem_map(
 
 The main theorem may be out of reach; track the landscape: nodes (claims/subproblems), edges (implies / special_case / equivalent / relates), active_fronts (what to push on now), and a short summary of difficulty and strategy.
 
-Discovery via verification: update node statuses from evidence (proved, refuted, blocked, open, active). Align active_fronts with where experiments should focus.
+Each node carries a "kind" (semantic role — orthogonal to status):
+- claim: standard lemma or subgoal toward the main result (default).
+- hypothesis: explicit provisional assumption ("if we had X…"); not established.
+- finite_check: decidable / bounded / computational slice (e.g. n ≤ B).
+- literature_anchor: formalization target tied to problem_refs or given external sources.
+- obstruction: known hard gate or bottleneck (still a formal target, but tag it as such).
+- exploration: scouting / fuzzy node to be refined or split later.
+- equivalence: alternate formulation logically key to the main question.
+
+Discovery via verification: update node statuses from evidence (proved, refuted, blocked, open, active). Align active_fronts with where experiments should focus. Use kinds so planners can prioritize finite_check and literature_anchor before unbounded obstructions.
 
 Return JSON only:
 {
   "summary": "2–6 sentences",
-  "nodes": [ {"id": "stable_id", "label": "short text", "status": "open|active|blocked|proved|refuted"} ],
+  "nodes": [ {"id": "stable_id", "label": "short text", "status": "open|active|blocked|proved|refuted", "kind": "claim|hypothesis|finite_check|literature_anchor|obstruction|exploration|equivalence"} ],
   "edges": [ {"from": "node_id", "to": "node_id", "kind": "would_imply|special_case|equivalent|relates"} ],
   "active_fronts": ["node_id", ...]
 }
 
-Keep nodes concise (max ~20). Reuse stable ids when the same subproblem persists. Do not cite sources that were not given in problem_refs."""
+Keep nodes concise (max ~20). Reuse stable ids when the same subproblem persists. Omit "kind" only when claim is appropriate. Do not cite sources that were not given in problem_refs."""
 
     user = f"""## Campaign prompt
 {campaign_prompt[:4000]}

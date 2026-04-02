@@ -20,6 +20,37 @@ One **FastAPI** process serves the **HTMX + Tailwind** dashboard and a **backgro
                                                └─────────────────┘
 ```
 
+## Problem map (JSON structure)
+
+Each campaign stores **`campaigns.problem_map_json`**: a single JSON object the manager refreshes on a schedule (see `MAP_REFRESH_MAX_INTERVAL_TICKS` / manager tick). It is **not** the same as verification **targets** (those are separate rows); the map is a **landscape graph** for the LLM and dashboard.
+
+| Field | Role |
+|--------|------|
+| **`summary`** | Short narrative: difficulty, strategy, what changed. |
+| **`nodes`** | List of `{ "id", "label", "status", "kind" }`. Max **40** nodes are kept after LLM output (`coerce_llm_problem_map`). |
+| **`edges`** | List of `{ "from", "to", "kind" }` between node ids (`would_imply`, `special_case`, `equivalent`, `relates`, …). |
+| **`active_fronts`** | Node ids where the planner should focus experiments next. |
+| **`last_tick_updated`** | Manager tick number when the map was last written. |
+| **`library_anchors`** / **`library_recon_done`** | Optional Mathlib / LeanSearch payload from broad recon (see `mathlib_knowledge.py`). |
+
+**Node `status`:** `open`, `active`, `blocked`, `proved`, `refuted` (drives progress counts on the dashboard).
+
+**Node `kind`:** semantic **role** of the node (orthogonal to status). Allowed values are normalized in `problem_map_util.normalize_node_kind`:
+
+| `kind` | Meaning |
+|--------|---------|
+| `claim` | Default — standard lemma or subgoal toward the main result. |
+| `hypothesis` | Explicit provisional assumption; not yet established. |
+| `finite_check` | Decidable / bounded / computational slice. |
+| `literature_anchor` | Tied to external refs (`problem_refs`) or given literature. |
+| `obstruction` | Known hard gate or bottleneck. |
+| `exploration` | Scouting node; expect refinement or split. |
+| `equivalence` | Alternate formulation key to the main question. |
+
+New campaigns get a seed map (`seed_problem_map_json`) with a single **`root`** node (`kind: claim`). The **map refresh** LLM (`update_problem_map` in `llm.py`) is instructed to set `kind` on each node; invalid values fall back to **`claim`**.
+
+**Experiment `move_kind`** (on each Aristotle run) is separate: it classifies the **tactic** for that job (`prove`, `refute`, `explore`, …). See `ALLOWED_MOVE_KINDS` in `problem_map_util.py` and the manager prompt in `llm.py`.
+
 ## Workspaces and Mathlib
 
 - **Per-campaign directories**: each campaign has its own Lake project at `WORKSPACE_ROOT/<campaign_id>/` (isolated `lean-toolchain`, `lakefile.lean`, and `OrchWorkspace/`). Aristotle uses that path as `--project-dir`.

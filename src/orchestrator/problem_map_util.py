@@ -18,10 +18,28 @@ ALLOWED_MOVE_KINDS: frozenset[str] = frozenset(
     }
 )
 
+# Semantic category for each problem-map node (cartography, not proof status).
+ALLOWED_NODE_KINDS: frozenset[str] = frozenset(
+    {
+        "claim",
+        "hypothesis",
+        "finite_check",
+        "literature_anchor",
+        "obstruction",
+        "exploration",
+        "equivalence",
+    }
+)
+
 
 def normalize_move_kind(value: str | None) -> str:
     v = (value or "prove").strip().lower()
     return v if v in ALLOWED_MOVE_KINDS else "explore"
+
+
+def normalize_node_kind(value: str | None) -> str:
+    v = (value or "claim").strip().lower()
+    return v if v in ALLOWED_NODE_KINDS else "claim"
 
 
 def seed_problem_map_json(prompt: str) -> str:
@@ -35,6 +53,7 @@ def seed_problem_map_json(prompt: str) -> str:
                 "id": "root",
                 "label": "Main prompt / conjecture",
                 "status": "open",
+                "kind": "claim",
             }
         ],
         "edges": [],
@@ -111,6 +130,12 @@ def map_progress_stats(parsed: dict[str, Any]) -> dict[str, Any]:
         else:
             counts["open"] += 1
     total = sum(1 for n in nodes if isinstance(n, dict))
+    kind_counts: dict[str, int] = {k: 0 for k in sorted(ALLOWED_NODE_KINDS)}
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nk = normalize_node_kind(n.get("kind"))
+        kind_counts[nk] = kind_counts.get(nk, 0) + 1
     fronts = parsed.get("active_fronts") or []
     if not isinstance(fronts, list):
         fronts = []
@@ -118,6 +143,7 @@ def map_progress_stats(parsed: dict[str, Any]) -> dict[str, Any]:
     progress_pct = int(100 * resolved / total) if total else 0
     return {
         "counts": counts,
+        "kind_counts": kind_counts,
         "total_nodes": total,
         "active_fronts": [str(x) for x in fronts if x is not None],
         "summary": str(parsed.get("summary") or "")[:2000],
@@ -149,7 +175,8 @@ def coerce_llm_problem_map(
             continue
         label = str(n.get("label") or nid)[:500]
         st = str(n.get("status", "open")).lower()[:32]
-        nodes.append({"id": nid, "label": label, "status": st})
+        kind = normalize_node_kind(n.get("kind"))
+        nodes.append({"id": nid, "label": label, "status": st, "kind": kind})
     if not nodes and isinstance(previous.get("nodes"), list):
         for n in previous["nodes"][:40]:
             if isinstance(n, dict) and n.get("id"):
@@ -158,6 +185,7 @@ def coerce_llm_problem_map(
                         "id": str(n["id"])[:120],
                         "label": str(n.get("label", n["id"]))[:500],
                         "status": str(n.get("status", "open")).lower()[:32],
+                        "kind": normalize_node_kind(n.get("kind")),
                     }
                 )
     if not nodes:
@@ -166,6 +194,7 @@ def coerce_llm_problem_map(
                 "id": "root",
                 "label": "Main prompt / conjecture",
                 "status": "open",
+                "kind": "claim",
             }
         ]
 
