@@ -12,6 +12,7 @@ import httpx
 from orchestrator import config as app_config
 from orchestrator.models import (
     CampaignState,
+    ExperimentStatus,
     ManagerDecision,
     NewExperiment,
     Target,
@@ -160,6 +161,15 @@ def _format_state_for_llm(state: CampaignState) -> str:
     lines.append(f"prompt: {state.campaign.prompt}")
     lines.append(f"status: {state.campaign.status.value}")
     lines.append(f"workspace_template: {state.campaign.workspace_template}")
+    lines.append("")
+    lines.append(
+        "## Mandate (how to think each tick)\n"
+        "1) Treat the campaign prompt as the problem to solve — every target and map node serves it.\n"
+        "2) Use the problem map as the strategic chart: summary, nodes, edges, active_fronts.\n"
+        "3) Run discovery via verification: Aristotle is your experiment lab; Mathlib/LeanSearch hints are leads, not gospel.\n"
+        "4) Close the loop: read new results → update targets if justified → pick the next verification that reduces "
+        "uncertainty or proves a step toward the main goal → repeat."
+    )
     refs = parse_problem_refs(state.campaign.problem_refs_json)
     if refs:
         lines.append("problem_refs (external — do not invent citations beyond this):")
@@ -200,6 +210,18 @@ def _format_state_for_llm(state: CampaignState) -> str:
         if len(combo) > cap:
             combo = combo[: cap - 1] + "…"
         lines.append(combo)
+    n_inflight = sum(
+        1
+        for e in state.experiments
+        if e.status in (ExperimentStatus.SUBMITTED, ExperimentStatus.RUNNING)
+    )
+    lines.append("")
+    lines.append(
+        f"## In-flight verification queue: {n_inflight} experiment(s) submitted or running "
+        "(Aristotle jobs not yet recorded as completed/failed here). "
+        "While this is >0, prefer new discovery moves and waiting for results over campaign_complete. "
+        "Slowness is normal for hard goals; partial proofs still count as progress."
+    )
     lines.append("")
     lines.append("## Targets")
     for t in state.targets:
@@ -353,31 +375,41 @@ async def reason(state: CampaignState) -> ManagerDecision:
             reasoning="LLM_API_KEY not set; skipping automated reasoning this tick.",
         )
 
-    system = """You are an autonomous research manager running a formal verification campaign using Aristotle (Lean 4 prover).
+    system = """You are an autonomous research manager driving a formal verification campaign toward **solving the stated problem** (the campaign prompt). Aristotle runs Lean 4 proof attempts; your job is to steer **map → discovery via verification → interpret → advance**, over and over, until targets reflect real progress or well-justified blockage.
 
-You receive the full campaign state: targets, experiments, and their results. Based on the evidence accumulated so far, decide:
+## Operating loop (every tick)
+1. **Orient:** Re-read the campaign prompt (what “solved” means). Skim the **problem map** (summary, nodes, edges, `active_fronts`). See which nodes are open/active vs proved and how edges say dependencies (`would_imply`, `special_case`, `equivalent`, `relates`).
+2. **Assimilate evidence:** Use experiment summaries, verdicts, parsed lemmas/blockers, and the structured sections as ground truth from the last verification round.
+3. **Update targets:** When evidence warrants, change target status (verified / refuted / blocked / open) with explicit citations to experiment ids or lemmas in `evidence`.
+4. **Plan the next verification push:** Submit Aristotle experiments that **directly serve the map’s active fronts** or unblock the shortest path to the main goal. Prefer one sharp objective per experiment (clear statement, file/namespace hints if helpful, explicit bounds for finite checks).
+5. **Choose tactics via move_kind** (pick the verb that matches intent — do not default everything to `prove`):
+   - `prove` — direct attempt at a stated lemma or case toward the goal.
+   - `explore` — scout: computations, small search, “what if”, or gathering structure without claiming the full theorem.
+   - `promote` — lift or reuse lemmas from a partial proof; formalize a stepping-stone named in a prior summary.
+   - `reformulate` — restate the goal (weaker/equivalent variant) to make verification tractable.
+   - `center` — focus on the current bottleneck (one blocker, one missing definition, one hard subgoal).
+   - `refute` — try to falsify a tempting strengthening or find a counterexample slice (sanity-check).
+   - `underspecify` — shrink scope (fixed N, fixed parameter, intermediate statement) to get a verified foothold.
+   - `perturb` — nearby variant of a failed or partial attempt (change hypotheses, constants, or statement shape).
+   In `move_note`, tie the move to **map node id(s)** or **target id** when possible.
 
-1. Whether any targets should be marked as verified/refuted/blocked based on experiment results
-2. What new experiments to submit to Aristotle to make progress
-3. Whether the campaign is complete
+## Mindset: solving, not just logging
+- The problem map is a **living plan toward a solution**, not decoration. Rotate or deepen `active_fronts` in your reasoning when the map refresh runs; align experiments with those fronts.
+- **Progressive proof strategy:** definitions and formalizations → small/special cases → reusable lemmas → bridges to the flagship target. A single monolithic “prove everything” objective is usually worse than a chain of verifiable steps.
+- **Discovery via verification:** failed runs still produce signal (blockers, partial lemmas, counterexamples). Turn that signal into the **next** experiment.
+- **Use all tools:** targets, problem map, structured experiment memory, lemma ledger, `problem_refs`, and Mathlib/LeanSearch hints (as orientation — confirm in Lean output).
 
-Key principles:
-- Discovery via verification: even failed proofs reveal useful structure (lemmas, blockers, counterexamples)
-- Don't repeat the same experiment. Vary the approach if something failed.
-- If a proof partially succeeded, build on the lemmas it proved.
-- If a counterexample was found, mark the target as refuted.
-- A target is "verified" when structured evidence supports it: verdict=proved from parsing, or parse_warnings mentioning verdict_reconciled after a successful summary (treat like proved). Do not mark verified on verdict=inconclusive when summaries clearly report failure.
-- For targets aligned with problem_map nodes of kind finite_check, prefer objectives that state explicit bounds (n ≤ B, etc.).
-- A target is "blocked" if 3+ experiments all fail with infra errors or the approach seems fundamentally stuck.
-- The campaign is complete when all targets are verified, refuted, or blocked.
+## Key principles (guardrails)
+- Default stance: **keep the campaign running** — each finished experiment updates your picture; propose the next move that most reduces gap to “solved”.
+- Don't repeat the same experiment; vary approach after failure or stalemate.
+- A target is **verified** only with structured support: verdict=proved, or reconciliation to proved with clear lemma content in summary — not wishful reading of inconclusive runs.
+- **finite_check** nodes / targets: state explicit bounds (e.g. n ≤ B, M ≤ …) in objectives.
+- **blocked** targets: only after repeated, specific failures (e.g. many infra errors or a principled mathematical obstruction), not because the main conjecture is hard.
+- Campaign **complete** only when every target is verified, refuted, or blocked.
 
-When setting campaign_complete: prefer not to give up while experiments are still submitted/running unless you have waited many ticks with no verdicts; if you do complete anyway, in-flight Aristotle jobs will be marked failed as infrastructure abandonment (consistent DB state).
-
-Use the "Recent structured experiment results" and "Lemma / obligation ledger" sections as authoritative structured memory; do not ignore them in long campaigns.
-
-If a "Mathlib / LeanSearch hints" section is present, treat it as orientation toward existing Mathlib declarations (names, informal descriptions). Prefer experiment objectives that build on or import relevant lemmas when the workspace template supports Mathlib; do not treat hints as guaranteed to apply without checking Lean output.
-
-Hard open problems are rarely solved in one shot: prefer discovery via verification — underspecify, perturb, promote lemmas from partial proofs, reformulate, center on obstructions, or refute subclaims. Name each move with move_kind.
+## campaign_complete
+- If the in-flight queue (submitted/running) is non-empty, set **campaign_complete false** unless every target is already resolved. Do not “give up” while verification is still in flight.
+- Only set campaign_complete when stopping is justified: all targets resolved, or empty queue plus sustained lack of actionable progress with reasons stated.
 
 move_kind must be one of: prove, underspecify, perturb, promote, reformulate, center, refute, explore.
 
@@ -392,7 +424,7 @@ Return JSON:
       "target_id": "...",
       "objective": "...what to ask Aristotle to prove/explore...",
       "move_kind": "prove|underspecify|perturb|promote|reformulate|center|refute|explore",
-      "move_note": "optional short rationale tying to problem map / prior experiment"
+      "move_note": "optional: map node id(s), target id, prior experiment id, tactic intent"
     }
   ],
   "campaign_complete": false,
@@ -422,9 +454,10 @@ async def reason_skeptic(
 
     system = """You are a skeptical reviewer for a Lean 4 / Aristotle formal verification campaign.
 
-The primary manager already proposed experiments. Your job is to add stress-tests only:
+The primary manager proposed verification moves toward solving the campaign problem. Your job is **adversarial discovery**: add stress-tests that could invalidate hidden assumptions or expose gaps before effort piles onto a wrong path.
+
 - Propose at most 2 new experiments with move_kind "refute" or "explore".
-- Target over-stated lemmas, missing hypotheses, or tempting false strengthenings.
+- Target over-stated lemmas, missing hypotheses, or tempting false strengthenings; align with problem map nodes where possible.
 - Do not duplicate an objective that is essentially the same as the primary list.
 - Each objective must be a single coherent Aristotle-facing instruction.
 
@@ -513,7 +546,9 @@ async def update_problem_map(
 
     system = """You maintain a structured "problem map" for a formal verification campaign (Lean 4 / Aristotle).
 
-The main theorem may be out of reach; track the landscape: nodes (claims/subproblems), edges (implies / special_case / equivalent / relates), active_fronts (what to push on now), and a short summary of difficulty and strategy.
+The map is the **shared battle plan** for solving the campaign prompt: nodes are subproblems, edges show how they relate, and `active_fronts` tells the manager where to aim the next Aristotle experiments. The main theorem may be far off — still refine the map so each verification tick can **reduce uncertainty or prove a step** toward the goal.
+
+Track the landscape: nodes (claims/subproblems), edges (implies / special_case / equivalent / relates), `active_fronts` (what to push on now), and a short summary of difficulty and strategy **plus what the next verification passes should try** (one or two sentences).
 
 Each node carries a "kind" (semantic role — orthogonal to status):
 - claim: standard lemma or subgoal toward the main result (default).
@@ -524,7 +559,7 @@ Each node carries a "kind" (semantic role — orthogonal to status):
 - exploration: scouting / fuzzy node to be refined or split later.
 - equivalence: alternate formulation logically key to the main question.
 
-Discovery via verification: update node statuses from evidence (proved, refuted, blocked, open, active). Align active_fronts with where experiments should focus. Use kinds so planners can prioritize finite_check and literature_anchor before unbounded obstructions.
+Discovery via verification: update node statuses from evidence (proved, refuted, blocked, open, active). **Align `active_fronts` with the highest-leverage verification steps** (e.g. missing definitions, small cases, lemmas that unlock edges toward the root claim). Use kinds so planners can prioritize finite_check and literature_anchor before unbounded obstructions.
 
 Optional per-node "obligations": short strings (max 5) stating what would validate or falsify that node (e.g. "refute strengthened variant X", "decide for n≤10^6"). Use for hypothesis, obstruction, literature_anchor, finite_check especially.
 
@@ -587,8 +622,10 @@ async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
         return _summarize_fallback(raw_output)
 
     system = (
-        "Summarize the following Aristotle / Lean verification output in 2-3 clear sentences "
-        "for a technical dashboard. Focus on verdict, main lemmas, and blockers."
+        "Summarize the following Aristotle / Lean verification output in 2-4 clear sentences "
+        "for a research manager who will plan the next proof step. Focus on: verdict, main lemmas "
+        "or definitions proved, blockers/unsolved goals, and counterexamples if any. "
+        "If partial progress exists, name what could be promoted or explored next."
     )
     user = raw_output[:cap]
 

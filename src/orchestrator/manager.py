@@ -36,7 +36,7 @@ from orchestrator.mathlib_knowledge import (
     fetch_narrow_hints_for_state,
     format_library_anchors_markdown,
 )
-from orchestrator.models import AristotleParsedResult, ExperimentStatus
+from orchestrator.models import AristotleParsedResult, ExperimentStatus, Verdict
 from orchestrator.verdict_reconcile import reconcile_verdict_with_summary
 from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 
@@ -157,6 +157,14 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 js = bundle.structured_json_raw
                 raw_for_db = md if md.strip() else (js or "")
                 parsed = parse_experiment_result(md, js)
+                if bundle.complete_with_errors:
+                    parsed = parsed.model_copy(
+                        update={
+                            "parse_warnings": list(parsed.parse_warnings)
+                            + ["aristotle_remote:COMPLETE_WITH_ERRORS"],
+                        }
+                    )
+                    db.increment_ops_counter("aristotle:complete_with_errors_ingested", 1)
                 use_llm_sum = summarize_llm_remaining > 0
                 if use_llm_sum:
                     summarize_llm_remaining -= 1
@@ -203,6 +211,57 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 if parsed.blockers:
                     evidence += f" — {len(parsed.blockers)} blocker(s)"
                 db.append_target_evidence(exp["target_id"], evidence)
+                evidence_delta = True
+                finished_snapshots.append(
+                    {
+                        "id": str(exp["id"]),
+                        "target_id": str(exp["target_id"]),
+                        "move_kind": str(exp.get("move_kind") or "prove"),
+                        "outcome": "completed",
+                        "verdict": parsed.verdict.value,
+                        "summary_snip": (summary or "")[:500],
+                    }
+                )
+            elif status == "completed" and not bundle:
+                raw_for_db = (
+                    "[Aristotle reported COMPLETE but the archive had no ARISTOTLE_SUMMARY.md "
+                    "or aristotle_result.json after extraction.]"
+                )
+                use_llm_sum = summarize_llm_remaining > 0
+                if use_llm_sum:
+                    summarize_llm_remaining -= 1
+                else:
+                    db.increment_ops_counter("llm:summarize_truncated_cap", 1)
+                summary = await summarize_result(raw_for_db, use_llm=use_llm_sum)
+                parsed = parse_experiment_result("", None)
+                parsed = parsed.model_copy(
+                    update={
+                        "verdict": Verdict.INCONCLUSIVE,
+                        "parse_warnings": list(parsed.parse_warnings)
+                        + ["aristotle_archive_empty_after_complete"],
+                    }
+                )
+                db.update_experiment_completed(
+                    exp["id"],
+                    result_raw=raw_for_db,
+                    result_summary=summary,
+                    verdict=parsed.verdict.value,
+                    parsed_proved_lemmas=parsed.proved_lemmas,
+                    parsed_generated_lemmas=parsed.generated_lemmas,
+                    parsed_unsolved_goals=parsed.unsolved_goals,
+                    parsed_blockers=parsed.blockers,
+                    parsed_counterexamples=parsed.counterexamples,
+                    parsed_error_message=parsed.error_message or "",
+                    result_structured_json="",
+                    parse_schema_version=parsed.parse_schema_version or 0,
+                    parse_source=parsed.parse_source,
+                    parse_warnings=parsed.parse_warnings,
+                )
+                db.increment_ops_counter("aristotle:complete_empty_archive", 1)
+                db.append_target_evidence(
+                    exp["target_id"],
+                    f"Experiment {exp['id']}: inconclusive (empty archive after COMPLETE)",
+                )
                 evidence_delta = True
                 finished_snapshots.append(
                     {
@@ -329,6 +388,34 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 extra,
                 max_total=SKEPTIC_PASS_MAX_EXPERIMENTS,
             )
+
+        all_targets_done = db.all_targets_resolved(campaign_id)
+        if (
+            decision.campaign_complete
+            and not app_config.ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS
+            and not all_targets_done
+        ):
+            state_q = db.get_campaign_state(campaign_id)
+            inflight = sum(
+                1
+                for e in state_q.experiments
+                if e.status in (ExperimentStatus.SUBMITTED, ExperimentStatus.RUNNING)
+            )
+            if inflight > 0:
+                note = (
+                    f"[Orchestrator: campaign_complete ignored while {inflight} Aristotle job(s) "
+                    "are submitted/running — keep polling for discovery signal. "
+                    "Set ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS=1 to allow early close.]"
+                )
+                decision = decision.model_copy(
+                    update={
+                        "campaign_complete": False,
+                        "campaign_complete_reason": (
+                            f"{decision.campaign_complete_reason} {note}".strip()
+                        ),
+                    }
+                )
+                db.increment_ops_counter("manager:suppress_complete_inflight", 1)
 
         if decision.reasoning.startswith("LLM HTTP error"):
             db.increment_ops_counter("llm:http_error", 1)

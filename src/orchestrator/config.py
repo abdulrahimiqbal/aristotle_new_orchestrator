@@ -102,6 +102,12 @@ MAP_PROVED_GATE_KINDS = _map_proved_gate_kinds()
 # Admin HTTP API (Bearer ADMIN_TOKEN, or X-Admin-Token, or ?admin_token=)
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
+# If false (default), the LLM cannot close the campaign while Aristotle jobs are still
+# submitted/running unless every target is already verified/refuted/blocked.
+ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS = _bool_env(
+    "ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS", False
+)
+
 # LLM (also read in llm.py via this module for caps / JSON mode)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")

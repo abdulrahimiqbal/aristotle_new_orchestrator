@@ -100,6 +100,7 @@ def build_admin_router(db: Database) -> APIRouter:
             "SKEPTIC_PASS_ENABLED": app_config.SKEPTIC_PASS_ENABLED,
             "SKEPTIC_PASS_MAX_EXPERIMENTS": app_config.SKEPTIC_PASS_MAX_EXPERIMENTS,
             "MAP_PROVED_GATE_KINDS": sorted(app_config.MAP_PROVED_GATE_KINDS),
+            "ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS": app_config.ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS,
         }
 
     @router.get("/metrics")

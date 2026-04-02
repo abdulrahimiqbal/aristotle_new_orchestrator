@@ -43,6 +43,8 @@ class ExtractedArchive:
 
     markdown: str = ""
     structured_json_raw: str | None = None
+    # Harmonic may return COMPLETE_WITH_ERRORS (e.g. objective parse trouble) while still shipping Lean.
+    complete_with_errors: bool = False
 
 
 def classify_failure(stdout: str, stderr: str) -> tuple[str, str]:
@@ -366,7 +368,7 @@ async def poll(
             return "failed", None
         return "running", None
 
-    if remote_status != "COMPLETE":
+    if remote_status not in {"COMPLETE", "COMPLETE_WITH_ERRORS"}:
         return "failed", None
 
     destination = Path(project_dir) / f"aristotle_result_{job_id}.bin"
@@ -385,6 +387,12 @@ async def poll(
     bundle = extract_archive(destination)
     if not bundle.markdown.strip() and not (bundle.structured_json_raw or "").strip():
         return "completed", None
+    if remote_status == "COMPLETE_WITH_ERRORS":
+        bundle = ExtractedArchive(
+            markdown=bundle.markdown,
+            structured_json_raw=bundle.structured_json_raw,
+            complete_with_errors=True,
+        )
     return "completed", bundle
 
 
@@ -507,4 +515,5 @@ def with_synthesized_json_if_needed(bundle: ExtractedArchive) -> ExtractedArchiv
     return ExtractedArchive(
         markdown=bundle.markdown,
         structured_json_raw=synthesize_structured_json_from_markdown(bundle.markdown),
+        complete_with_errors=bundle.complete_with_errors,
     )
