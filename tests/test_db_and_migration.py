@@ -27,12 +27,13 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         ccols = {r[1] for r in cur.fetchall()}
         assert "problem_map_json" in ccols
         assert "problem_refs_json" in ccols
+        assert "mathlib_knowledge" in ccols
         cur = conn.execute("PRAGMA table_info(experiments)")
         ecols = {r[1] for r in cur.fetchall()}
         assert "move_kind" in ecols
         assert "move_note" in ecols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 4
+        assert int(uv) >= 5
     finally:
         conn.close()
 
@@ -41,7 +42,13 @@ def test_create_campaign_per_workspace_dir(tmp_path: Path) -> None:
     root = tmp_path / "wsroot"
     db = Database(str(tmp_path / "c.db"))
     db.initialize()
-    cid = db.create_campaign("hello", workspace_root=str(root), workspace_template="minimal")
+    cid = db.create_campaign(
+        "hello",
+        workspace_root=str(root),
+        workspace_template="minimal",
+        mathlib_knowledge=True,
+    )
     state = db.get_campaign_state(cid)
     assert cid in state.campaign.workspace_dir
     assert Path(state.campaign.workspace_dir).resolve().parent == root.resolve()
+    assert state.campaign.mathlib_knowledge is True

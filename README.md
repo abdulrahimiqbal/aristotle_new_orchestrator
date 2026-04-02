@@ -23,7 +23,7 @@ One **FastAPI** process serves the **HTMX + Tailwind** dashboard and a **backgro
 ## Workspaces and Mathlib
 
 - **Per-campaign directories**: each campaign has its own Lake project at `WORKSPACE_ROOT/<campaign_id>/` (isolated `lean-toolchain`, `lakefile.lean`, and `OrchWorkspace/`). Aristotle uses that path as `--project-dir`.
-- **Templates** (dashboard checkbox “Use Mathlib4 workspace”, `DEFAULT_WORKSPACE_TEMPLATE`, or JSON `workspace_template` / `use_mathlib`):
+- **Templates** (dashboard “Use Mathlib4 workspace”, `DEFAULT_WORKSPACE_TEMPLATE`, or JSON `workspace_template` / `use_mathlib`); **LeanSearch hints** (second checkbox or JSON `use_mathlib_knowledge`) require `MATHLIB_KNOWLEDGE_MODE=leansearch` on the server:
   - **minimal** — small Lake library, fast cold start (Lean pin in-repo).
   - **mathlib** — `require mathlib from git "https://github.com/leanprover-community/mathlib4"` with a `lean-toolchain` aligned to current Mathlib (see [Using mathlib4 as a dependency](https://github.com/leanprover-community/mathlib4/wiki/Using-mathlib4-as-a-dependency)).
 - **First Mathlib build**: downloading and building Mathlib can take a long time. After the template is copied into a campaign directory, run **`lake exe cache get`** inside that directory (local shell or `docker exec`) to fetch precompiled artifacts when available. Plan Docker/Railway image layers or a warm volume accordingly—the UI labels the Mathlib option as expensive on first use.
@@ -59,7 +59,7 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK` | Per tick, only this many completed experiments use LLM summarize; others get truncated text (default: `2`) |
 | `LLM_MIN_SECONDS_BETWEEN_REQUESTS` | Minimum spacing between any two LLM HTTP calls in-process (default: `3.5`) |
 | `LLM_MAX_RETRIES_429` | Extra retries on HTTP 429 with backoff (default: `12`) |
-| `MATHLIB_KNOWLEDGE_MODE` | `off` (default) or `leansearch` — inject Mathlib hints into the manager via [LeanSearch](https://leansearch.net/) (HTTP API compatible with LeanSearchClient) |
+| `MATHLIB_KNOWLEDGE_MODE` | `off` (default) or `leansearch` — allow Mathlib hints via [LeanSearch](https://leansearch.net/) when a campaign opts in (dashboard checkbox **LeanSearch Mathlib hints** or JSON `use_mathlib_knowledge`) |
 | `LEANSEARCH_API_URL` | POST endpoint (default: `https://leansearch.net/search`) |
 | `LEAN_TOOLCHAIN_HINT` | Optional string shown in hints so the planner matches your Lake `lean-toolchain` / Mathlib pin |
 | `MATHLIB_BROAD_QUERIES_COUNT` | Natural-language broad queries from prompt + targets (default: `2`) |
@@ -73,8 +73,8 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 
 | Method | Path | Notes |
 |--------|------|--------|
-| POST | `/api/campaign` | Form: `prompt`, optional `use_mathlib=1` (checkbox) for mathlib4; optional legacy `workspace_template` if checkbox omitted |
-| POST | `/api/campaign/start` | JSON: `{"prompt":"...","workspace_template":"minimal"}` or `"use_mathlib": true` (takes precedence) → `201` with `campaign_id`, `workspace_dir` |
+| POST | `/api/campaign` | Form: `prompt`, optional `use_mathlib=1` (Mathlib Lake), `use_mathlib_knowledge=1` (LeanSearch hints); optional legacy `workspace_template` if checkboxes omitted |
+| POST | `/api/campaign/start` | JSON: `{"prompt":"...","workspace_template":"minimal"}` or `"use_mathlib": true`; optional `"use_mathlib_knowledge": true` (LeanSearch hints, needs `MATHLIB_KNOWLEDGE_MODE=leansearch`) → `201` with `campaign_id`, `workspace_dir`, `mathlib_knowledge` |
 | GET | `/api/campaign/{id}/ledger` | Read-only ledger JSON (`limit` query, capped) |
 
 ## Admin / observability
@@ -178,6 +178,7 @@ This app sends `response_format: { "type": "json_object" }` on decomposition and
 SQLite **`PRAGMA user_version`** drives migrations on startup.
 
 - **`campaigns.workspace_template`** — `minimal` or `mathlib`.
+- **`campaigns.mathlib_knowledge`** — `0`/`1`: per-campaign opt-in for LeanSearch Mathlib hints (with server `MATHLIB_KNOWLEDGE_MODE=leansearch`).
 - **`experiments`**: `parsed_*_json` columns and `parsed_error_message` mirror `AristotleParsedResult`.
 - **`lemma_ledger`** — append-only rows keyed by campaign / target / experiment / label / status (`proved` \| `attempted` \| `blocked`).
 - **`ops_counters`** — failure and error class tallies for admin.

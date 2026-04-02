@@ -195,6 +195,12 @@ class Database:
                     "ALTER TABLE experiments ADD COLUMN move_note TEXT NOT NULL DEFAULT ''"
                 )
             _set_user_version(conn, 4)
+        if v < 5:
+            if not _column_exists(conn, "campaigns", "mathlib_knowledge"):
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN mathlib_knowledge INTEGER NOT NULL DEFAULT 0"
+                )
+            _set_user_version(conn, 5)
 
     def create_campaign(
         self,
@@ -204,11 +210,13 @@ class Database:
         workspace_template: str = "minimal",
         problem_refs_json: str = "{}",
         problem_map_json: str | None = None,
+        mathlib_knowledge: bool = False,
     ) -> str:
         cid = _new_id()
         ws_dir = str((Path(workspace_root).resolve() / cid))
         now = datetime.utcnow().isoformat()
         tmpl = (workspace_template or "minimal").strip().lower() or "minimal"
+        mk = 1 if mathlib_knowledge else 0
         pmap = (
             problem_map_json
             if problem_map_json is not None
@@ -221,9 +229,9 @@ class Database:
                 """
                 INSERT INTO campaigns (
                   id, prompt, status, workspace_dir, workspace_template,
-                  problem_map_json, problem_refs_json, created_at
+                  problem_map_json, problem_refs_json, mathlib_knowledge, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cid,
@@ -233,6 +241,7 @@ class Database:
                     tmpl,
                     pmap,
                     prefs,
+                    mk,
                     now,
                 ),
             )
@@ -335,6 +344,11 @@ class Database:
         tmpl = row["workspace_template"] if "workspace_template" in keys else "minimal"
         pmap = str(row["problem_map_json"] or "{}") if "problem_map_json" in keys else "{}"
         prefs = str(row["problem_refs_json"] or "{}") if "problem_refs_json" in keys else "{}"
+        mk_raw = row["mathlib_knowledge"] if "mathlib_knowledge" in keys else 0
+        try:
+            mk_bool = bool(int(mk_raw)) if mk_raw is not None else False
+        except (TypeError, ValueError):
+            mk_bool = False
         return Campaign(
             id=row["id"],
             prompt=row["prompt"],
@@ -344,6 +358,7 @@ class Database:
             created_at=_parse_dt(row["created_at"]) or datetime.utcnow(),
             problem_map_json=pmap,
             problem_refs_json=prefs,
+            mathlib_knowledge=mk_bool,
         )
 
     def _parse_json_list(self, raw: str | None) -> list[str]:

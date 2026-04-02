@@ -78,6 +78,13 @@
               <span class="block text-xs text-zinc-500 mt-1">Lake project depends on mathlib4 (imports available). First build can be slow — run <code class="text-zinc-400">lake exe cache get</code> in the campaign directory when possible.</span>
             </span>
           </label>
+          <label class="flex items-start gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-4 py-3 cursor-pointer hover:border-zinc-700/90 transition-colors">
+            <input type="checkbox" name="use_mathlib_knowledge" value="1" class="mt-1 rounded border-zinc-600 text-emerald-500/90 focus:ring-emerald-500/40" />
+            <span class="text-sm text-zinc-300 leading-snug">
+              <span class="font-medium text-zinc-200">LeanSearch Mathlib hints for the manager</span>
+              <span class="block text-xs text-zinc-500 mt-1">Broad + narrow retrieval from <span class="text-zinc-400">leansearch.net</span> into the planner context. Requires server <code class="text-zinc-400">MATHLIB_KNOWLEDGE_MODE=leansearch</code>.</span>
+            </span>
+          </label>
           <details class="rounded-xl border border-zinc-800/90 bg-zinc-900/40 px-4 py-3 text-xs text-zinc-500">
             <summary class="cursor-pointer text-zinc-400 font-medium select-none">External refs (optional)</summary>
             <div class="mt-3 grid gap-2 sm:grid-cols-2">

@@ -22,7 +22,9 @@
       </h1>
       <p class="text-sm text-zinc-500 font-mono">id · {{ state.campaign.id }}</p>
       <p class="text-xs text-zinc-600 font-mono mt-1 break-all">workspace · {{ state.campaign.workspace_dir }}</p>
-      <p class="text-xs text-zinc-600 mt-1">template · <span class="font-mono text-zinc-400">{{ state.campaign.workspace_template }}</span></p>
+      <p class="text-xs text-zinc-600 mt-1">template · <span class="font-mono text-zinc-400">{{ state.campaign.workspace_template }}</span>
+        {% if state.campaign.mathlib_knowledge %}· <span class="text-emerald-400/90">LeanSearch hints on</span>{% endif %}
+      </p>
       {% if problem_refs %}
       <div class="mt-3 rounded-lg border border-zinc-800/80 bg-zinc-950/50 px-3 py-2 text-xs text-zinc-400">
         <span class="font-semibold text-zinc-500 uppercase tracking-wider text-[10px]">Problem refs</span>

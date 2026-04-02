@@ -36,6 +36,21 @@ logger = logging.getLogger("orchestrator.manager")
 _FAILURE_BRACKET = re.compile(r"^\[([^\]]+)\]")
 
 
+def _campaign_mathlib_knowledge_enabled(campaign: dict) -> bool:
+    """LeanSearch hints: server allows + per-campaign opt-in."""
+    if app_config.MATHLIB_KNOWLEDGE_MODE != "leansearch":
+        return False
+    v = campaign.get("mathlib_knowledge")
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    try:
+        return int(v) != 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _failure_class_from_message(msg: str) -> str:
     m = _FAILURE_BRACKET.match((msg or "").strip())
     if m:
@@ -89,7 +104,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
     try:
         db.ensure_problem_map_initialized(campaign_id, campaign.get("prompt") or "")
 
-        if app_config.MATHLIB_KNOWLEDGE_MODE == "leansearch":
+        if _campaign_mathlib_knowledge_enabled(campaign):
             pmap_pre = parse_problem_map(db.get_campaign_problem_map_json(campaign_id))
             if not pmap_pre.get("library_recon_done"):
                 tdescs = db.get_target_descriptions(campaign_id)
@@ -265,7 +280,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
             parse_problem_map(state.campaign.problem_map_json).get("library_anchors") or []
         )
         narrow_md = ""
-        if app_config.MATHLIB_KNOWLEDGE_MODE == "leansearch":
+        if _campaign_mathlib_knowledge_enabled(campaign):
             try:
                 narrow_md = await fetch_narrow_hints_for_state(
                     manager_context_experiments=state.manager_context_experiments,

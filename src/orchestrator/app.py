@@ -182,6 +182,7 @@ async def campaign_detail(request: Request, campaign_id: str):
 async def start_campaign(
     prompt: str = Form(...),
     use_mathlib: str | None = Form(None),
+    use_mathlib_knowledge: str | None = Form(None),
     workspace_template: str = Form(""),
     erdos_id: str = Form(""),
     source_url: str = Form(""),
@@ -210,11 +211,18 @@ async def start_campaign(
         formal_lean_path=formal_lean_path,
         notes=external_notes,
     )
+    mk = use_mathlib_knowledge is not None and str(use_mathlib_knowledge).strip().lower() in (
+        "1",
+        "on",
+        "true",
+        "yes",
+    )
     campaign_id = db.create_campaign(
         prompt,
         workspace_root=app_config.WORKSPACE_ROOT,
         workspace_template=tmpl,
         problem_refs_json=refs_json,
+        mathlib_knowledge=mk,
     )
     ws_dir = str((Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id))
     ensure_workspace(ws_dir, tmpl)
@@ -229,6 +237,10 @@ class NewCampaignJSON(BaseModel):
     use_mathlib: bool = Field(
         default=False,
         description="If true, use the mathlib4 Lake template (same as the dashboard checkbox).",
+    )
+    use_mathlib_knowledge: bool = Field(
+        default=False,
+        description="If true, enable LeanSearch Mathlib hints for this campaign (requires MATHLIB_KNOWLEDGE_MODE=leansearch).",
     )
     erdos_id: str = Field(default="")
     source_url: str = Field(default="")
@@ -259,6 +271,7 @@ async def start_campaign_json(body: NewCampaignJSON):
         workspace_root=app_config.WORKSPACE_ROOT,
         workspace_template=tmpl,
         problem_refs_json=refs_json,
+        mathlib_knowledge=body.use_mathlib_knowledge,
     )
     ws_dir = str((Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id))
     ensure_workspace(ws_dir, tmpl)
@@ -269,6 +282,7 @@ async def start_campaign_json(body: NewCampaignJSON):
             "campaign_id": campaign_id,
             "workspace_dir": ws_dir,
             "workspace_template": tmpl,
+            "mathlib_knowledge": body.use_mathlib_knowledge,
             "targets_created": len(targets),
         },
         status_code=201,
