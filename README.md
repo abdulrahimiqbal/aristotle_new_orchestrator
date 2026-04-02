@@ -27,7 +27,7 @@ Each campaign stores **`campaigns.problem_map_json`**: a single JSON object the 
 | Field | Role |
 |--------|------|
 | **`summary`** | Short narrative: difficulty, strategy, what changed. |
-| **`nodes`** | List of `{ "id", "label", "status", "kind" }`. Max **40** nodes are kept after LLM output (`coerce_llm_problem_map`). |
+| **`nodes`** | List of `{ "id", "label", "status", "kind", "obligations"? }`. Optional **`obligations`**: up to **5** short strings (what would check or falsify the node). Max **40** nodes after `coerce_llm_problem_map` (`problem_map_util.py`). |
 | **`edges`** | List of `{ "from", "to", "kind" }` between node ids (`would_imply`, `special_case`, `equivalent`, `relates`, …). |
 | **`active_fronts`** | Node ids where the planner should focus experiments next. |
 | **`last_tick_updated`** | Manager tick number when the map was last written. |
@@ -50,6 +50,22 @@ Each campaign stores **`campaigns.problem_map_json`**: a single JSON object the 
 New campaigns get a seed map (`seed_problem_map_json`) with a single **`root`** node (`kind: claim`). The **map refresh** LLM (`update_problem_map` in `llm.py`) is instructed to set `kind` on each node; invalid values fall back to **`claim`**.
 
 **Experiment `move_kind`** (on each Aristotle run) is separate: it classifies the **tactic** for that job (`prove`, `refute`, `explore`, …). See `ALLOWED_MOVE_KINDS` in `problem_map_util.py` and the manager prompt in `llm.py`.
+
+## Research methodology (where it lives in code)
+
+These pieces support **serious open-problem** campaigns (cartography, mixed tactics, safer “proved” signals). Each row points to the primary implementation.
+
+| Capability | Behavior | Primary files |
+|------------|----------|----------------|
+| **Verdict ↔ summary reconciliation** | After LLM summarization, if structured verdict is still `inconclusive` but the summary strongly indicates success *and* there are proved lemmas (or similar), promote to **`proved`** and append `verdict_reconciled:summary_heuristic` to **`parse_warnings`**. Disable with env. | `verdict_reconcile.py`, `manager.py` (after `summarize_result`), `config.py` (`VERDICT_RECONCILE_FROM_SUMMARY`) |
+| **Map node obligations** | Cartographer may attach **`obligations`** strings per node; coerced and shown under each node on the dashboard. | `problem_map_util.py` (`coerce_obligations`), `llm.py` (`update_problem_map` prompt), `campaign_panel.html` |
+| **Literature anchors** | Prompt instructs: do not invent `literature_anchor` nodes without **`problem_refs`**. | `llm.py` |
+| **Move-kind diversity** | If every new experiment in a batch is `prove` and **`MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH` ≥ 1**, append one **`explore`** experiment (policy note in `move_note`). | `manager_policy.py` (`ensure_move_kind_diversity`), `manager.py`, `config.py` |
+| **Skeptic pass** | Optional **second** LLM call adds up to **`SKEPTIC_PASS_MAX_EXPERIMENTS`** extra jobs with `refute` / `explore` to stress-test the primary plan. | `llm.py` (`reason_skeptic`), `manager.py`, `config.py` |
+| **Proved gate on map** | Nodes whose **`kind`** is in **`MAP_PROVED_GATE_KINDS`** cannot remain **`proved`** in stored JSON until **`POST /admin/map-node-ack`** records an ack (otherwise coerced to **`active`** after each map refresh). | `manager_policy.py` (`apply_map_proved_gate`), `db.py` (`campaign_map_node_acks`, `list_map_node_acks`, `add_map_node_ack`), `admin_routes.py` |
+| **Operator metrics** | **`GET /admin/metrics`**: completed experiments by **verdict** and **move_kind**, count with reconciliation warnings, total map acks. | `db.py` (`get_operator_metrics`), `admin_routes.py` |
+
+Tests: `tests/test_verdict_reconcile.py`, `tests/test_manager_policy.py`, `tests/test_problem_map_util.py` (obligations coercion).
 
 ## Workspaces and Mathlib
 
@@ -98,7 +114,12 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `MATHLIB_NARROW_MAX_SYMBOLS` | Max symbol queries per tick from blockers/errors (default: `8`; set `0` to disable narrow) |
 | `MATHLIB_NARROW_RESULTS_PER_SYMBOL` | LeanSearch hits per symbol (default: `2`) |
 | `MATHLIB_CONTEXT_MAX_CHARS` | Total budget for Mathlib sections in the LLM user payload (default: `8000`) |
-| `ADMIN_TOKEN` | If set, enables `/admin/status`, `/admin/config`, `/admin/ui` (use `Authorization: Bearer`, `X-Admin-Token`, or `?admin_token=`; prefer headers) |
+| `VERDICT_RECONCILE_FROM_SUMMARY` | If `1` (default), promote inconclusive→proved when summary + lemma signals align (`verdict_reconcile.py`) |
+| `MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH` | If ≥1 and a tick’s plan is all `prove`, inject one `explore` experiment (default: `0`) |
+| `SKEPTIC_PASS_ENABLED` | If `1`, run second LLM pass for extra `refute`/`explore` experiments (default: off) |
+| `SKEPTIC_PASS_MAX_EXPERIMENTS` | Cap on skeptic experiments per tick (default: `2`) |
+| `MAP_PROVED_GATE_KINDS` | Comma-separated node kinds that cannot stay `proved` without `POST /admin/map-node-ack` (default: `obstruction,equivalence`; empty disables gate) |
+| `ADMIN_TOKEN` | If set, enables `/admin/status`, `/admin/config`, `/admin/metrics`, `/admin/map-node-ack`, `/admin/ui` (use `Authorization: Bearer`, `X-Admin-Token`, or `?admin_token=`; prefer headers) |
 
 ## HTTP API (selected)
 
@@ -107,13 +128,17 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | POST | `/api/campaign` | Form: `prompt`, optional `use_mathlib=1` (Mathlib Lake), `use_mathlib_knowledge=1` (LeanSearch hints); optional legacy `workspace_template` if checkboxes omitted |
 | POST | `/api/campaign/start` | JSON: `{"prompt":"...","workspace_template":"minimal"}` or `"use_mathlib": true`; optional `"use_mathlib_knowledge": true` (LeanSearch hints, needs `MATHLIB_KNOWLEDGE_MODE=leansearch`) → `201` with `campaign_id`, `workspace_dir`, `mathlib_knowledge` |
 | GET | `/api/campaign/{id}/ledger` | Read-only ledger JSON (`limit` query, capped) |
+| GET | `/admin/metrics` | With `ADMIN_TOKEN`: aggregates for methodology monitoring (verdicts, move kinds, reconciliation count) |
+| POST | `/admin/map-node-ack` | With `ADMIN_TOKEN`: JSON `campaign_id` + `node_id` for **proved**-gate ack (see `MAP_PROVED_GATE_KINDS`) |
 
 ## Admin / observability
 
 With **`ADMIN_TOKEN`** set:
 
 - **`GET /admin/status`** — database connectivity, workspace root existence, disk usage for `WORKSPACE_ROOT`, last per-campaign tick exception metadata, `ops_counters` (Aristotle submit failure classes, LLM errors, etc.).
-- **`GET /admin/config`** — effective caps and LLM context limits (no secrets).
+- **`GET /admin/config`** — effective caps, LLM context limits, and methodology flags (no secrets).
+- **`GET /admin/metrics`** — completed experiments by verdict and `move_kind`, count of runs with `verdict_reconciled` in `parse_warnings`, total map-node acks.
+- **`POST /admin/map-node-ack`** — JSON body `{"campaign_id":"…","node_id":"…"}` to allow gated map kinds to remain `proved` after human review.
 - **`GET /admin/ui`** — short HTML pointer and curl example.
 
 Structured logs: the manager emits `manager_tick` lines with `campaign_id`, `tick`, `duration_ms`, and `running_experiments_polled`.
@@ -214,6 +239,7 @@ SQLite **`PRAGMA user_version`** drives migrations on startup.
 - **`lemma_ledger`** — append-only rows keyed by campaign / target / experiment / label / status (`proved` \| `attempted` \| `blocked`).
 - **`ops_counters`** — failure and error class tallies for admin.
 - **`manager_tick_diagnostics`** — last exception metadata per campaign.
+- **`campaign_map_node_acks`** — operator acks for **proved**-gate map nodes (`campaign_id`, `node_id`).
 
 Existing `orchestrator.db` files pick up new columns and tables automatically on next process start.
 

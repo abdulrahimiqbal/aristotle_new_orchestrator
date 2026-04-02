@@ -32,8 +32,12 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         ecols = {r[1] for r in cur.fetchall()}
         assert "move_kind" in ecols
         assert "move_note" in ecols
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_map_node_acks'"
+        )
+        assert cur.fetchone() is not None
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 5
+        assert int(uv) >= 6
     finally:
         conn.close()
 

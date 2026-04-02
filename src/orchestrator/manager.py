@@ -17,18 +17,27 @@ from orchestrator.config import (
     MAP_REFRESH_MAX_INTERVAL_TICKS,
     MAX_ACTIVE_EXPERIMENTS,
     MAX_EXPERIMENTS,
+    SKEPTIC_PASS_ENABLED,
+    SKEPTIC_PASS_MAX_EXPERIMENTS,
     SYNTHESIZE_STRUCTURED_JSON,
     TICK_INTERVAL,
+    VERDICT_RECONCILE_FROM_SUMMARY,
 )
 from orchestrator import config as app_config
 from orchestrator.db import Database
-from orchestrator.llm import reason, summarize_result, update_problem_map
+from orchestrator.llm import reason, reason_skeptic, summarize_result, update_problem_map
+from orchestrator.manager_policy import (
+    apply_map_proved_gate,
+    ensure_move_kind_diversity,
+    merge_skeptic_experiments,
+)
 from orchestrator.mathlib_knowledge import (
     fetch_broad_reconnaissance,
     fetch_narrow_hints_for_state,
     format_library_anchors_markdown,
 )
 from orchestrator.models import AristotleParsedResult, ExperimentStatus
+from orchestrator.verdict_reconcile import reconcile_verdict_with_summary
 from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 
 logger = logging.getLogger("orchestrator.manager")
@@ -154,6 +163,15 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 else:
                     db.increment_ops_counter("llm:summarize_truncated_cap", 1)
                 summary = await summarize_result(raw_for_db, use_llm=use_llm_sum)
+                parsed = reconcile_verdict_with_summary(
+                    parsed,
+                    summary,
+                    enabled=VERDICT_RECONCILE_FROM_SUMMARY,
+                )
+                if any(
+                    "verdict_reconciled" in str(w) for w in (parsed.parse_warnings or [])
+                ):
+                    db.increment_ops_counter("verdict:reconciled_from_summary", 1)
                 db.update_experiment_completed(
                     exp["id"],
                     result_raw=raw_for_db,
@@ -269,7 +287,10 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 targets_summary=targets_summary,
             )
             if new_map_json:
-                db.update_campaign_problem_map(campaign_id, new_map_json)
+                gated = apply_map_proved_gate(
+                    new_map_json, campaign_id=campaign_id, db=db
+                )
+                db.update_campaign_problem_map(campaign_id, gated)
                 db.increment_ops_counter("problem_map:refresh_ok", 1)
                 map_refreshed = True
                 state = db.get_campaign_state(campaign_id)
@@ -301,6 +322,14 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
 
         decision = await reason(state)
 
+        if SKEPTIC_PASS_ENABLED and app_config.LLM_API_KEY:
+            extra = await reason_skeptic(state, decision)
+            decision = merge_skeptic_experiments(
+                decision,
+                extra,
+                max_total=SKEPTIC_PASS_MAX_EXPERIMENTS,
+            )
+
         if decision.reasoning.startswith("LLM HTTP error"):
             db.increment_ops_counter("llm:http_error", 1)
         elif decision.reasoning.startswith("LLM parse error"):
@@ -314,10 +343,16 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
             )
 
         done = decision.campaign_complete or db.all_targets_resolved(campaign_id)
+        planned_experiments = list(decision.new_experiments)
         if not done:
             slots_available = MAX_ACTIVE_EXPERIMENTS - active_count
             valid_target_ids = {t.id for t in state.targets}
-            for new_exp in decision.new_experiments[: max(0, slots_available)]:
+            planned_experiments = ensure_move_kind_diversity(
+                planned_experiments,
+                state,
+                parse_problem_map(state.campaign.problem_map_json),
+            )
+            for new_exp in planned_experiments[: max(0, slots_available)]:
                 if new_exp.target_id not in valid_target_ids:
                     logger.warning(
                         "Skipping experiment: unknown target_id %s",
@@ -355,7 +390,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                     u.model_dump(mode="json") for u in decision.target_updates
                 ],
                 "new_experiments": [
-                    e.model_dump(mode="json") for e in decision.new_experiments
+                    e.model_dump(mode="json") for e in planned_experiments
                 ],
                 "campaign_complete": decision.campaign_complete,
                 "campaign_complete_reason": decision.campaign_complete_reason,

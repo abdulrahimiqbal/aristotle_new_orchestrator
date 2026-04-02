@@ -201,6 +201,20 @@ class Database:
                     "ALTER TABLE campaigns ADD COLUMN mathlib_knowledge INTEGER NOT NULL DEFAULT 0"
                 )
             _set_user_version(conn, 5)
+            v = 5
+        if v < 6:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS campaign_map_node_acks (
+                    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    node_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (campaign_id, node_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_map_acks_campaign ON campaign_map_node_acks(campaign_id);
+                """
+            )
+            _set_user_version(conn, 6)
 
     def create_campaign(
         self,
@@ -1031,6 +1045,83 @@ class Database:
         try:
             cur = conn.execute("SELECT key, value FROM ops_counters")
             return {str(r["key"]): int(r["value"]) for r in cur.fetchall()}
+        finally:
+            conn.close()
+
+    def list_map_node_acks(self, campaign_id: str) -> set[str]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT node_id FROM campaign_map_node_acks WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            return {str(r[0]) for r in cur.fetchall()}
+        finally:
+            conn.close()
+
+    def add_map_node_ack(self, campaign_id: str, node_id: str) -> None:
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO campaign_map_node_acks (campaign_id, node_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (campaign_id, node_id.strip()[:120], now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_operator_metrics(self) -> dict[str, Any]:
+        """Aggregate DB stats for /admin/metrics (research methodology observability)."""
+        conn = self._connect()
+        try:
+            by_verdict: dict[str, int] = {}
+            cur = conn.execute(
+                """
+                SELECT COALESCE(verdict, ''), COUNT(*) FROM experiments
+                WHERE status = ?
+                GROUP BY verdict
+                """,
+                (ExperimentStatus.COMPLETED.value,),
+            )
+            for r in cur.fetchall():
+                by_verdict[str(r[0]) or "unknown"] = int(r[1])
+
+            cur2 = conn.execute(
+                """
+                SELECT COUNT(*) FROM experiments
+                WHERE status = ? AND instr(parse_warnings_json, ?) > 0
+                """,
+                (ExperimentStatus.COMPLETED.value, "verdict_reconciled"),
+            )
+            reconciled = int(cur2.fetchone()[0])
+
+            by_move: dict[str, int] = {}
+            cur3 = conn.execute(
+                """
+                SELECT COALESCE(move_kind, 'prove'), COUNT(*) FROM experiments
+                WHERE status = ?
+                GROUP BY move_kind
+                """,
+                (ExperimentStatus.COMPLETED.value,),
+            )
+            for r in cur3.fetchall():
+                by_move[str(r[0])] = int(r[1])
+
+            cur4 = conn.execute(
+                "SELECT COUNT(*) FROM campaign_map_node_acks",
+            )
+            map_acks = int(cur4.fetchone()[0])
+
+            return {
+                "experiments_completed_by_verdict": by_verdict,
+                "experiments_verdict_reconciled_count": reconciled,
+                "experiments_completed_by_move_kind": by_move,
+                "map_node_acks_total": map_acks,
+            }
         finally:
             conn.close()
 

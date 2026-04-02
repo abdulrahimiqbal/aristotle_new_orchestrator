@@ -8,9 +8,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from orchestrator import config as app_config
 from orchestrator.db import Database
+
+
+class MapNodeAckBody(BaseModel):
+    campaign_id: str = Field(min_length=1, max_length=120)
+    node_id: str = Field(min_length=1, max_length=120)
 
 
 def _require_admin(
@@ -89,7 +95,25 @@ def build_admin_router(db: Database) -> APIRouter:
             "MATHLIB_NARROW_MAX_SYMBOLS": app_config.MATHLIB_NARROW_MAX_SYMBOLS,
             "MATHLIB_NARROW_RESULTS_PER_SYMBOL": app_config.MATHLIB_NARROW_RESULTS_PER_SYMBOL,
             "MATHLIB_CONTEXT_MAX_CHARS": app_config.MATHLIB_CONTEXT_MAX_CHARS,
+            "VERDICT_RECONCILE_FROM_SUMMARY": app_config.VERDICT_RECONCILE_FROM_SUMMARY,
+            "MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH": app_config.MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH,
+            "SKEPTIC_PASS_ENABLED": app_config.SKEPTIC_PASS_ENABLED,
+            "SKEPTIC_PASS_MAX_EXPERIMENTS": app_config.SKEPTIC_PASS_MAX_EXPERIMENTS,
+            "MAP_PROVED_GATE_KINDS": sorted(app_config.MAP_PROVED_GATE_KINDS),
         }
+
+    @router.get("/metrics")
+    async def admin_metrics(_auth: AdminAuth) -> dict:
+        """Aggregates: verdicts, move_kind mix, verdict reconciliation count, map acks."""
+        return db.get_operator_metrics()
+
+    @router.post("/map-node-ack")
+    async def admin_map_node_ack(_auth: AdminAuth, body: MapNodeAckBody) -> dict:
+        """Allow map nodes (kinds in MAP_PROVED_GATE_KINDS) to stay proved after operator review."""
+        if not db.campaign_exists(body.campaign_id):
+            raise HTTPException(status_code=404, detail="unknown campaign")
+        db.add_map_node_ack(body.campaign_id.strip(), body.node_id.strip())
+        return {"ok": True, "campaign_id": body.campaign_id.strip(), "node_id": body.node_id.strip()}
 
     @router.get("/export")
     async def admin_export(
@@ -118,7 +142,7 @@ h1{font-size:1.25rem} .muted{color:#71717a;font-size:12px}
 </style></head><body>
 <h1>Operator panel</h1>
 <p class="muted">Prefer <code>Authorization: Bearer …</code> or <code>X-Admin-Token</code> over query strings (logs).</p>
-<p>Use JSON endpoints: <a href="/admin/status"><code>/admin/status</code></a>, <a href="/admin/config"><code>/admin/config</code></a>, <a href="/admin/export"><code>/admin/export</code></a> (full DB snapshot; auth required).</p>
+<p>Use JSON endpoints: <a href="/admin/status"><code>/admin/status</code></a>, <a href="/admin/config"><code>/admin/config</code></a>, <a href="/admin/metrics"><code>/admin/metrics</code></a>, <a href="/admin/export"><code>/admin/export</code></a> (full DB snapshot; auth required). Map gate ack: <code>POST /admin/map-node-ack</code> JSON <code>{"campaign_id","node_id"}</code>.</p>
 <p class="muted">curl example:<br/>
 <code>curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8000/admin/status | jq</code></p>
 </body></html>"""

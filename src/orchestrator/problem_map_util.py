@@ -42,6 +42,17 @@ def normalize_node_kind(value: str | None) -> str:
     return v if v in ALLOWED_NODE_KINDS else "claim"
 
 
+def coerce_obligations(raw: Any) -> list[str]:
+    """Up to 5 short obligation strings per node."""
+    out: list[str] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw[:5]:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip()[:200])
+    return out
+
+
 def seed_problem_map_json(prompt: str) -> str:
     summary = (prompt or "").strip()[:800]
     if not summary:
@@ -176,18 +187,24 @@ def coerce_llm_problem_map(
         label = str(n.get("label") or nid)[:500]
         st = str(n.get("status", "open")).lower()[:32]
         kind = normalize_node_kind(n.get("kind"))
-        nodes.append({"id": nid, "label": label, "status": st, "kind": kind})
+        ob = coerce_obligations(n.get("obligations"))
+        node: dict[str, Any] = {"id": nid, "label": label, "status": st, "kind": kind}
+        if ob:
+            node["obligations"] = ob
+        nodes.append(node)
     if not nodes and isinstance(previous.get("nodes"), list):
         for n in previous["nodes"][:40]:
             if isinstance(n, dict) and n.get("id"):
-                nodes.append(
-                    {
-                        "id": str(n["id"])[:120],
-                        "label": str(n.get("label", n["id"]))[:500],
-                        "status": str(n.get("status", "open")).lower()[:32],
-                        "kind": normalize_node_kind(n.get("kind")),
-                    }
-                )
+                pn: dict[str, Any] = {
+                    "id": str(n["id"])[:120],
+                    "label": str(n.get("label", n["id"]))[:500],
+                    "status": str(n.get("status", "open")).lower()[:32],
+                    "kind": normalize_node_kind(n.get("kind")),
+                }
+                pob = coerce_obligations(n.get("obligations"))
+                if pob:
+                    pn["obligations"] = pob
+                nodes.append(pn)
     if not nodes:
         nodes = [
             {

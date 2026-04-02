@@ -76,6 +76,14 @@
       <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-cyan-500 to-transparent"></span>
       Problem map
     </h2>
+    {% if not public_view and operator.map_proved_gate_kinds|length > 0 %}
+    <p class="text-[10px] text-zinc-600 mb-3 leading-relaxed border-l-2 border-amber-500/40 pl-2">
+      Map <span class="text-amber-200/80 font-mono">proved</span> on kinds
+      <span class="font-mono text-zinc-400">{{ operator.map_proved_gate_kinds | join(', ') }}</span>
+      is held as <span class="font-mono">active</span> until acknowledged
+      (<span class="font-mono">POST /admin/map-node-ack</span> with <span class="font-mono">ADMIN_TOKEN</span>).
+    </p>
+    {% endif %}
     {% set mp = map_progress %}
     <div class="rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-4 ring-1 ring-black/20 space-y-4">
       <div>
@@ -118,6 +126,13 @@
           <span class="text-zinc-600 mx-1">·</span>
           <span class="text-zinc-500">{{ n.status }}</span>
           <p class="text-zinc-400 mt-0.5">{{ n.label }}</p>
+          {% if n.obligations %}
+          <ul class="mt-1 ml-2 list-disc text-[10px] text-zinc-500 space-y-0.5">
+            {% for ob in n.obligations[:5] %}
+            <li>{{ ob }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
         </li>
         {% endfor %}
       </ul>
@@ -219,8 +234,14 @@
                 {% elif es == 'submitted' %}text-violet-300
                 {% else %}text-zinc-500{% endif %}">{{ es }}</span>
             </td>
-            <td class="px-4 py-3 text-zinc-400 text-xs font-mono">
+            <td class="px-4 py-3 text-zinc-400 text-xs font-mono align-top">
               {% if e.verdict %}{{ e.verdict.value }}{% else %}—{% endif %}
+              {% if e.parse_warnings %}
+                {% set pw = e.parse_warnings | join(' ') %}
+                {% if 'verdict_reconciled' in pw %}
+                <span class="mt-1 block w-fit rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-sans font-medium text-amber-200/90 ring-1 ring-amber-500/35" title="Verdict aligned with summary heuristic after structured parse was inconclusive">summary→verdict</span>
+                {% endif %}
+              {% endif %}
             </td>
             <td class="px-4 py-3 text-zinc-500 text-xs font-mono whitespace-nowrap">
               {% if e.submitted_at %}{{ e.submitted_at.strftime('%m-%d %H:%M') }}{% else %}—{% endif %}

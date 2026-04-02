@@ -366,7 +366,8 @@ Key principles:
 - Don't repeat the same experiment. Vary the approach if something failed.
 - If a proof partially succeeded, build on the lemmas it proved.
 - If a counterexample was found, mark the target as refuted.
-- A target is "verified" only when Aristotle returns verdict=proved.
+- A target is "verified" when structured evidence supports it: verdict=proved from parsing, or parse_warnings mentioning verdict_reconciled after a successful summary (treat like proved). Do not mark verified on verdict=inconclusive when summaries clearly report failure.
+- For targets aligned with problem_map nodes of kind finite_check, prefer objectives that state explicit bounds (n ≤ B, etc.).
 - A target is "blocked" if 3+ experiments all fail with infra errors or the approach seems fundamentally stuck.
 - The campaign is complete when all targets are verified, refuted, or blocked.
 
@@ -412,6 +413,87 @@ Return JSON:
         return ManagerDecision(reasoning=f"LLM parse error: {e!s}")
 
 
+async def reason_skeptic(
+    state: CampaignState, primary: ManagerDecision
+) -> list[NewExperiment]:
+    """Optional second pass: propose refute/explore experiments to stress-test the primary plan."""
+    if not app_config.LLM_API_KEY or not primary.new_experiments:
+        return []
+
+    system = """You are a skeptical reviewer for a Lean 4 / Aristotle formal verification campaign.
+
+The primary manager already proposed experiments. Your job is to add stress-tests only:
+- Propose at most 2 new experiments with move_kind "refute" or "explore".
+- Target over-stated lemmas, missing hypotheses, or tempting false strengthenings.
+- Do not duplicate an objective that is essentially the same as the primary list.
+- Each objective must be a single coherent Aristotle-facing instruction.
+
+Return JSON only:
+{
+  "new_experiments": [
+    {
+      "target_id": "...",
+      "objective": "...",
+      "move_kind": "refute|explore",
+      "move_note": "skeptic: ..."
+    }
+  ]
+}
+
+If nothing useful to add, return {"new_experiments": []}."""
+
+    primary_objs = json.dumps(
+        [e.model_dump(mode="json") for e in primary.new_experiments],
+        indent=2,
+        ensure_ascii=False,
+    )[:12000]
+    pmap = parse_problem_map(state.campaign.problem_map_json)
+    user = f"""## Primary reasoning (excerpt)
+{primary.reasoning[:4000]}
+
+## Primary new_experiments
+{primary_objs}
+
+## Problem map summary
+{str(pmap.get("summary") or "")[:2500]}
+
+## Open targets (id + description)
+""" + "\n".join(
+        f"- id={t.id} :: {t.description[:400]}"
+        for t in state.targets
+        if t.status.value == "open"
+    )[:8000]
+
+    try:
+        raw = await _call_llm(system, user)
+        data = json.loads(_strip_json_fence(raw))
+        if not isinstance(data, dict):
+            return []
+        out: list[NewExperiment] = []
+        for ne in data.get("new_experiments") or []:
+            if not isinstance(ne, dict):
+                continue
+            tid = ne.get("target_id")
+            obj = ne.get("objective")
+            if not tid or not obj:
+                continue
+            mk = normalize_move_kind(str(ne.get("move_kind") or "explore"))
+            if mk not in ("refute", "explore"):
+                mk = "explore"
+            note = str(ne.get("move_note") or "").strip()
+            out.append(
+                NewExperiment(
+                    target_id=str(tid),
+                    objective=str(obj).strip(),
+                    move_kind=mk,
+                    move_note=(note + " (skeptic_pass)")[:2000],
+                )
+            )
+        return out[: app_config.SKEPTIC_PASS_MAX_EXPERIMENTS]
+    except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+
 async def update_problem_map(
     *,
     previous_map_json: str,
@@ -444,10 +526,14 @@ Each node carries a "kind" (semantic role — orthogonal to status):
 
 Discovery via verification: update node statuses from evidence (proved, refuted, blocked, open, active). Align active_fronts with where experiments should focus. Use kinds so planners can prioritize finite_check and literature_anchor before unbounded obstructions.
 
+Optional per-node "obligations": short strings (max 5) stating what would validate or falsify that node (e.g. "refute strengthened variant X", "decide for n≤10^6"). Use for hypothesis, obstruction, literature_anchor, finite_check especially.
+
+literature_anchor nodes must align with problem_refs keys above; if refs are empty, do not invent anchors—use exploration or claim instead.
+
 Return JSON only:
 {
   "summary": "2–6 sentences",
-  "nodes": [ {"id": "stable_id", "label": "short text", "status": "open|active|blocked|proved|refuted", "kind": "claim|hypothesis|finite_check|literature_anchor|obstruction|exploration|equivalence"} ],
+  "nodes": [ {"id": "stable_id", "label": "short text", "status": "open|active|blocked|proved|refuted", "kind": "claim|hypothesis|finite_check|literature_anchor|obstruction|exploration|equivalence", "obligations": ["optional short string", "..."] } ],
   "edges": [ {"from": "node_id", "to": "node_id", "kind": "would_imply|special_case|equivalent|relates"} ],
   "active_fronts": ["node_id", ...]
 }

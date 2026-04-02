@@ -105,7 +105,11 @@
           </details>
           <p class="text-xs text-zinc-600">Each campaign gets an isolated directory under <span class="font-mono text-zinc-500">{{ operator.workspace_root }}</span> (unchecked = minimal Lake template).</p>
         </form>
-        <p class="text-[11px] text-zinc-600 mt-3 font-mono">Limits · max experiments/campaign {{ operator.max_experiments }} · concurrent {{ operator.max_active_experiments }} · tick {{ operator.tick_interval_sec }}s · map refresh interval {{ operator.map_refresh_max_interval_ticks }} ticks</p>
+        <p class="text-[11px] text-zinc-600 mt-3 font-mono leading-relaxed">Limits · max experiments/campaign {{ operator.max_experiments }} · concurrent {{ operator.max_active_experiments }} · tick {{ operator.tick_interval_sec }}s · map refresh interval {{ operator.map_refresh_max_interval_ticks }} ticks
+          {% if operator.verdict_reconcile_enabled %}· verdict reconcile on{% else %}· verdict reconcile off{% endif %}
+          {% if operator.skeptic_pass_enabled %}· skeptic pass{% endif %}
+          {% if operator.min_non_prove_moves > 0 %}· non-prove inj ≥{{ operator.min_non_prove_moves }}{% endif %}
+        </p>
       </div>
       {% endif %}
 

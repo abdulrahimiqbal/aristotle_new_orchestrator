@@ -38,12 +38,17 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 def _operator_runtime_context() -> dict:
+    gate_kinds = sorted(app_config.MAP_PROVED_GATE_KINDS)
     return {
         "max_experiments": app_config.MAX_EXPERIMENTS,
         "max_active_experiments": app_config.MAX_ACTIVE_EXPERIMENTS,
         "tick_interval_sec": app_config.TICK_INTERVAL,
         "workspace_root": str(Path(app_config.WORKSPACE_ROOT).resolve()),
         "map_refresh_max_interval_ticks": app_config.MAP_REFRESH_MAX_INTERVAL_TICKS,
+        "map_proved_gate_kinds": gate_kinds,
+        "skeptic_pass_enabled": bool(app_config.SKEPTIC_PASS_ENABLED),
+        "min_non_prove_moves": int(app_config.MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH or 0),
+        "verdict_reconcile_enabled": bool(app_config.VERDICT_RECONCILE_FROM_SUMMARY),
     }
 
 

@@ -84,3 +84,25 @@ def test_coerce_llm_problem_map() -> None:
     )
     assert out2["nodes"][0]["kind"] == "hypothesis"
     assert out2["nodes"][1]["kind"] == "finite_check"
+
+    out3 = coerce_llm_problem_map(
+        {
+            "summary": "y",
+            "nodes": [
+                {
+                    "id": "a",
+                    "label": "L",
+                    "status": "open",
+                    "kind": "hypothesis",
+                    "obligations": [
+                        "check n≤5",
+                        "x" * 300,
+                    ],
+                }
+            ],
+        },
+        previous=prev,
+        tick_number=9,
+    )
+    assert out3["nodes"][0]["obligations"][0] == "check n≤5"
+    assert len(out3["nodes"][0]["obligations"][1]) <= 200

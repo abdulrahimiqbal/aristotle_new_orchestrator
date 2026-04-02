@@ -78,6 +78,27 @@ LLM_JSON_MODE = _bool_env("LLM_JSON_MODE", True)
 # JSON from ARISTOTLE_SUMMARY.md so storage + parsing use one structured path.
 SYNTHESIZE_STRUCTURED_JSON = _bool_env("SYNTHESIZE_STRUCTURED_JSON", True)
 
+# Promote inconclusive/partial verdict to proved when result_summary strongly indicates success
+# (see verdict_reconcile.py). Disable for strict JSON-only truth.
+VERDICT_RECONCILE_FROM_SUMMARY = _bool_env("VERDICT_RECONCILE_FROM_SUMMARY", True)
+
+# If >= 1 and the primary manager returns only prove moves, append one explore/refute experiment.
+MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH = _int_env("MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH", 0)
+
+# Second LLM pass: add up to N refute/explore experiments (extra API calls).
+SKEPTIC_PASS_ENABLED = _bool_env("SKEPTIC_PASS_ENABLED", False)
+SKEPTIC_PASS_MAX_EXPERIMENTS = _int_env("SKEPTIC_PASS_MAX_EXPERIMENTS", 2)
+
+# Map nodes with these kinds cannot stay status=proved until acknowledged via POST /admin/map-node-ack
+def _map_proved_gate_kinds() -> frozenset[str]:
+    raw = os.environ.get("MAP_PROVED_GATE_KINDS", "obstruction,equivalence").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
+
+
+MAP_PROVED_GATE_KINDS = _map_proved_gate_kinds()
+
 # Admin HTTP API (Bearer ADMIN_TOKEN, or X-Admin-Token, or ?admin_token=)
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
