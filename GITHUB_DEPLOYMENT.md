@@ -28,29 +28,30 @@ git add -A && git commit -m "…" && git push origin main
 | **Typical volume** | Mount at **`/data`** for SQLite + workspaces |
 | **Paths in container** | `DATABASE_PATH=/data/orchestrator.db`, `WORKSPACE_ROOT=/data/workspaces`, legacy migration source `WORKSPACE_LEGACY_DIR=/data/workspace` (see `Dockerfile` / `README.md`) |
 
-### Two services (important)
+### Single production service (current)
 
-At one point the project had:
+Use **one** Railway service: **`aristotle-orchestrator`**. It should mount **`/data`** (SQLite + workspaces). Connect **this same GitHub repo** to that service so `git push origin main` deploys there.
 
-1. **`aristotle-orchestrator`** — deployed via **`railway up`** (upload from laptop). Holds **env vars**, **volume**, and **public URL** you already used.
-2. **`aristotle_new_orchestrator`** — added with **`railway add --repo abdulrahimiqbal/aristotle_new_orchestrator`** (GitHub → auto deploy on `main`).
-
-**Variables are per service** unless you use **shared environment / project variables**. The GitHub service does **not** automatically inherit secrets from the CLI service—mirror them (or use shared vars) before relying on it.
-
-**CLI link** (which service `railway logs` / `railway ssh` target):
+**CLI** (logs, SSH, `railway up`):
 
 ```bash
 cd /path/to/aristotle_new_orchestrator
-railway service link aristotle_new_orchestrator   # GitHub-backed
-# or
-railway service link aristotle-orchestrator      # upload-backed
+railway link
+railway service link aristotle-orchestrator
+railway status
 ```
 
-### Connect GitHub to Railway (first time)
+Optional **manual deploy** from your laptop without waiting for GitHub:
 
-1. Railway dashboard → **account/workspace** → connect **GitHub** and grant access to this repo.
-2. Then from the repo: `railway add --repo abdulrahimiqbal/aristotle_new_orchestrator`  
-   (If you see **repo not found**, GitHub app access isn’t granted yet.)
+```bash
+railway up -d
+```
+
+### Connect GitHub to Railway (first time or after cleanup)
+
+1. Railway dashboard → connect **GitHub** and grant access to this repo.
+2. Open service **`aristotle-orchestrator`** → **Settings** → **Source** → connect **`abdulrahimiqbal/aristotle_new_orchestrator`**, branch **`main`**.  
+   (Do **not** recreate a second empty service—one service, one volume, one `orchestrator.db`.)
 
 ### Sync env to Railway (optional script)
 
@@ -79,7 +80,7 @@ export BASE="$RAILWAY_PUBLIC_URL"
 # Large raw logs: INCLUDE_RAW=1 ./scripts/pull-railway-export.sh with-raw.json
 ```
 
-Mirror **`ADMIN_TOKEN`** on **each** Railway service if you use two deployments; call each service’s public URL separately to pull both databases.
+Set **`ADMIN_TOKEN`** once on **`aristotle-orchestrator`** (Variables tab).
 
 There is also **`GET /admin/ui`** (HTML operator panel).
 

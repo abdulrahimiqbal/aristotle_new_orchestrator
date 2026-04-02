@@ -9,12 +9,11 @@ From the repo root:
 ```bash
 railway login          # once
 railway link           # if this folder isn’t linked yet
-railway service link aristotle-orchestrator   # service that has your /data volume + DB
-# or: aristotle_new_orchestrator  (GitHub deploy — often a separate volume)
+railway service link aristotle-orchestrator
 railway status
 ```
 
-Use the service that actually mounts **`/data`** with `orchestrator.db` (where your campaigns live).
+Production should be **only** `aristotle-orchestrator` (volume at **`/data`**, `orchestrator.db`).
 
 ## 2. Logs (HTTP + LLM, not full campaign state)
 
@@ -68,4 +67,4 @@ curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/admin/status" | jq
 
 ---
 
-More detail (GitHub deploy, env vars, two-service setup): see **`GITHUB_DEPLOYMENT.md`**.
+More detail: **`GITHUB_DEPLOYMENT.md`**.

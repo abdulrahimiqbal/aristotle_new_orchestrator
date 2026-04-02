@@ -122,7 +122,7 @@ The container listens on **`PORT`** (Railway sets this automatically). SQLite an
 ### One-time setup
 
 1. **Push this repo to GitHub** (Railway deploys from git).
-2. In [Railway](https://railway.app): **New project** → **Deploy from GitHub** → select the repo.
+2. In [Railway](https://railway.app): **New project** → **Deploy from GitHub** → select the repo. Use **one** production service with a **`/data`** volume (avoid a second empty duplicate service—see **`GITHUB_DEPLOYMENT.md`**).
 3. **Add a volume** (persists SQLite + workspaces across deploys):
    - **Dashboard**: service → **Settings** → **Volumes** → mount path **`/data`**, or  
    - **CLI** (from a linked repo): `railway volume add --mount-path /data`
