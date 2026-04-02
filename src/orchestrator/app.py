@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -117,10 +118,21 @@ async def health():
     db_ok, db_msg = db.check_connection()
     campaigns = db.get_active_campaigns()
     status = "healthy" if db_ok else "degraded"
+    db_path = Path(app_config.DATABASE_PATH)
+    db_size: int | None = None
+    try:
+        if db_path.is_file():
+            db_size = db_path.stat().st_size
+    except OSError:
+        pass
+    campaign_total = db.count_campaigns() if db_ok else 0
     return {
         "status": status,
         "database_ok": db_ok,
         "database_message": db_msg,
+        "database_path": str(db_path),
+        "database_size_bytes": db_size,
+        "campaign_total": campaign_total,
         "active_campaigns": len(campaigns),
     }
 

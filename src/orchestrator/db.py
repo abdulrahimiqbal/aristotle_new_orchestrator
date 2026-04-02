@@ -932,6 +932,15 @@ class Database:
         finally:
             conn.close()
 
+    def count_campaigns(self) -> int:
+        conn = self._connect()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS c FROM campaigns")
+            row = cur.fetchone()
+            return int(row["c"]) if row else 0
+        finally:
+            conn.close()
+
     def campaign_exists(self, campaign_id: str) -> bool:
         conn = self._connect()
         try:
