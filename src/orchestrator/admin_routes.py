@@ -78,7 +78,24 @@ def build_admin_router(db: Database) -> APIRouter:
             "LLM_RECENT_STRUCTURED_EXPERIMENTS": app_config.LLM_RECENT_STRUCTURED_EXPERIMENTS,
             "LLM_LEDGER_ENTRIES_LIMIT": app_config.LLM_LEDGER_ENTRIES_LIMIT,
             "LLM_JSON_MODE": app_config.LLM_JSON_MODE,
+            "MAP_REFRESH_MAX_INTERVAL_TICKS": app_config.MAP_REFRESH_MAX_INTERVAL_TICKS,
         }
+
+    @router.get("/export")
+    async def admin_export(
+        _auth: AdminAuth,
+        ticks_limit: Annotated[int, Query(ge=1, le=50_000)] = 5000,
+        ledger_limit: Annotated[int, Query(ge=1, le=200_000)] = 20000,
+        include_result_raw: bool = False,
+        result_raw_max_chars: Annotated[int, Query(ge=0, le=20_000_000)] = 500_000,
+    ) -> dict:
+        """Download all campaigns, targets, experiments, ticks, and ledger as JSON (no Railway SSH)."""
+        return db.export_operator_bundle(
+            ticks_limit=ticks_limit,
+            ledger_limit=ledger_limit,
+            include_result_raw=include_result_raw,
+            result_raw_max_chars=result_raw_max_chars,
+        )
 
     @router.get("/ui", response_class=HTMLResponse)
     async def admin_ui(_auth: AdminAuth) -> HTMLResponse:
@@ -91,7 +108,7 @@ h1{font-size:1.25rem} .muted{color:#71717a;font-size:12px}
 </style></head><body>
 <h1>Operator panel</h1>
 <p class="muted">Prefer <code>Authorization: Bearer …</code> or <code>X-Admin-Token</code> over query strings (logs).</p>
-<p>Use JSON endpoints: <a href="/admin/status"><code>/admin/status</code></a> and <a href="/admin/config"><code>/admin/config</code></a> (auth required).</p>
+<p>Use JSON endpoints: <a href="/admin/status"><code>/admin/status</code></a>, <a href="/admin/config"><code>/admin/config</code></a>, <a href="/admin/export"><code>/admin/export</code></a> (full DB snapshot; auth required).</p>
 <p class="muted">curl example:<br/>
 <code>curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8000/admin/status | jq</code></p>
 </body></html>"""

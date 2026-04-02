@@ -50,6 +50,8 @@ class Campaign(BaseModel):
     workspace_dir: str = ""
     workspace_template: str = "minimal"
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    problem_map_json: str = "{}"
+    problem_refs_json: str = "{}"
 
 
 class Target(BaseModel):
@@ -66,6 +68,8 @@ class Experiment(BaseModel):
     campaign_id: str
     target_id: str
     objective: str
+    move_kind: str = "prove"
+    move_note: str = ""
     status: ExperimentStatus = ExperimentStatus.PENDING
     aristotle_job_id: Optional[str] = None
     result_raw: Optional[str] = None
@@ -103,6 +107,8 @@ class TargetUpdate(BaseModel):
 class NewExperiment(BaseModel):
     target_id: str
     objective: str
+    move_kind: str = "prove"
+    move_note: str = ""
 
 
 class ManagerDecision(BaseModel):

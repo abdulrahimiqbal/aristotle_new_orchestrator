@@ -34,7 +34,7 @@ async def test_tick_marks_completed_persists_parsed_and_ledger(
     db.update_experiment_submitted(eid, "00000000-0000-0000-0000-000000000099")
 
     ws_dir = str((root.resolve() / cid))
-    campaign_row = {"id": cid, "workspace_dir": ws_dir}
+    campaign_row = {"id": cid, "workspace_dir": ws_dir, "prompt": "benchmark prompt"}
 
     async def _poll(*_a, **_k):
         return "completed", ExtractedArchive(markdown=_MARKDOWN)

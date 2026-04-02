@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +17,12 @@ from orchestrator.db import Database
 from orchestrator.llm import decompose_prompt
 from orchestrator.manager import manager_loop
 from orchestrator.models import CampaignStatus, TargetStatus
+from orchestrator.problem_map_util import (
+    map_progress_stats,
+    parse_problem_map,
+    parse_problem_refs,
+    problem_refs_to_json,
+)
 from orchestrator.workspace_migration import migrate_legacy_shared_workspaces
 from orchestrator.workspace_seed import VALID_TEMPLATES, ensure_workspace
 
@@ -37,6 +42,19 @@ def _operator_runtime_context() -> dict:
         "max_active_experiments": app_config.MAX_ACTIVE_EXPERIMENTS,
         "tick_interval_sec": app_config.TICK_INTERVAL,
         "workspace_root": str(Path(app_config.WORKSPACE_ROOT).resolve()),
+        "map_refresh_max_interval_ticks": app_config.MAP_REFRESH_MAX_INTERVAL_TICKS,
+    }
+
+
+def _cartography_context(state) -> dict:
+    pm = parse_problem_map(state.campaign.problem_map_json)
+    refs = parse_problem_refs(state.campaign.problem_refs_json)
+    pretty = json.dumps(pm, indent=2, ensure_ascii=False) if pm else "{}"
+    return {
+        "problem_map": pm,
+        "problem_refs": refs,
+        "map_progress": map_progress_stats(pm),
+        "problem_map_json_pretty": pretty,
     }
 
 
@@ -143,6 +161,7 @@ async def campaign_detail(request: Request, campaign_id: str):
             "ticks": ticks,
             "progress": progress,
             "operator": _operator_runtime_context(),
+            **_cartography_context(state),
         },
     )
 
@@ -151,6 +170,10 @@ async def campaign_detail(request: Request, campaign_id: str):
 async def start_campaign(
     prompt: str = Form(...),
     workspace_template: str = Form(""),
+    erdos_id: str = Form(""),
+    source_url: str = Form(""),
+    formal_lean_path: str = Form(""),
+    external_notes: str = Form(""),
 ):
     tmpl = (workspace_template or "").strip().lower()
     if tmpl not in VALID_TEMPLATES:
@@ -159,10 +182,17 @@ async def start_campaign(
             if app_config.DEFAULT_WORKSPACE_TEMPLATE in VALID_TEMPLATES
             else "minimal"
         )
+    refs_json = problem_refs_to_json(
+        erdos_id=erdos_id,
+        source_url=source_url,
+        formal_lean_path=formal_lean_path,
+        notes=external_notes,
+    )
     campaign_id = db.create_campaign(
         prompt,
         workspace_root=app_config.WORKSPACE_ROOT,
         workspace_template=tmpl,
+        problem_refs_json=refs_json,
     )
     ws_dir = str((Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id))
     ensure_workspace(ws_dir, tmpl)
@@ -174,6 +204,10 @@ async def start_campaign(
 class NewCampaignJSON(BaseModel):
     prompt: str = Field(min_length=1)
     workspace_template: str = Field(default="minimal")
+    erdos_id: str = Field(default="")
+    source_url: str = Field(default="")
+    formal_lean_path: str = Field(default="")
+    notes: str = Field(default="")
 
 
 @app.post("/api/campaign/start")
@@ -185,10 +219,17 @@ async def start_campaign_json(body: NewCampaignJSON):
             if app_config.DEFAULT_WORKSPACE_TEMPLATE in VALID_TEMPLATES
             else "minimal"
         )
+    refs_json = problem_refs_to_json(
+        erdos_id=body.erdos_id,
+        source_url=body.source_url,
+        formal_lean_path=body.formal_lean_path,
+        notes=body.notes,
+    )
     campaign_id = db.create_campaign(
         body.prompt.strip(),
         workspace_root=app_config.WORKSPACE_ROOT,
         workspace_template=tmpl,
+        problem_refs_json=refs_json,
     )
     ws_dir = str((Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id))
     ensure_workspace(ws_dir, tmpl)
@@ -232,6 +273,7 @@ async def campaign_state_fragment(request: Request, campaign_id: str):
             "ticks": ticks,
             "progress": progress,
             "operator": _operator_runtime_context(),
+            **_cartography_context(state),
         },
     )
 

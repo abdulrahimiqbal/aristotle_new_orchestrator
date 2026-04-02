@@ -12,14 +12,17 @@ from orchestrator.aristotle import (
     with_synthesized_json_if_needed,
 )
 from orchestrator.config import (
+    MAP_REFRESH_MAX_INTERVAL_TICKS,
     MAX_ACTIVE_EXPERIMENTS,
     MAX_EXPERIMENTS,
     SYNTHESIZE_STRUCTURED_JSON,
     TICK_INTERVAL,
 )
+from orchestrator import config as app_config
 from orchestrator.db import Database
-from orchestrator.llm import reason, summarize_result
+from orchestrator.llm import reason, summarize_result, update_problem_map
 from orchestrator.models import AristotleParsedResult, ExperimentStatus
+from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 
 logger = logging.getLogger("orchestrator.manager")
 
@@ -73,7 +76,12 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
     campaign_id = campaign["id"]
     t0 = time.monotonic()
     exp_total = 0
+    evidence_delta = False
+    finished_snapshots: list[dict[str, str]] = []
+    map_refreshed = False
     try:
+        db.ensure_problem_map_initialized(campaign_id, campaign.get("prompt") or "")
+
         running = db.get_running_experiments(campaign_id)
         exp_total = len(running)
         for exp in running:
@@ -125,6 +133,17 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 if parsed.blockers:
                     evidence += f" — {len(parsed.blockers)} blocker(s)"
                 db.append_target_evidence(exp["target_id"], evidence)
+                evidence_delta = True
+                finished_snapshots.append(
+                    {
+                        "id": str(exp["id"]),
+                        "target_id": str(exp["target_id"]),
+                        "move_kind": str(exp.get("move_kind") or "prove"),
+                        "outcome": "completed",
+                        "verdict": parsed.verdict.value,
+                        "summary_snip": (summary or "")[:500],
+                    }
+                )
             elif status == "failed":
                 db.update_experiment_failed(
                     exp["id"], "Aristotle job failed or timed out"
@@ -133,6 +152,17 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                     exp["target_id"], f"Experiment {exp['id']}: failed"
                 )
                 db.increment_ops_counter("aristotle:job_failed_or_timeout", 1)
+                evidence_delta = True
+                finished_snapshots.append(
+                    {
+                        "id": str(exp["id"]),
+                        "target_id": str(exp["target_id"]),
+                        "move_kind": str(exp.get("move_kind") or "prove"),
+                        "outcome": "failed",
+                        "verdict": "n/a",
+                        "summary_snip": "Aristotle job failed or timed out",
+                    }
+                )
 
         state = db.get_campaign_state(campaign_id)
 
@@ -158,6 +188,42 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
             )
             return
 
+        pmap_prev = parse_problem_map(state.campaign.problem_map_json)
+        last_map_tick = int(pmap_prev.get("last_tick_updated", -1))
+        periodic_map = last_map_tick >= 0 and (tick_number - last_map_tick) >= MAP_REFRESH_MAX_INTERVAL_TICKS
+        should_refresh_map = (evidence_delta or periodic_map) and bool(app_config.LLM_API_KEY)
+
+        if should_refresh_map:
+            delta_lines: list[str] = []
+            for s in finished_snapshots:
+                delta_lines.append(
+                    f"- experiment {s['id']} target={s['target_id']} move_kind={s['move_kind']} "
+                    f"outcome={s['outcome']} verdict={s['verdict']} :: {s['summary_snip']}"
+                )
+            if not delta_lines:
+                delta_lines.append(
+                    "(No new completed/failed experiments this interval; reassess the map from current knowledge.)"
+                )
+            targets_summary = "\n".join(
+                f"- id={t.id} status={t.status.value}: {t.description[:600]}"
+                for t in state.targets
+            )
+            new_map_json = await update_problem_map(
+                previous_map_json=state.campaign.problem_map_json,
+                problem_refs_json=state.campaign.problem_refs_json,
+                campaign_prompt=state.campaign.prompt,
+                delta_block="\n".join(delta_lines),
+                tick_number=tick_number,
+                targets_summary=targets_summary,
+            )
+            if new_map_json:
+                db.update_campaign_problem_map(campaign_id, new_map_json)
+                db.increment_ops_counter("problem_map:refresh_ok", 1)
+                map_refreshed = True
+                state = db.get_campaign_state(campaign_id)
+            else:
+                db.increment_ops_counter("problem_map:refresh_fail", 1)
+
         decision = await reason(state)
 
         if decision.reasoning.startswith("LLM HTTP error"):
@@ -175,9 +241,22 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
         done = decision.campaign_complete or db.all_targets_resolved(campaign_id)
         if not done:
             slots_available = MAX_ACTIVE_EXPERIMENTS - active_count
+            valid_target_ids = {t.id for t in state.targets}
             for new_exp in decision.new_experiments[: max(0, slots_available)]:
+                if new_exp.target_id not in valid_target_ids:
+                    logger.warning(
+                        "Skipping experiment: unknown target_id %s",
+                        new_exp.target_id,
+                    )
+                    db.increment_ops_counter("manager:skip_unknown_target", 1)
+                    continue
+                mk = normalize_move_kind(new_exp.move_kind)
                 exp_id = db.create_experiment(
-                    campaign_id, new_exp.target_id, new_exp.objective
+                    campaign_id,
+                    new_exp.target_id,
+                    new_exp.objective,
+                    move_kind=mk,
+                    move_note=new_exp.move_note or "",
                 )
                 job_id, error = await submit(
                     new_exp.objective, campaign["workspace_dir"]
@@ -205,6 +284,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 ],
                 "campaign_complete": decision.campaign_complete,
                 "campaign_complete_reason": decision.campaign_complete_reason,
+                "problem_map_refreshed": map_refreshed,
             },
         )
         db.clear_tick_diagnostic(campaign_id)

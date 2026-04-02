@@ -41,6 +41,9 @@ MAX_ACTIVE_EXPERIMENTS = _int_env("MAX_ACTIVE_EXPERIMENTS", 5)
 TICK_INTERVAL = _int_env("TICK_INTERVAL", 30)
 MAX_EXPERIMENTS = _int_env("MAX_EXPERIMENTS", 100)
 
+# Problem map (cartographer): refresh when experiments finish, or at least every N global ticks
+MAP_REFRESH_MAX_INTERVAL_TICKS = _int_env("MAP_REFRESH_MAX_INTERVAL_TICKS", 12)
+
 # LLM context (reasoning tick)
 LLM_EVIDENCE_TARGET_TAIL = _int_env("LLM_EVIDENCE_TARGET_TAIL", 24)
 LLM_EXPERIMENT_SUMMARY_CHARS = _int_env("LLM_EXPERIMENT_SUMMARY_CHARS", 4000)

@@ -15,6 +15,12 @@ from orchestrator.models import (
     TargetStatus,
     TargetUpdate,
 )
+from orchestrator.problem_map_util import (
+    coerce_llm_problem_map,
+    normalize_move_kind,
+    parse_problem_map,
+    parse_problem_refs,
+)
 
 
 def _strip_json_fence(text: str) -> str:
@@ -108,6 +114,28 @@ def _format_state_for_llm(state: CampaignState) -> str:
     lines.append(f"prompt: {state.campaign.prompt}")
     lines.append(f"status: {state.campaign.status.value}")
     lines.append(f"workspace_template: {state.campaign.workspace_template}")
+    refs = parse_problem_refs(state.campaign.problem_refs_json)
+    if refs:
+        lines.append("problem_refs (external — do not invent citations beyond this):")
+        for k, v in refs.items():
+            if v:
+                lines.append(f"  {k}: {v}")
+    pmap = parse_problem_map(state.campaign.problem_map_json)
+    if pmap:
+        lines.append("")
+        lines.append("## Problem map (structured landscape — align experiments with active_fronts)")
+        lines.append(f"summary: {str(pmap.get('summary', ''))[:2000]}")
+        nodes = pmap.get("nodes") or []
+        if isinstance(nodes, list):
+            for n in nodes[:24]:
+                if isinstance(n, dict):
+                    lines.append(
+                        f"- node id={n.get('id')} status={n.get('status')} "
+                        f"label={str(n.get('label', ''))[:300]}"
+                    )
+        fronts = pmap.get("active_fronts") or []
+        if isinstance(fronts, list) and fronts:
+            lines.append(f"active_fronts: {', '.join(str(x) for x in fronts[:12])}")
     lines.append("")
     lines.append("## Targets")
     for t in state.targets:
@@ -121,10 +149,12 @@ def _format_state_for_llm(state: CampaignState) -> str:
     lines.append("## Experiments (full list; summaries truncated)")
     for e in state.experiments:
         lines.append(
-            f"- id={e.id} target={e.target_id} status={e.status.value} "
-            f"verdict={(e.verdict.value if e.verdict else 'n/a')}"
+            f"- id={e.id} target={e.target_id} move_kind={e.move_kind} "
+            f"status={e.status.value} verdict={(e.verdict.value if e.verdict else 'n/a')}"
         )
         lines.append(f"  objective: {e.objective}")
+        if e.move_note:
+            lines.append(f"  move_note: {e.move_note[:500]}")
         if e.result_summary:
             s = e.result_summary
             lines.append(
@@ -138,7 +168,8 @@ def _format_state_for_llm(state: CampaignState) -> str:
     lines.append("## Recent structured experiment results (retrieved)")
     for row in state.manager_context_experiments:
         lines.append(
-            f"- exp={row.get('id')} target={row.get('target_id')} verdict={row.get('verdict')}"
+            f"- exp={row.get('id')} target={row.get('target_id')} "
+            f"move_kind={row.get('move_kind') or 'prove'} verdict={row.get('verdict')}"
         )
         for k in (
             "proved_lemmas",
@@ -232,8 +263,15 @@ def _parse_manager_decision(data: dict[str, Any]) -> ManagerDecision:
         obj = ne.get("objective")
         if not tid or not obj:
             continue
+        mk = normalize_move_kind(str(ne.get("move_kind") or "prove"))
+        note = str(ne.get("move_note") or "").strip()
         new_experiments.append(
-            NewExperiment(target_id=str(tid), objective=str(obj).strip())
+            NewExperiment(
+                target_id=str(tid),
+                objective=str(obj).strip(),
+                move_kind=mk,
+                move_note=note[:2000],
+            )
         )
 
     return ManagerDecision(
@@ -272,6 +310,10 @@ When setting campaign_complete: prefer not to give up while experiments are stil
 
 Use the "Recent structured experiment results" and "Lemma / obligation ledger" sections as authoritative structured memory; do not ignore them in long campaigns.
 
+Hard open problems are rarely solved in one shot: prefer discovery via verification — underspecify, perturb, promote lemmas from partial proofs, reformulate, center on obstructions, or refute subclaims. Name each move with move_kind.
+
+move_kind must be one of: prove, underspecify, perturb, promote, reformulate, center, refute, explore.
+
 Return JSON:
 {
   "reasoning": "...your analysis of the current state...",
@@ -279,7 +321,12 @@ Return JSON:
     {"target_id": "...", "new_status": "verified|refuted|blocked|open", "evidence": "...why..."}
   ],
   "new_experiments": [
-    {"target_id": "...", "objective": "...what to ask Aristotle to prove/explore..."}
+    {
+      "target_id": "...",
+      "objective": "...what to ask Aristotle to prove/explore...",
+      "move_kind": "prove|underspecify|perturb|promote|reformulate|center|refute|explore",
+      "move_note": "optional short rationale tying to problem map / prior experiment"
+    }
   ],
   "campaign_complete": false,
   "campaign_complete_reason": ""
@@ -297,6 +344,72 @@ Return JSON:
         return ManagerDecision(reasoning=f"LLM HTTP error: {e!s}")
     except (json.JSONDecodeError, TypeError, ValueError) as e:
         return ManagerDecision(reasoning=f"LLM parse error: {e!s}")
+
+
+async def update_problem_map(
+    *,
+    previous_map_json: str,
+    problem_refs_json: str,
+    campaign_prompt: str,
+    delta_block: str,
+    tick_number: int,
+    targets_summary: str,
+) -> str | None:
+    """LLM refresh of problem_map_json. Returns serialized JSON or None on failure/skip."""
+    if not app_config.LLM_API_KEY:
+        return None
+
+    prev = parse_problem_map(previous_map_json)
+    refs = parse_problem_refs(problem_refs_json)
+    refs_lines = "\n".join(f"- {k}: {v}" for k, v in refs.items() if v) or "(none)"
+
+    system = """You maintain a structured "problem map" for a formal verification campaign (Lean 4 / Aristotle).
+
+The main theorem may be out of reach; track the landscape: nodes (claims/subproblems), edges (implies / special_case / equivalent / relates), active_fronts (what to push on now), and a short summary of difficulty and strategy.
+
+Discovery via verification: update node statuses from evidence (proved, refuted, blocked, open, active). Align active_fronts with where experiments should focus.
+
+Return JSON only:
+{
+  "summary": "2–6 sentences",
+  "nodes": [ {"id": "stable_id", "label": "short text", "status": "open|active|blocked|proved|refuted"} ],
+  "edges": [ {"from": "node_id", "to": "node_id", "kind": "would_imply|special_case|equivalent|relates"} ],
+  "active_fronts": ["node_id", ...]
+}
+
+Keep nodes concise (max ~20). Reuse stable ids when the same subproblem persists. Do not cite sources that were not given in problem_refs."""
+
+    user = f"""## Campaign prompt
+{campaign_prompt[:4000]}
+
+## External problem_refs (authoritative)
+{refs_lines}
+
+## Targets (ids and descriptions)
+{targets_summary[:8000]}
+
+## Previous problem map (JSON)
+{previous_map_json[:12000]}
+
+## New evidence this refresh
+{delta_block[:8000]}
+
+## Tick
+{tick_number}
+
+Produce an updated full problem map JSON (all keys required). Set node statuses consistently with the evidence."""
+
+    try:
+        raw = await _call_llm(system, user)
+        data = json.loads(_strip_json_fence(raw))
+        if not isinstance(data, dict):
+            return None
+        coerced = coerce_llm_problem_map(
+            data, previous=prev, tick_number=tick_number
+        )
+        return json.dumps(coerced, ensure_ascii=False)
+    except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
+        return None
 
 
 async def summarize_result(raw_output: str) -> str:

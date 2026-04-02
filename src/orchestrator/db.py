@@ -18,6 +18,11 @@ from orchestrator.models import (
     Tick,
     Verdict,
 )
+from orchestrator.problem_map_util import (
+    map_needs_init,
+    parse_problem_map,
+    seed_problem_map_json,
+)
 
 
 def _new_id() -> str:
@@ -171,6 +176,25 @@ class Database:
                 if not _column_exists(conn, "experiments", col):
                     conn.execute(f"ALTER TABLE experiments ADD COLUMN {col} {decl}")
             _set_user_version(conn, 3)
+            v = 3
+        if v < 4:
+            if not _column_exists(conn, "campaigns", "problem_map_json"):
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN problem_map_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if not _column_exists(conn, "campaigns", "problem_refs_json"):
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN problem_refs_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if not _column_exists(conn, "experiments", "move_kind"):
+                conn.execute(
+                    "ALTER TABLE experiments ADD COLUMN move_kind TEXT NOT NULL DEFAULT 'prove'"
+                )
+            if not _column_exists(conn, "experiments", "move_note"):
+                conn.execute(
+                    "ALTER TABLE experiments ADD COLUMN move_note TEXT NOT NULL DEFAULT ''"
+                )
+            _set_user_version(conn, 4)
 
     def create_campaign(
         self,
@@ -178,19 +202,39 @@ class Database:
         *,
         workspace_root: str,
         workspace_template: str = "minimal",
+        problem_refs_json: str = "{}",
+        problem_map_json: str | None = None,
     ) -> str:
         cid = _new_id()
         ws_dir = str((Path(workspace_root).resolve() / cid))
         now = datetime.utcnow().isoformat()
         tmpl = (workspace_template or "minimal").strip().lower() or "minimal"
+        pmap = (
+            problem_map_json
+            if problem_map_json is not None
+            else seed_problem_map_json(prompt)
+        )
+        prefs = problem_refs_json if problem_refs_json.strip() else "{}"
         conn = self._connect()
         try:
             conn.execute(
                 """
-                INSERT INTO campaigns (id, prompt, status, workspace_dir, workspace_template, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO campaigns (
+                  id, prompt, status, workspace_dir, workspace_template,
+                  problem_map_json, problem_refs_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (cid, prompt, CampaignStatus.ACTIVE.value, ws_dir, tmpl, now),
+                (
+                    cid,
+                    prompt,
+                    CampaignStatus.ACTIVE.value,
+                    ws_dir,
+                    tmpl,
+                    pmap,
+                    prefs,
+                    now,
+                ),
             )
             conn.commit()
         finally:
@@ -203,6 +247,38 @@ class Database:
             conn.execute(
                 "UPDATE campaigns SET workspace_dir = ? WHERE id = ?",
                 (workspace_dir, campaign_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def ensure_problem_map_initialized(self, campaign_id: str, prompt: str) -> None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT problem_map_json FROM campaigns WHERE id = ?",
+                (campaign_id,),
+            )
+            row = cur.fetchone()
+            if not row or "problem_map_json" not in row.keys():
+                return
+            raw = row["problem_map_json"]
+            parsed = parse_problem_map(raw if raw is not None else None)
+            if map_needs_init(parsed):
+                conn.execute(
+                    "UPDATE campaigns SET problem_map_json = ? WHERE id = ?",
+                    (seed_problem_map_json(prompt), campaign_id),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+    def update_campaign_problem_map(self, campaign_id: str, problem_map_json: str) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE campaigns SET problem_map_json = ? WHERE id = ?",
+                (problem_map_json, campaign_id),
             )
             conn.commit()
         finally:
@@ -226,7 +302,10 @@ class Database:
         return ids
 
     def _row_campaign(self, row: sqlite3.Row) -> Campaign:
-        tmpl = row["workspace_template"] if "workspace_template" in row.keys() else "minimal"
+        keys = set(row.keys())
+        tmpl = row["workspace_template"] if "workspace_template" in keys else "minimal"
+        pmap = str(row["problem_map_json"] or "{}") if "problem_map_json" in keys else "{}"
+        prefs = str(row["problem_refs_json"] or "{}") if "problem_refs_json" in keys else "{}"
         return Campaign(
             id=row["id"],
             prompt=row["prompt"],
@@ -234,6 +313,8 @@ class Database:
             workspace_dir=row["workspace_dir"] or "",
             workspace_template=str(tmpl or "minimal"),
             created_at=_parse_dt(row["created_at"]) or datetime.utcnow(),
+            problem_map_json=pmap,
+            problem_refs_json=prefs,
         )
 
     def _parse_json_list(self, raw: str | None) -> list[str]:
@@ -254,11 +335,15 @@ class Database:
         err_raw = ""
         if "parsed_error_message" in keys and row["parsed_error_message"] is not None:
             err_raw = str(row["parsed_error_message"])
+        mk = str(row["move_kind"] or "prove") if "move_kind" in keys else "prove"
+        mn = str(row["move_note"] or "") if "move_note" in keys else ""
         return Experiment(
             id=row["id"],
             campaign_id=row["campaign_id"],
             target_id=row["target_id"],
             objective=row["objective"],
+            move_kind=mk,
+            move_note=mn,
             status=ExperimentStatus(row["status"]),
             aristotle_job_id=row["aristotle_job_id"],
             result_raw=row["result_raw"],
@@ -324,7 +409,7 @@ class Database:
         try:
             cur = conn.execute(
                 """
-                SELECT id, target_id, objective, status, verdict, result_summary,
+                SELECT id, target_id, objective, move_kind, status, verdict, result_summary,
                   parsed_proved_lemmas_json, parsed_generated_lemmas_json,
                   parsed_unsolved_goals_json, parsed_blockers_json, parsed_counterexamples_json,
                   parsed_error_message, completed_at,
@@ -341,10 +426,13 @@ class Database:
             conn.close()
 
     def _structured_experiment_row(self, r: sqlite3.Row) -> dict[str, Any]:
+        rk = set(r.keys())
+        mk = str(r["move_kind"] or "prove") if "move_kind" in rk else "prove"
         return {
             "id": r["id"],
             "target_id": r["target_id"],
             "objective": r["objective"],
+            "move_kind": mk,
             "status": r["status"],
             "verdict": r["verdict"],
             "result_summary": r["result_summary"],
@@ -376,7 +464,7 @@ class Database:
             for tid in target_ids:
                 cur = conn.execute(
                     """
-                    SELECT id, target_id, objective, status, verdict, result_summary,
+                    SELECT id, target_id, objective, move_kind, status, verdict, result_summary,
                       parsed_proved_lemmas_json, parsed_generated_lemmas_json,
                       parsed_unsolved_goals_json, parsed_blockers_json, parsed_counterexamples_json,
                       parsed_error_message, completed_at,
@@ -474,16 +562,34 @@ class Database:
         finally:
             conn.close()
 
-    def create_experiment(self, campaign_id: str, target_id: str, objective: str) -> str:
+    def create_experiment(
+        self,
+        campaign_id: str,
+        target_id: str,
+        objective: str,
+        *,
+        move_kind: str = "prove",
+        move_note: str = "",
+    ) -> str:
         eid = _new_id()
         conn = self._connect()
         try:
             conn.execute(
                 """
-                INSERT INTO experiments (id, campaign_id, target_id, objective, status)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO experiments (
+                  id, campaign_id, target_id, objective, move_kind, move_note, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (eid, campaign_id, target_id, objective, ExperimentStatus.PENDING.value),
+                (
+                    eid,
+                    campaign_id,
+                    target_id,
+                    objective,
+                    move_kind[:64],
+                    (move_note or "")[:2000],
+                    ExperimentStatus.PENDING.value,
+                ),
             )
             conn.commit()
         finally:
@@ -921,6 +1027,103 @@ class Database:
         try:
             cur = conn.execute("SELECT * FROM manager_tick_diagnostics ORDER BY updated_at DESC")
             return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def export_operator_bundle(
+        self,
+        *,
+        ticks_limit: int = 5000,
+        ledger_limit: int = 20000,
+        include_result_raw: bool = False,
+        result_raw_max_chars: int = 500_000,
+    ) -> dict[str, Any]:
+        """Full JSON snapshot for operators (e.g. curl from Railway). Keeps one DB connection."""
+        generated_at = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            ops_rows = conn.execute("SELECT key, value FROM ops_counters").fetchall()
+            ops_counters = {str(r["key"]): int(r["value"]) for r in ops_rows}
+            diag_cur = conn.execute(
+                "SELECT * FROM manager_tick_diagnostics ORDER BY updated_at DESC"
+            )
+            tick_diagnostics = [dict(r) for r in diag_cur.fetchall()]
+
+            campaigns_out: list[dict[str, Any]] = []
+            ccur = conn.execute("SELECT * FROM campaigns ORDER BY created_at DESC")
+            for crow in ccur.fetchall():
+                campaign = self._row_campaign(crow)
+                cid = campaign.id
+
+                tcur = conn.execute(
+                    "SELECT * FROM targets WHERE campaign_id = ? ORDER BY created_at",
+                    (cid,),
+                )
+                targets = [self._row_target(r).model_dump(mode="json") for r in tcur.fetchall()]
+
+                ecur = conn.execute(
+                    """
+                    SELECT * FROM experiments WHERE campaign_id = ?
+                    ORDER BY CASE WHEN submitted_at IS NULL THEN 1 ELSE 0 END,
+                             submitted_at DESC, id
+                    """,
+                    (cid,),
+                )
+                experiments: list[dict[str, Any]] = []
+                for erow in ecur.fetchall():
+                    exp = self._row_experiment(erow)
+                    d = exp.model_dump(mode="json")
+                    raw = d.get("result_raw")
+                    if not include_result_raw:
+                        d["result_raw"] = None
+                    elif (
+                        result_raw_max_chars > 0
+                        and isinstance(raw, str)
+                        and len(raw) > result_raw_max_chars
+                    ):
+                        d["result_raw"] = (
+                            raw[:result_raw_max_chars]
+                            + "\n... [truncated by export_operator_bundle]"
+                        )
+                    experiments.append(d)
+
+                tick_cur = conn.execute(
+                    """
+                    SELECT * FROM ticks WHERE campaign_id = ?
+                    ORDER BY tick_number ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (cid, ticks_limit),
+                )
+                ticks = [self._row_tick(r).model_dump(mode="json") for r in tick_cur.fetchall()]
+
+                led_cur = conn.execute(
+                    """
+                    SELECT * FROM lemma_ledger WHERE campaign_id = ?
+                    ORDER BY datetime(created_at) ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (cid, ledger_limit),
+                )
+                lemma_ledger = [dict(r) for r in led_cur.fetchall()]
+
+                campaigns_out.append(
+                    {
+                        "campaign": campaign.model_dump(mode="json"),
+                        "targets": targets,
+                        "experiments": experiments,
+                        "ticks": ticks,
+                        "lemma_ledger": lemma_ledger,
+                    }
+                )
+
+            return {
+                "generated_at": generated_at,
+                "database_path": self.path,
+                "ops_counters": ops_counters,
+                "tick_diagnostics": tick_diagnostics,
+                "campaigns": campaigns_out,
+            }
         finally:
             conn.close()
 

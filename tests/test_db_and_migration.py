@@ -23,8 +23,16 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         assert "result_structured_json" in cols
         assert "parse_source" in cols
         assert "parse_warnings_json" in cols
+        cur = conn.execute("PRAGMA table_info(campaigns)")
+        ccols = {r[1] for r in cur.fetchall()}
+        assert "problem_map_json" in ccols
+        assert "problem_refs_json" in ccols
+        cur = conn.execute("PRAGMA table_info(experiments)")
+        ecols = {r[1] for r in cur.fetchall()}
+        assert "move_kind" in ecols
+        assert "move_note" in ecols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 3
+        assert int(uv) >= 4
     finally:
         conn.close()
 
