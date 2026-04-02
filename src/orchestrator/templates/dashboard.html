@@ -24,7 +24,8 @@
   <style>
     .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
     .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
-    body { background: radial-gradient(1200px 800px at 10% -10%, rgba(139, 92, 246, 0.12), transparent), radial-gradient(900px 600px at 100% 0%, rgba(16, 185, 129, 0.08), transparent), #09090b; }
+    /* deploy-sync canary: sky tint (was violet) — revert after verifying GitHub→Railway */
+    body { background: radial-gradient(1200px 800px at 10% -10%, rgba(56, 189, 248, 0.14), transparent), radial-gradient(900px 600px at 100% 0%, rgba(16, 185, 129, 0.08), transparent), #09090b; }
   </style>
 </head>
 <body class="h-full min-h-screen font-sans text-zinc-200 antialiased">
