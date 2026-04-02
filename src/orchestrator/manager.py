@@ -12,6 +12,7 @@ from orchestrator.aristotle import (
     with_synthesized_json_if_needed,
 )
 from orchestrator.config import (
+    LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK,
     MAP_REFRESH_MAX_INTERVAL_TICKS,
     MAX_ACTIVE_EXPERIMENTS,
     MAX_EXPERIMENTS,
@@ -84,6 +85,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
 
         running = db.get_running_experiments(campaign_id)
         exp_total = len(running)
+        summarize_llm_remaining = max(0, int(LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK))
         for exp in running:
             if not exp["aristotle_job_id"]:
                 continue
@@ -101,7 +103,12 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 js = bundle.structured_json_raw
                 raw_for_db = md if md.strip() else (js or "")
                 parsed = parse_experiment_result(md, js)
-                summary = await summarize_result(raw_for_db)
+                use_llm_sum = summarize_llm_remaining > 0
+                if use_llm_sum:
+                    summarize_llm_remaining -= 1
+                else:
+                    db.increment_ops_counter("llm:summarize_truncated_cap", 1)
+                summary = await summarize_result(raw_for_db, use_llm=use_llm_sum)
                 db.update_experiment_completed(
                     exp["id"],
                     result_raw=raw_for_db,

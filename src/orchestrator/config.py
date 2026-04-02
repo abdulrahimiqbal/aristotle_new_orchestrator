@@ -13,6 +13,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)).strip())
+    except ValueError:
+        return default
+
+
 def _bool_env(name: str, default: bool = True) -> bool:
     v = os.environ.get(name)
     if v is None:
@@ -37,8 +44,9 @@ DEFAULT_WORKSPACE_TEMPLATE = os.environ.get(
     "DEFAULT_WORKSPACE_TEMPLATE", "minimal"
 ).strip().lower()
 
-MAX_ACTIVE_EXPERIMENTS = _int_env("MAX_ACTIVE_EXPERIMENTS", 5)
-TICK_INTERVAL = _int_env("TICK_INTERVAL", 30)
+# Tier-0-friendly defaults: fewer parallel completions + slightly longer ticks reduce LLM bursts.
+MAX_ACTIVE_EXPERIMENTS = _int_env("MAX_ACTIVE_EXPERIMENTS", 3)
+TICK_INTERVAL = _int_env("TICK_INTERVAL", 60)
 MAX_EXPERIMENTS = _int_env("MAX_EXPERIMENTS", 100)
 
 # Problem map (cartographer): refresh when experiments finish, or at least every N global ticks
@@ -56,6 +64,12 @@ LLM_LEDGER_ENTRIES_LIMIT = _int_env("LLM_LEDGER_ENTRIES_LIMIT", 40)
 
 # Summarization of raw Aristotle output
 LLM_SUMMARIZE_INPUT_CHARS = _int_env("LLM_SUMMARIZE_INPUT_CHARS", 50000)
+# Per manager tick: only this many completions use LLM summarize; rest use truncation (saves RPM).
+LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK = _int_env("LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK", 2)
+
+# Global spacing between LLM HTTP calls (same process). 3.5s ≈ ≤17 req/min; raise for stricter APIs.
+LLM_MIN_SECONDS_BETWEEN_REQUESTS = _float_env("LLM_MIN_SECONDS_BETWEEN_REQUESTS", 3.5)
+LLM_MAX_RETRIES_429 = _int_env("LLM_MAX_RETRIES_429", 12)
 
 # JSON mode for chat completions
 LLM_JSON_MODE = _bool_env("LLM_JSON_MODE", True)

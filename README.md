@@ -46,8 +46,8 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `LLM_API_KEY` | API key for an OpenAI-compatible chat API |
 | `LLM_BASE_URL` | API base URL (default: `https://api.openai.com/v1`) |
 | `LLM_MODEL` | Model name (default: `gpt-4o`) |
-| `MAX_ACTIVE_EXPERIMENTS` | Max concurrent in-flight Aristotle jobs per campaign (default: `5`) |
-| `TICK_INTERVAL` | Seconds between manager ticks (default: `30`) |
+| `MAX_ACTIVE_EXPERIMENTS` | Max concurrent in-flight Aristotle jobs per campaign (default: `3`; Tier-0-friendly) |
+| `TICK_INTERVAL` | Seconds between manager ticks (default: `60`) |
 | `MAX_EXPERIMENTS` | Max total experiments per campaign (default: `100`) |
 | `LLM_JSON_MODE` | Set to `0` to disable `response_format: json_object` if your API rejects it (default: on) |
 | `LLM_EVIDENCE_TARGET_TAIL` | Max target evidence lines shown to the LLM (default: `24`) |
@@ -56,6 +56,9 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `LLM_RECENT_STRUCTURED_EXPERIMENTS` | Recent completed experiments with parsed fields injected into the LLM context (default: `12`) |
 | `LLM_LEDGER_ENTRIES_LIMIT` | Recent lemma-ledger rows injected into the LLM context (default: `40`) |
 | `LLM_SUMMARIZE_INPUT_CHARS` | Max raw Aristotle text sent to the summarizer call (default: `50000`) |
+| `LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK` | Per tick, only this many completed experiments use LLM summarize; others get truncated text (default: `2`) |
+| `LLM_MIN_SECONDS_BETWEEN_REQUESTS` | Minimum spacing between any two LLM HTTP calls in-process (default: `3.5`) |
+| `LLM_MAX_RETRIES_429` | Extra retries on HTTP 429 with backoff (default: `12`) |
 | `ADMIN_TOKEN` | If set, enables `/admin/status`, `/admin/config`, `/admin/ui` (use `Authorization: Bearer`, `X-Admin-Token`, or `?admin_token=`; prefer headers) |
 
 ## HTTP API (selected)

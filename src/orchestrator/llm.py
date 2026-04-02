@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import re
+import time
 from typing import Any
 
 import httpx
@@ -31,6 +34,54 @@ def _strip_json_fence(text: str) -> str:
     return text.strip()
 
 
+# Serialize all LLM HTTP traffic + enforce min spacing (RPM / burst control).
+_llm_http_lock = asyncio.Lock()
+_llm_next_allowed_monotonic = 0.0
+
+
+async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 120.0) -> dict[str, Any]:
+    """POST /chat/completions with global throttle and 429 retry/backoff."""
+    global _llm_next_allowed_monotonic
+    url = f"{app_config.LLM_BASE_URL}/chat/completions"
+    headers = {"Authorization": f"Bearer {app_config.LLM_API_KEY}"}
+    spacing = max(0.0, float(app_config.LLM_MIN_SECONDS_BETWEEN_REQUESTS))
+    max_attempts = max(1, int(app_config.LLM_MAX_RETRIES_429) + 1)
+
+    async with _llm_http_lock:
+        now = time.monotonic()
+        wait0 = _llm_next_allowed_monotonic - now
+        if wait0 > 0:
+            await asyncio.sleep(wait0)
+
+        last_response: httpx.Response | None = None
+        for attempt in range(max_attempts):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                last_response = response
+
+                if response.status_code == 429:
+                    ra = response.headers.get("Retry-After")
+                    if ra is not None:
+                        try:
+                            sleep_s = float(ra)
+                        except ValueError:
+                            sleep_s = min(120.0, (2**attempt) + random.uniform(0.0, 1.0))
+                    else:
+                        sleep_s = min(120.0, (2**attempt) + random.uniform(0.0, 1.0))
+                    sleep_s = max(1.0, min(180.0, sleep_s))
+                    await asyncio.sleep(sleep_s)
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+                _llm_next_allowed_monotonic = time.monotonic() + spacing
+                return data
+
+        if last_response is not None:
+            last_response.raise_for_status()
+        raise httpx.HTTPError("LLM request failed after retries")
+
+
 async def _call_llm(system: str, user: str) -> str:
     payload: dict[str, Any] = {
         "model": app_config.LLM_MODEL,
@@ -42,14 +93,8 @@ async def _call_llm(system: str, user: str) -> str:
     }
     if app_config.LLM_JSON_MODE:
         payload["response_format"] = {"type": "json_object"}
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
-            f"{app_config.LLM_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {app_config.LLM_API_KEY}"},
-            json=payload,
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+    data = await _post_chat_completions(payload, timeout=120.0)
+    return str(data["choices"][0]["message"]["content"])
 
 
 async def decompose_prompt(prompt: str) -> list[Target]:
@@ -412,14 +457,18 @@ Produce an updated full problem map JSON (all keys required). Set node statuses 
         return None
 
 
-async def summarize_result(raw_output: str) -> str:
+def _summarize_fallback(raw_output: str) -> str:
+    return raw_output[:500] + ("…" if len(raw_output) > 500 else "")
+
+
+async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
     if not raw_output.strip():
         return ""
 
     cap = app_config.LLM_SUMMARIZE_INPUT_CHARS
 
-    if not app_config.LLM_API_KEY:
-        return raw_output[:500] + ("…" if len(raw_output) > 500 else "")
+    if not app_config.LLM_API_KEY or not use_llm:
+        return _summarize_fallback(raw_output)
 
     system = (
         "Summarize the following Aristotle / Lean verification output in 2-3 clear sentences "
@@ -428,21 +477,18 @@ async def summarize_result(raw_output: str) -> str:
     user = raw_output[:cap]
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{app_config.LLM_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {app_config.LLM_API_KEY}"},
-                json={
-                    "model": app_config.LLM_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    "temperature": 0.2,
-                },
-            )
-            response.raise_for_status()
-            text = response.json()["choices"][0]["message"]["content"].strip()
-            return text or raw_output[:500]
+        data = await _post_chat_completions(
+            {
+                "model": app_config.LLM_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.2,
+            },
+            timeout=60.0,
+        )
+        text = str(data["choices"][0]["message"]["content"]).strip()
+        return text or _summarize_fallback(raw_output)
     except (httpx.HTTPError, KeyError, TypeError):
-        return raw_output[:500] + ("…" if len(raw_output) > 500 else "")
+        return _summarize_fallback(raw_output)
