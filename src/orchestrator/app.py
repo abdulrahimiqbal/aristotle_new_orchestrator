@@ -181,13 +181,23 @@ async def campaign_detail(request: Request, campaign_id: str):
 @app.post("/api/campaign")
 async def start_campaign(
     prompt: str = Form(...),
+    use_mathlib: str | None = Form(None),
     workspace_template: str = Form(""),
     erdos_id: str = Form(""),
     source_url: str = Form(""),
     formal_lean_path: str = Form(""),
     external_notes: str = Form(""),
 ):
-    tmpl = (workspace_template or "").strip().lower()
+    # Checkbox "use Mathlib" takes precedence over optional legacy workspace_template field.
+    if use_mathlib is not None and str(use_mathlib).strip().lower() in (
+        "1",
+        "on",
+        "true",
+        "yes",
+    ):
+        tmpl = "mathlib"
+    else:
+        tmpl = (workspace_template or "").strip().lower()
     if tmpl not in VALID_TEMPLATES:
         tmpl = (
             app_config.DEFAULT_WORKSPACE_TEMPLATE
@@ -216,6 +226,10 @@ async def start_campaign(
 class NewCampaignJSON(BaseModel):
     prompt: str = Field(min_length=1)
     workspace_template: str = Field(default="minimal")
+    use_mathlib: bool = Field(
+        default=False,
+        description="If true, use the mathlib4 Lake template (same as the dashboard checkbox).",
+    )
     erdos_id: str = Field(default="")
     source_url: str = Field(default="")
     formal_lean_path: str = Field(default="")
@@ -224,7 +238,10 @@ class NewCampaignJSON(BaseModel):
 
 @app.post("/api/campaign/start")
 async def start_campaign_json(body: NewCampaignJSON):
-    tmpl = body.workspace_template.strip().lower()
+    if body.use_mathlib:
+        tmpl = "mathlib"
+    else:
+        tmpl = body.workspace_template.strip().lower()
     if tmpl not in VALID_TEMPLATES:
         tmpl = (
             app_config.DEFAULT_WORKSPACE_TEMPLATE

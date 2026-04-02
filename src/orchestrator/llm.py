@@ -181,6 +181,23 @@ def _format_state_for_llm(state: CampaignState) -> str:
         fronts = pmap.get("active_fronts") or []
         if isinstance(fronts, list) and fronts:
             lines.append(f"active_fronts: {', '.join(str(x) for x in fronts[:12])}")
+    if (state.mathlib_broad_markdown or "").strip() or (
+        state.mathlib_narrow_markdown or ""
+    ).strip():
+        lines.append("")
+        lines.append(
+            "## Mathlib / LeanSearch hints (verified library — use for lemma names and imports; "
+            "confirm against this campaign's Lake workspace)"
+        )
+        combo = ""
+        if state.mathlib_broad_markdown:
+            combo += state.mathlib_broad_markdown.strip() + "\n\n"
+        if state.mathlib_narrow_markdown:
+            combo += state.mathlib_narrow_markdown.strip()
+        cap = app_config.MATHLIB_CONTEXT_MAX_CHARS
+        if len(combo) > cap:
+            combo = combo[: cap - 1] + "…"
+        lines.append(combo)
     lines.append("")
     lines.append("## Targets")
     for t in state.targets:
@@ -354,6 +371,8 @@ Key principles:
 When setting campaign_complete: prefer not to give up while experiments are still submitted/running unless you have waited many ticks with no verdicts; if you do complete anyway, in-flight Aristotle jobs will be marked failed as infrastructure abandonment (consistent DB state).
 
 Use the "Recent structured experiment results" and "Lemma / obligation ledger" sections as authoritative structured memory; do not ignore them in long campaigns.
+
+If a "Mathlib / LeanSearch hints" section is present, treat it as orientation toward existing Mathlib declarations (names, informal descriptions). Prefer experiment objectives that build on or import relevant lemmas when the workspace template supports Mathlib; do not treat hints as guaranteed to apply without checking Lean output.
 
 Hard open problems are rarely solved in one shot: prefer discovery via verification — underspecify, perturb, promote lemmas from partial proofs, reformulate, center on obstructions, or refute subclaims. Name each move with move_kind.
 

@@ -71,6 +71,13 @@
               Start
             </button>
           </div>
+          <label class="flex items-start gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-4 py-3 cursor-pointer hover:border-zinc-700/90 transition-colors">
+            <input type="checkbox" name="use_mathlib" value="1" class="mt-1 rounded border-zinc-600 text-violet-500 focus:ring-violet-500/40" />
+            <span class="text-sm text-zinc-300 leading-snug">
+              <span class="font-medium text-zinc-200">Use Mathlib4 workspace</span>
+              <span class="block text-xs text-zinc-500 mt-1">Lake project depends on mathlib4 (imports available). First build can be slow — run <code class="text-zinc-400">lake exe cache get</code> in the campaign directory when possible.</span>
+            </span>
+          </label>
           <details class="rounded-xl border border-zinc-800/90 bg-zinc-900/40 px-4 py-3 text-xs text-zinc-500">
             <summary class="cursor-pointer text-zinc-400 font-medium select-none">External refs (optional)</summary>
             <div class="mt-3 grid gap-2 sm:grid-cols-2">
@@ -84,16 +91,7 @@
                      class="rounded-lg bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-zinc-200 placeholder:text-zinc-600 sm:col-span-2" />
             </div>
           </details>
-          <div class="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
-            <label class="flex items-center gap-2">
-              <span class="text-zinc-400">Lake template</span>
-              <select name="workspace_template" class="rounded-lg bg-zinc-900 border border-zinc-700 px-2 py-1.5 text-zinc-200">
-                <option value="minimal">Minimal (fast cold start)</option>
-                <option value="mathlib">Mathlib4 (first build: run lake exe cache get — see README)</option>
-              </select>
-            </label>
-            <span class="text-zinc-600">Each campaign gets an isolated directory under <span class="font-mono text-zinc-500">{{ operator.workspace_root }}</span></span>
-          </div>
+          <p class="text-xs text-zinc-600">Each campaign gets an isolated directory under <span class="font-mono text-zinc-500">{{ operator.workspace_root }}</span> (unchecked = minimal Lake template).</p>
         </form>
         <p class="text-[11px] text-zinc-600 mt-3 font-mono">Limits · max experiments/campaign {{ operator.max_experiments }} · concurrent {{ operator.max_active_experiments }} · tick {{ operator.tick_interval_sec }}s · map refresh interval {{ operator.map_refresh_max_interval_ticks }} ticks</p>
       </div>

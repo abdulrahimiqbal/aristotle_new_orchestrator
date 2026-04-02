@@ -193,10 +193,23 @@ def coerce_llm_problem_map(
     if not active_fronts:
         active_fronts = ["root"]
 
-    return {
+    # Preserve Mathlib reconnaissance payload unless the model explicitly replaces it.
+    lib_anchors = data.get("library_anchors")
+    if not isinstance(lib_anchors, list):
+        prev_la = previous.get("library_anchors")
+        lib_anchors = prev_la if isinstance(prev_la, list) else []
+    lib_done = data.get("library_recon_done")
+    if not isinstance(lib_done, bool):
+        prev_ld = previous.get("library_recon_done")
+        lib_done = prev_ld if isinstance(prev_ld, bool) else False
+
+    out: dict[str, Any] = {
         "summary": summary,
         "nodes": nodes,
         "edges": edges,
         "active_fronts": active_fronts,
         "last_tick_updated": int(tick_number),
+        "library_anchors": lib_anchors,
+        "library_recon_done": lib_done,
     }
+    return out

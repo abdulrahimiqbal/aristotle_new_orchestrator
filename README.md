@@ -23,7 +23,7 @@ One **FastAPI** process serves the **HTMX + Tailwind** dashboard and a **backgro
 ## Workspaces and Mathlib
 
 - **Per-campaign directories**: each campaign has its own Lake project at `WORKSPACE_ROOT/<campaign_id>/` (isolated `lean-toolchain`, `lakefile.lean`, and `OrchWorkspace/`). Aristotle uses that path as `--project-dir`.
-- **Templates** (pick in the “New campaign” form, `DEFAULT_WORKSPACE_TEMPLATE`, or JSON `workspace_template`):
+- **Templates** (dashboard checkbox “Use Mathlib4 workspace”, `DEFAULT_WORKSPACE_TEMPLATE`, or JSON `workspace_template` / `use_mathlib`):
   - **minimal** — small Lake library, fast cold start (Lean pin in-repo).
   - **mathlib** — `require mathlib from git "https://github.com/leanprover-community/mathlib4"` with a `lean-toolchain` aligned to current Mathlib (see [Using mathlib4 as a dependency](https://github.com/leanprover-community/mathlib4/wiki/Using-mathlib4-as-a-dependency)).
 - **First Mathlib build**: downloading and building Mathlib can take a long time. After the template is copied into a campaign directory, run **`lake exe cache get`** inside that directory (local shell or `docker exec`) to fetch precompiled artifacts when available. Plan Docker/Railway image layers or a warm volume accordingly—the UI labels the Mathlib option as expensive on first use.
@@ -59,14 +59,22 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK` | Per tick, only this many completed experiments use LLM summarize; others get truncated text (default: `2`) |
 | `LLM_MIN_SECONDS_BETWEEN_REQUESTS` | Minimum spacing between any two LLM HTTP calls in-process (default: `3.5`) |
 | `LLM_MAX_RETRIES_429` | Extra retries on HTTP 429 with backoff (default: `12`) |
+| `MATHLIB_KNOWLEDGE_MODE` | `off` (default) or `leansearch` — inject Mathlib hints into the manager via [LeanSearch](https://leansearch.net/) (HTTP API compatible with LeanSearchClient) |
+| `LEANSEARCH_API_URL` | POST endpoint (default: `https://leansearch.net/search`) |
+| `LEAN_TOOLCHAIN_HINT` | Optional string shown in hints so the planner matches your Lake `lean-toolchain` / Mathlib pin |
+| `MATHLIB_BROAD_QUERIES_COUNT` | Natural-language broad queries from prompt + targets (default: `2`) |
+| `MATHLIB_BROAD_RESULTS_PER_QUERY` | Hits per query for broad recon (default: `4`) |
+| `MATHLIB_NARROW_MAX_SYMBOLS` | Max symbol queries per tick from blockers/errors (default: `8`; set `0` to disable narrow) |
+| `MATHLIB_NARROW_RESULTS_PER_SYMBOL` | LeanSearch hits per symbol (default: `2`) |
+| `MATHLIB_CONTEXT_MAX_CHARS` | Total budget for Mathlib sections in the LLM user payload (default: `8000`) |
 | `ADMIN_TOKEN` | If set, enables `/admin/status`, `/admin/config`, `/admin/ui` (use `Authorization: Bearer`, `X-Admin-Token`, or `?admin_token=`; prefer headers) |
 
 ## HTTP API (selected)
 
 | Method | Path | Notes |
 |--------|------|--------|
-| POST | `/api/campaign` | Form: `prompt`, optional `workspace_template` (`minimal` \| `mathlib`) |
-| POST | `/api/campaign/start` | JSON: `{"prompt":"...","workspace_template":"minimal"}` → `201` with `campaign_id`, `workspace_dir` |
+| POST | `/api/campaign` | Form: `prompt`, optional `use_mathlib=1` (checkbox) for mathlib4; optional legacy `workspace_template` if checkbox omitted |
+| POST | `/api/campaign/start` | JSON: `{"prompt":"...","workspace_template":"minimal"}` or `"use_mathlib": true` (takes precedence) → `201` with `campaign_id`, `workspace_dir` |
 | GET | `/api/campaign/{id}/ledger` | Read-only ledger JSON (`limit` query, capped) |
 
 ## Admin / observability

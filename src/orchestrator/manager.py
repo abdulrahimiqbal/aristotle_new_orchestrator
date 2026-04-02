@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -22,6 +23,11 @@ from orchestrator.config import (
 from orchestrator import config as app_config
 from orchestrator.db import Database
 from orchestrator.llm import reason, summarize_result, update_problem_map
+from orchestrator.mathlib_knowledge import (
+    fetch_broad_reconnaissance,
+    fetch_narrow_hints_for_state,
+    format_library_anchors_markdown,
+)
 from orchestrator.models import AristotleParsedResult, ExperimentStatus
 from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 
@@ -82,6 +88,30 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
     map_refreshed = False
     try:
         db.ensure_problem_map_initialized(campaign_id, campaign.get("prompt") or "")
+
+        if app_config.MATHLIB_KNOWLEDGE_MODE == "leansearch":
+            pmap_pre = parse_problem_map(db.get_campaign_problem_map_json(campaign_id))
+            if not pmap_pre.get("library_recon_done"):
+                tdescs = db.get_target_descriptions(campaign_id)
+                if tdescs:
+                    try:
+                        anchors = await fetch_broad_reconnaissance(
+                            campaign.get("prompt") or "",
+                            tdescs,
+                        )
+                        pmap_pre["library_anchors"] = anchors
+                        pmap_pre["library_recon_done"] = True
+                        db.update_campaign_problem_map(
+                            campaign_id,
+                            json.dumps(pmap_pre, ensure_ascii=False),
+                        )
+                        db.increment_ops_counter("mathlib:broad_recon_ok", 1)
+                    except Exception:
+                        logger.exception(
+                            "Mathlib broad reconnaissance failed for campaign %s",
+                            campaign_id,
+                        )
+                        db.increment_ops_counter("mathlib:broad_recon_fail", 1)
 
         running = db.get_running_experiments(campaign_id)
         exp_total = len(running)
@@ -230,6 +260,29 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 state = db.get_campaign_state(campaign_id)
             else:
                 db.increment_ops_counter("problem_map:refresh_fail", 1)
+
+        broad_md = format_library_anchors_markdown(
+            parse_problem_map(state.campaign.problem_map_json).get("library_anchors") or []
+        )
+        narrow_md = ""
+        if app_config.MATHLIB_KNOWLEDGE_MODE == "leansearch":
+            try:
+                narrow_md = await fetch_narrow_hints_for_state(
+                    manager_context_experiments=state.manager_context_experiments,
+                    manager_context_ledger=state.manager_context_ledger,
+                )
+                if narrow_md.strip():
+                    db.increment_ops_counter("mathlib:narrow_hints_ok", 1)
+            except Exception:
+                logger.exception("Mathlib narrow hints failed for campaign %s", campaign_id)
+                db.increment_ops_counter("mathlib:narrow_hints_fail", 1)
+
+        state = state.model_copy(
+            update={
+                "mathlib_broad_markdown": broad_md,
+                "mathlib_narrow_markdown": narrow_md,
+            }
+        )
 
         decision = await reason(state)
 

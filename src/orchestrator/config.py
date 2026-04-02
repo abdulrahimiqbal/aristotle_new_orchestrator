@@ -85,3 +85,20 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o")
+
+# Mathlib knowledge (LeanSearch — same HTTP API as LeanSearchClient)
+# MATHLIB_KNOWLEDGE_MODE: off | leansearch
+_MATHLIB_MODE_RAW = os.environ.get("MATHLIB_KNOWLEDGE_MODE", "off").strip().lower()
+MATHLIB_KNOWLEDGE_MODE = _MATHLIB_MODE_RAW if _MATHLIB_MODE_RAW in ("off", "leansearch") else "off"
+LEANSEARCH_API_URL = os.environ.get(
+    "LEANSEARCH_API_URL", "https://leansearch.net/search"
+).strip()
+LEANSEARCH_USER_AGENT = os.environ.get(
+    "LEANSEARCH_USER_AGENT", "aristotle-orchestrator"
+).strip() or "aristotle-orchestrator"
+LEAN_TOOLCHAIN_HINT = os.environ.get("LEAN_TOOLCHAIN_HINT", "").strip()
+MATHLIB_BROAD_QUERIES_COUNT = _int_env("MATHLIB_BROAD_QUERIES_COUNT", 2)
+MATHLIB_BROAD_RESULTS_PER_QUERY = _int_env("MATHLIB_BROAD_RESULTS_PER_QUERY", 4)
+MATHLIB_NARROW_MAX_SYMBOLS = _int_env("MATHLIB_NARROW_MAX_SYMBOLS", 8)
+MATHLIB_NARROW_RESULTS_PER_SYMBOL = _int_env("MATHLIB_NARROW_RESULTS_PER_SYMBOL", 2)
+MATHLIB_CONTEXT_MAX_CHARS = _int_env("MATHLIB_CONTEXT_MAX_CHARS", 8000)

@@ -273,6 +273,35 @@ class Database:
         finally:
             conn.close()
 
+    def get_campaign_problem_map_json(self, campaign_id: str) -> str:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT problem_map_json FROM campaigns WHERE id = ?",
+                (campaign_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return "{}"
+            return str(row["problem_map_json"] or "{}")
+        finally:
+            conn.close()
+
+    def get_target_descriptions(self, campaign_id: str) -> list[str]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT description FROM targets
+                WHERE campaign_id = ?
+                ORDER BY created_at
+                """,
+                (campaign_id,),
+            )
+            return [str(r["description"]) for r in cur.fetchall() if r["description"]]
+        finally:
+            conn.close()
+
     def update_campaign_problem_map(self, campaign_id: str, problem_map_json: str) -> None:
         conn = self._connect()
         try:

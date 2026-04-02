@@ -160,3 +160,6 @@ class CampaignState(BaseModel):
         default_factory=dict
     )
     manager_context_ledger: list[dict[str, Any]] = Field(default_factory=list)
+    # Filled by manager when MATHLIB_KNOWLEDGE_MODE=leansearch (LeanSearch-backed hints).
+    mathlib_broad_markdown: str = ""
+    mathlib_narrow_markdown: str = ""
