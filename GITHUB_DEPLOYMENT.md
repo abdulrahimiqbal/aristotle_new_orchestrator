@@ -53,6 +53,20 @@ railway up -d
 2. Open service **`aristotle-orchestrator`** → **Settings** → **Source** → connect **`abdulrahimiqbal/aristotle_new_orchestrator`**, branch **`main`**.  
    (Do **not** recreate a second empty service—one service, one volume, one `orchestrator.db`.)
 
+### “I pushed to GitHub but Railway shows no new deployment”
+
+That means **`aristotle-orchestrator` is not using GitHub as its build source** (empty source, or only Docker / empty repo field). Pushes to `main` do nothing until you connect the repo on **that** service.
+
+**Fix (dashboard):** Service **`aristotle-orchestrator`** → **Settings** → **Source** (or **Deployments** → **Connect GitHub** / **Change source**) → select **`abdulrahimiqbal/aristotle_new_orchestrator`**, branch **`main`**, root **`/`**. Save; trigger a deploy or push again.
+
+**Workaround (CLI, no GitHub hook):** from the repo, with `railway service link aristotle-orchestrator`:
+
+```bash
+railway up -d
+```
+
+That uploads your **local** directory and builds (good for “ship now”; not a substitute for connecting GitHub long term).
+
 ### Sync env to Railway (optional script)
 
 `scripts/sync-railway-env.sh` — keep `.env` out of git; use Railway **Variables** UI or this script with a filled `.env`.
