@@ -36,10 +36,60 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_map_node_acks'"
         )
         assert cur.fetchone() is not None
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='shadow_epistemic_state'"
+        )
+        assert cur.fetchone() is not None
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 6
+        assert int(uv) >= 7
     finally:
         conn.close()
+
+
+def test_shadow_tables_commit_and_promote(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    db = Database(str(tmp_path / "s.db"))
+    db.initialize()
+    cid = db.create_campaign(
+        "test collatz angle",
+        workspace_root=str(root),
+        workspace_template="minimal",
+    )
+    tid = db.add_targets(cid, ["prove a toy lemma"])[0]
+    db.ensure_shadow_state_row(cid)
+    run_id = db.shadow_commit_run(
+        cid,
+        trigger_kind="manual",
+        summary="probe",
+        response_obj={"ok": True},
+        new_stance_json='{"summary": "x"}',
+        new_policy_json='{"exploration_bias": 0.9}',
+        hypotheses=[
+            {
+                "kind": "exploration",
+                "title": "toy",
+                "body_md": "body",
+                "lean_snippet": "",
+                "evidence": [{"experiment_id": None, "target_id": tid, "note": "seed"}],
+            }
+        ],
+        promotions=[
+            {
+                "kind": "new_experiment",
+                "target_id": tid,
+                "objective": "Try a bounded search",
+                "move_kind": "explore",
+                "move_note": "shadow:test",
+            }
+        ],
+    )
+    assert run_id
+    promos = db.list_shadow_promotion_requests(cid, status="pending")
+    assert len(promos) == 1
+    pid = promos[0]["id"]
+    ok, msg, extra = db.apply_shadow_promotion(pid)
+    assert ok, msg
+    assert "experiment_id" in extra
 
 
 def test_create_campaign_per_workspace_dir(tmp_path: Path) -> None:

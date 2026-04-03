@@ -129,3 +129,8 @@ MATHLIB_BROAD_RESULTS_PER_QUERY = _int_env("MATHLIB_BROAD_RESULTS_PER_QUERY", 4)
 MATHLIB_NARROW_MAX_SYMBOLS = _int_env("MATHLIB_NARROW_MAX_SYMBOLS", 8)
 MATHLIB_NARROW_RESULTS_PER_SYMBOL = _int_env("MATHLIB_NARROW_RESULTS_PER_SYMBOL", 2)
 MATHLIB_CONTEXT_MAX_CHARS = _int_env("MATHLIB_CONTEXT_MAX_CHARS", 8000)
+
+# Shadow lab: speculative research agent (separate DB tables; does not touch verified targets)
+# Uses same API key as main LLM unless you override model/temperature.
+SHADOW_LLM_MODEL = os.environ.get("SHADOW_LLM_MODEL", "").strip() or None  # None → LLM_MODEL
+SHADOW_LLM_TEMPERATURE = _float_env("SHADOW_LLM_TEMPERATURE", 0.85)

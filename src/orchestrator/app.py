@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -26,6 +25,7 @@ from orchestrator.problem_map_util import (
 )
 from orchestrator.workspace_migration import migrate_legacy_shared_workspaces
 from orchestrator.workspace_seed import VALID_TEMPLATES, ensure_workspace
+from orchestrator.shadow_agent import run_shadow_lab
 
 logging.basicConfig(level=logging.INFO)
 
@@ -49,6 +49,8 @@ def _operator_runtime_context() -> dict:
         "skeptic_pass_enabled": bool(app_config.SKEPTIC_PASS_ENABLED),
         "min_non_prove_moves": int(app_config.MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH or 0),
         "verdict_reconcile_enabled": bool(app_config.VERDICT_RECONCILE_FROM_SUMMARY),
+        "shadow_llm_model": app_config.SHADOW_LLM_MODEL or app_config.LLM_MODEL,
+        "shadow_llm_temperature": app_config.SHADOW_LLM_TEMPERATURE,
     }
 
 
@@ -74,6 +76,44 @@ def _progress_stats(state) -> dict:
     )
     pct = (100 * resolved // total) if total else 0
     return {"target_total": total, "target_resolved": resolved, "progress_percent": pct}
+
+
+def _shadow_panel_context(campaign_id: str, *, shadow_flash: dict | None = None) -> dict:
+    db.ensure_shadow_state_row(campaign_id)
+    ep = db.get_shadow_epistemic_state(campaign_id)
+    stance_raw = ep.get("stance_json") or "{}"
+    try:
+        stance_pretty = json.dumps(json.loads(stance_raw), indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        stance_pretty = stance_raw
+    policy_raw = ep.get("policy_json") or "{}"
+    try:
+        policy_pretty = json.dumps(json.loads(policy_raw), indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        policy_pretty = policy_raw
+    hyps = db.list_shadow_hypotheses(campaign_id, limit=60)
+    hids = [str(h["id"]) for h in hyps]
+    ev_rows = db.list_shadow_hypothesis_evidence(hids)
+    ev_by_h: dict[str, list[dict]] = {}
+    for r in ev_rows:
+        hid = str(r["hypothesis_id"])
+        ev_by_h.setdefault(hid, []).append(dict(r))
+    for h in hyps:
+        h["evidence_rows"] = ev_by_h.get(str(h["id"]), [])
+    promos = db.list_shadow_promotion_requests(campaign_id, limit=40)
+    runs = db.list_shadow_runs(campaign_id, limit=12)
+    return {
+        "selected": campaign_id,
+        "shadow_epistemic": ep,
+        "shadow_stance_pretty": stance_pretty,
+        "shadow_policy_pretty": policy_pretty,
+        "shadow_hypotheses": hyps,
+        "shadow_promotions": promos,
+        "shadow_runs": runs,
+        "shadow_flash": shadow_flash,
+        "operator": _operator_runtime_context(),
+        "public_view": False,
+    }
 
 
 def _ticks_view(rows: list[dict]) -> list[dict]:
@@ -382,6 +422,65 @@ async def public_campaign_state_fragment(request: Request, campaign_id: str):
             "public_view": True,
             **_cartography_context(state),
         },
+    )
+
+
+@app.get("/api/campaign/{campaign_id}/shadow/panel", response_class=HTMLResponse)
+async def shadow_panel_fragment(request: Request, campaign_id: str):
+    if not db.campaign_exists(campaign_id):
+        return HTMLResponse("", status_code=404)
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_panel_context(campaign_id),
+    )
+
+
+@app.post("/api/campaign/{campaign_id}/shadow/run", response_class=HTMLResponse)
+async def shadow_run_fragment(request: Request, campaign_id: str):
+    if not db.campaign_exists(campaign_id):
+        return HTMLResponse("", status_code=404)
+    flash = await run_shadow_lab(db, campaign_id, trigger_kind="manual")
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_panel_context(campaign_id, shadow_flash=flash),
+    )
+
+
+@app.post("/api/campaign/{campaign_id}/shadow/promote/{promotion_id}/approve")
+async def shadow_promote_approve(
+    request: Request, campaign_id: str, promotion_id: str
+):
+    if not db.campaign_exists(campaign_id):
+        return HTMLResponse("Unknown campaign", status_code=404)
+    row = db.get_shadow_promotion_request(promotion_id)
+    if not row or row["campaign_id"] != campaign_id:
+        return HTMLResponse("Unknown promotion", status_code=404)
+    ok, msg, _extra = db.apply_shadow_promotion(promotion_id)
+    flash = {"ok": ok, "error": None if ok else msg, "promotion": "approved"}
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_panel_context(campaign_id, shadow_flash=flash),
+    )
+
+
+@app.post("/api/campaign/{campaign_id}/shadow/promote/{promotion_id}/reject")
+async def shadow_promote_reject(
+    request: Request, campaign_id: str, promotion_id: str
+):
+    if not db.campaign_exists(campaign_id):
+        return HTMLResponse("Unknown campaign", status_code=404)
+    row = db.get_shadow_promotion_request(promotion_id)
+    if not row or row["campaign_id"] != campaign_id:
+        return HTMLResponse("Unknown promotion", status_code=404)
+    db.reject_shadow_promotion(promotion_id)
+    flash = {"ok": True, "promotion": "rejected"}
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_panel_context(campaign_id, shadow_flash=flash),
     )
 
 

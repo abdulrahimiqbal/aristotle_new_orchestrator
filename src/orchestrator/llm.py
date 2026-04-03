@@ -84,19 +84,31 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
         raise httpx.HTTPError("LLM request failed after retries")
 
 
-async def _call_llm(system: str, user: str) -> str:
+async def invoke_llm(
+    system: str,
+    user: str,
+    *,
+    model: str | None = None,
+    temperature: float = 0.3,
+    json_object: bool | None = None,
+) -> str:
+    use_json = app_config.LLM_JSON_MODE if json_object is None else json_object
     payload: dict[str, Any] = {
-        "model": app_config.LLM_MODEL,
+        "model": model or app_config.LLM_MODEL,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "temperature": 0.3,
+        "temperature": temperature,
     }
-    if app_config.LLM_JSON_MODE:
+    if use_json:
         payload["response_format"] = {"type": "json_object"}
     data = await _post_chat_completions(payload, timeout=120.0)
     return str(data["choices"][0]["message"]["content"])
+
+
+async def _call_llm(system: str, user: str) -> str:
+    return await invoke_llm(system, user, temperature=0.3)
 
 
 async def decompose_prompt(prompt: str) -> list[Target]:

@@ -215,6 +215,58 @@ class Database:
                 """
             )
             _set_user_version(conn, 6)
+            v = 6
+        if v < 7:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS shadow_epistemic_state (
+                    campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    stance_json TEXT NOT NULL DEFAULT '{}',
+                    policy_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS shadow_hypothesis (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL DEFAULT 'exploration',
+                    title TEXT NOT NULL DEFAULT '',
+                    body_md TEXT NOT NULL DEFAULT '',
+                    lean_snippet TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    parent_hypothesis_id TEXT REFERENCES shadow_hypothesis(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_hyp_campaign ON shadow_hypothesis(campaign_id);
+                CREATE TABLE IF NOT EXISTS shadow_evidence_link (
+                    id TEXT PRIMARY KEY,
+                    hypothesis_id TEXT NOT NULL REFERENCES shadow_hypothesis(id) ON DELETE CASCADE,
+                    experiment_id TEXT REFERENCES experiments(id) ON DELETE SET NULL,
+                    target_id TEXT REFERENCES targets(id) ON DELETE SET NULL,
+                    note TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_ev_hyp ON shadow_evidence_link(hypothesis_id);
+                CREATE TABLE IF NOT EXISTS shadow_run (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    trigger_kind TEXT NOT NULL DEFAULT 'manual',
+                    summary TEXT NOT NULL DEFAULT '',
+                    response_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_run_campaign ON shadow_run(campaign_id);
+                CREATE TABLE IF NOT EXISTS shadow_promotion_request (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_promo_campaign ON shadow_promotion_request(campaign_id);
+                """
+            )
+            _set_user_version(conn, 7)
 
     def create_campaign(
         self,
@@ -1311,3 +1363,303 @@ class Database:
             "experiments_by_status": exp_by_status,
             "experiment_count": len(state.experiments),
         }
+
+    def ensure_shadow_state_row(self, campaign_id: str) -> None:
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT campaign_id FROM shadow_epistemic_state WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            if cur.fetchone() is None:
+                conn.execute(
+                    """
+                    INSERT INTO shadow_epistemic_state (
+                        campaign_id, revision, stance_json, policy_json, updated_at
+                    )
+                    VALUES (?, 0, '{}', '{}', ?)
+                    """,
+                    (campaign_id, now),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+    def get_shadow_epistemic_state(self, campaign_id: str) -> dict[str, Any]:
+        self.ensure_shadow_state_row(campaign_id)
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM shadow_epistemic_state WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def list_shadow_hypotheses(self, campaign_id: str, limit: int = 80) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT * FROM shadow_hypothesis
+                WHERE campaign_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (campaign_id, min(limit, 500)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_shadow_hypothesis_evidence(self, hypothesis_ids: list[str]) -> list[dict[str, Any]]:
+        if not hypothesis_ids:
+            return []
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" * len(hypothesis_ids))
+            cur = conn.execute(
+                f"""
+                SELECT * FROM shadow_evidence_link
+                WHERE hypothesis_id IN ({placeholders})
+                """,
+                hypothesis_ids,
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_shadow_promotion_requests(
+        self, campaign_id: str, *, status: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            lim = min(limit, 200)
+            if status:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM shadow_promotion_request
+                    WHERE campaign_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (campaign_id, status, lim),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM shadow_promotion_request
+                    WHERE campaign_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (campaign_id, lim),
+                )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_shadow_runs(self, campaign_id: str, limit: int = 15) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, campaign_id, trigger_kind, summary, created_at
+                FROM shadow_run
+                WHERE campaign_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (campaign_id, min(limit, 100)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def shadow_commit_run(
+        self,
+        campaign_id: str,
+        *,
+        trigger_kind: str,
+        summary: str,
+        response_obj: dict[str, Any],
+        new_stance_json: str,
+        new_policy_json: str,
+        hypotheses: list[dict[str, Any]],
+        promotions: list[dict[str, Any]],
+    ) -> str:
+        run_id = _new_id()
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            self.ensure_shadow_state_row(campaign_id)
+            cur = conn.execute(
+                "SELECT revision FROM shadow_epistemic_state WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            row = cur.fetchone()
+            rev = int(row["revision"]) + 1 if row else 1
+            conn.execute(
+                """
+                UPDATE shadow_epistemic_state
+                SET revision = ?, stance_json = ?, policy_json = ?, updated_at = ?
+                WHERE campaign_id = ?
+                """,
+                (rev, new_stance_json, new_policy_json, now, campaign_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO shadow_run (
+                    id, campaign_id, trigger_kind, summary, response_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    campaign_id,
+                    trigger_kind[:64],
+                    summary[:8000],
+                    json.dumps(response_obj, ensure_ascii=False),
+                    now,
+                ),
+            )
+            for h in hypotheses:
+                hid = _new_id()
+                conn.execute(
+                    """
+                    INSERT INTO shadow_hypothesis (
+                        id, campaign_id, kind, title, body_md, lean_snippet,
+                        status, parent_hypothesis_id, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        hid,
+                        campaign_id,
+                        str(h.get("kind") or "exploration")[:64],
+                        str(h.get("title") or "")[:500],
+                        str(h.get("body_md") or ""),
+                        str(h.get("lean_snippet") or ""),
+                        str(h.get("status") or "active")[:32],
+                        h.get("parent_hypothesis_id"),
+                        now,
+                    ),
+                )
+                for ev in h.get("evidence") or []:
+                    if not isinstance(ev, dict):
+                        continue
+                    eid = _new_id()
+                    conn.execute(
+                        """
+                        INSERT INTO shadow_evidence_link (
+                            id, hypothesis_id, experiment_id, target_id, note
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            eid,
+                            hid,
+                            ev.get("experiment_id"),
+                            ev.get("target_id"),
+                            str(ev.get("note") or "")[:2000],
+                        ),
+                    )
+            for p in promotions:
+                if not isinstance(p, dict):
+                    continue
+                pid = _new_id()
+                conn.execute(
+                    """
+                    INSERT INTO shadow_promotion_request (
+                        id, campaign_id, status, payload_json, created_at
+                    )
+                    VALUES (?, ?, 'pending', ?, ?)
+                    """,
+                    (pid, campaign_id, json.dumps(p, ensure_ascii=False), now),
+                )
+            conn.commit()
+            return run_id
+        finally:
+            conn.close()
+
+    def get_shadow_promotion_request(self, promotion_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM shadow_promotion_request WHERE id = ?",
+                (promotion_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def set_shadow_promotion_status(
+        self, promotion_id: str, status: str, reviewed_at: str | None = None
+    ) -> None:
+        now = reviewed_at or datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE shadow_promotion_request
+                SET status = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (status[:32], now, promotion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def apply_shadow_promotion(
+        self, promotion_id: str
+    ) -> tuple[bool, str, dict[str, Any]]:
+        row = self.get_shadow_promotion_request(promotion_id)
+        if not row:
+            return False, "unknown promotion", {}
+        if row["status"] != "pending":
+            return False, "not pending", {}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            return False, "invalid payload json", {}
+        cid = row["campaign_id"]
+        kind = str(payload.get("kind") or "").strip().lower()
+        extra: dict[str, Any] = {}
+        if kind == "new_target":
+            desc = str(payload.get("description") or "").strip()
+            if not desc:
+                return False, "missing description", {}
+            ids = self.add_targets(cid, [desc])
+            extra["target_ids"] = ids
+            self.set_shadow_promotion_status(promotion_id, "approved")
+            return True, "target created", extra
+        if kind == "new_experiment":
+            tid = str(payload.get("target_id") or "").strip()
+            objective = str(payload.get("objective") or "").strip()
+            if not tid or not objective:
+                return False, "missing target_id or objective", {}
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "SELECT id FROM targets WHERE id = ? AND campaign_id = ?",
+                    (tid, cid),
+                )
+                if not cur.fetchone():
+                    return False, "target not in campaign", {}
+            finally:
+                conn.close()
+            mk = str(payload.get("move_kind") or "explore")[:64]
+            mn = str(payload.get("move_note") or "shadow promotion")[:2000]
+            eid = self.create_experiment(cid, tid, objective, move_kind=mk, move_note=mn)
+            extra["experiment_id"] = eid
+            self.set_shadow_promotion_status(promotion_id, "approved")
+            return True, "experiment created", extra
+        return False, f"unknown kind {kind!r}", {}
+
+    def reject_shadow_promotion(self, promotion_id: str) -> None:
+        self.set_shadow_promotion_status(promotion_id, "rejected")

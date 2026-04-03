@@ -3,6 +3,13 @@
 {% set resolved_n = progress.target_resolved %}
 {% set pct = progress.progress_percent %}
 
+{% if selected %}
+<div id="campaign-live-refresh"
+     class="max-w-5xl mx-auto"
+     hx-get="{% if public_view %}/api/public/campaign/{{ selected }}/state{% else %}/api/campaign/{{ selected }}/state{% endif %}"
+     hx-trigger="load delay:400ms, every 5s"
+     hx-swap="outerHTML">
+{% endif %}
 <div class="space-y-8">
   <header class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between border-b border-zinc-800/80 pb-6">
     <div class="space-y-2 max-w-3xl">
@@ -284,3 +291,6 @@
     </div>
   </section>
 </div>
+{% if selected %}
+</div>
+{% endif %}

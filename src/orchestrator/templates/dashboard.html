@@ -114,9 +114,26 @@
       {% endif %}
 
       <div class="flex-1 p-6 lg:p-10 overflow-y-auto custom-scroll">
+        {% if selected and not public_view %}
+        <div class="max-w-5xl mx-auto mb-5 flex flex-wrap gap-2">
+          <button type="button"
+                  class="rounded-xl px-4 py-2 text-sm font-semibold transition-all ring-1 bg-violet-500/20 text-violet-200 ring-violet-500/40"
+                  hx-get="/api/campaign/{{ selected }}/state"
+                  hx-target="#campaign-panel"
+                  hx-swap="innerHTML">
+            Live campaign
+          </button>
+          <button type="button"
+                  class="rounded-xl px-4 py-2 text-sm font-semibold transition-all ring-1 bg-zinc-800/80 text-zinc-400 ring-zinc-700/80 hover:text-amber-200 hover:ring-amber-500/30"
+                  hx-get="/api/campaign/{{ selected }}/shadow/panel"
+                  hx-target="#campaign-panel"
+                  hx-swap="innerHTML">
+            Shadow lab
+          </button>
+        </div>
+        {% endif %}
         <div id="campaign-panel"
-             class="max-w-5xl mx-auto"
-             {% if selected %}hx-get="{% if public_view %}/api/public/campaign/{{ selected }}/state{% else %}/api/campaign/{{ selected }}/state{% endif %}" hx-trigger="load delay:400ms, every 5s" hx-swap="innerHTML"{% endif %}>
+             class="max-w-5xl mx-auto">
           {% if state %}
             {% include "campaign_panel.html" %}
           {% elif selected %}
