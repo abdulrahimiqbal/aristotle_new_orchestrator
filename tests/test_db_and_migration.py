@@ -27,6 +27,7 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         ccols = {r[1] for r in cur.fetchall()}
         assert "problem_map_json" in ccols
         assert "problem_refs_json" in ccols
+        assert "research_packet_json" in ccols
         assert "mathlib_knowledge" in ccols
         cur = conn.execute("PRAGMA table_info(experiments)")
         ecols = {r[1] for r in cur.fetchall()}
@@ -50,7 +51,7 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         assert "groundability_tier" in gh_cols
         assert "kill_test" in gh_cols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 9
+        assert int(uv) >= 10
     finally:
         conn.close()
 
@@ -135,3 +136,20 @@ def test_create_campaign_per_workspace_dir(tmp_path: Path) -> None:
     assert cid in state.campaign.workspace_dir
     assert Path(state.campaign.workspace_dir).resolve().parent == root.resolve()
     assert state.campaign.mathlib_knowledge is True
+
+
+def test_campaign_research_packet_roundtrip(tmp_path: Path) -> None:
+    root = tmp_path / "wsroot"
+    db = Database(str(tmp_path / "packet.db"))
+    db.initialize()
+    cid = db.create_campaign(
+        "hello",
+        workspace_root=str(root),
+        workspace_template="minimal",
+        research_packet_json='{"summary":"focus on route A","attack_families":[{"title":"Route A","status":"primary"}]}',
+    )
+    state = db.get_campaign_state(cid)
+    assert "focus on route A" in state.campaign.research_packet_json
+    db.update_campaign_research_packet(cid, "plain text packet")
+    updated = db.get_campaign_state(cid)
+    assert updated.campaign.research_packet_json == '{"summary": "plain text packet"}'

@@ -151,6 +151,93 @@
     </div>
   </section>
 
+  {% if research_packet or not public_view %}
+  <section aria-label="Research packet">
+    <h2 class="font-display text-lg font-semibold text-zinc-200 mb-4 flex items-center gap-2">
+      <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-emerald-500 to-transparent"></span>
+      Research packet
+    </h2>
+    <div class="rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-4 ring-1 ring-black/20 space-y-4">
+      {% if research_packet.summary %}
+      <p class="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{{ research_packet.summary }}</p>
+      {% else %}
+      <p class="text-sm text-zinc-600 italic">No campaign-scoped research packet yet.</p>
+      {% endif %}
+
+      {% if research_packet.current_frontier %}
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-1">Frontier state</p>
+        <ul class="text-xs text-zinc-300 space-y-1">
+          {% for item in research_packet.current_frontier[:8] %}
+          <li class="border-l-2 border-emerald-500/30 pl-2">{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if research_packet_attack_families %}
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Preferred attack families</p>
+        <div class="grid gap-3 sm:grid-cols-2">
+          {% for route in research_packet_attack_families %}
+          <article class="rounded-lg border border-zinc-800/80 bg-black/20 p-3 space-y-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <p class="text-sm font-medium text-zinc-200">{{ route.title }}</p>
+              {% if route.status %}
+              <span class="rounded bg-zinc-800/90 px-1.5 py-0.5 text-[10px] font-mono uppercase text-emerald-300">{{ route.status }}</span>
+              {% endif %}
+            </div>
+            {% if route.fronts %}
+            <p class="text-[10px] font-mono text-zinc-500">fronts · {{ route.fronts | join(', ') }}</p>
+            {% endif %}
+            {% if route.why_now %}
+            <p class="text-xs text-zinc-400 leading-relaxed">{{ route.why_now }}</p>
+            {% endif %}
+            {% if route.lemma_templates %}
+            <ul class="text-[11px] text-zinc-500 space-y-1">
+              {% for item in route.lemma_templates[:3] %}
+              <li class="border-l-2 border-zinc-700 pl-2">{{ item }}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+          </article>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if research_packet.anti_goals %}
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-1">Anti-goals</p>
+        <ul class="text-xs text-zinc-400 space-y-1">
+          {% for item in research_packet.anti_goals[:6] %}
+          <li class="border-l-2 border-red-500/20 pl-2">{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if not public_view %}
+      <details class="text-xs">
+        <summary class="cursor-pointer text-zinc-500 hover:text-zinc-400 select-none">Edit research packet JSON</summary>
+        <form action="/api/campaign/{{ selected }}/research-packet" method="post" class="mt-3 space-y-3">
+          <textarea name="research_packet_json"
+                    rows="20"
+                    spellcheck="false"
+                    class="w-full rounded-lg border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-300 focus:border-emerald-500/50 focus:outline-none">{{ research_packet_json_pretty }}</textarea>
+          <div class="flex items-center justify-between gap-3">
+            <p class="text-[11px] text-zinc-600">Paste JSON for structured routing, or plain text to store it as a summary packet.</p>
+            <button type="submit" class="rounded-lg bg-emerald-600/90 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 ring-1 ring-emerald-400/40 transition-colors">
+              Update research packet
+            </button>
+          </div>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
   <section aria-label="Targets">
     <h2 class="font-display text-lg font-semibold text-zinc-200 mb-4 flex items-center gap-2">
       <span class="h-px flex-1 max-w-12 bg-gradient-to-r from-violet-500 to-transparent"></span>

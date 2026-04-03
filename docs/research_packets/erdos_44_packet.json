@@ -1,0 +1,135 @@
+{
+  "summary": "Solve Erdos 44 by forcing the manager onto the constructive extension bottleneck, not generic Sidon background. The live campaign already verified most scaffolding, proved a strong baseline existence theorem, and falsified overstrong union lemmas. The missing bridge is a constructive extension lemma that lets a given Sidon set A in [1,N] coexist with a dense Sidon set B in (N,M].",
+  "current_frontier": [
+    "Open target 738454173d5e is the density lemma for extending an arbitrary Sidon set A by a dense tail B.",
+    "Open target 5a18873a72ff is the main conjecture and should stay downstream of the density lemma.",
+    "Recent experiments proved density_lemma_greedy modulo the missing helper sidon_extension_exists; that helper is the real gate.",
+    "Recent experiments also refuted overstrong union / cross-sum claims, so future statements must build in the extra compatibility hypotheses those counterexamples exposed."
+  ],
+  "known_true": [
+    "There is already a verified baseline Sidon existence theorem for intervals beyond N; reuse it aggressively.",
+    "Finite sanity checks for small N succeeded and should be used as hypothesis-shaping tools, not as substitutes for the general proof.",
+    "The manager has enough verified insertion / compatibility scaffolding that a correct constructive extension lemma could immediately unlock the main route."
+  ],
+  "known_false": [
+    "Do not assume that disjoint ranges plus naive cross-sum injectivity are enough for the union to stay Sidon; recent campaign counterexamples killed this shape.",
+    "Do not plan around extending every finite Sidon set to a finite perfect difference set; that larger route is false in general."
+  ],
+  "anti_goals": [
+    "Avoid spending the budget on broad generic Sidon surveys that do not feed the constructive extension lemma.",
+    "Avoid monolithic prove-everything objectives for the main conjecture before the extension gate is solved.",
+    "Avoid retrying already-falsified union lemmas unless the hypotheses are materially strengthened and the change is explicit."
+  ],
+  "attack_families": [
+    {
+      "id": "template_transfer",
+      "title": "Template transfer from algebraic dense Sidon constructions",
+      "status": "primary",
+      "fronts": ["738454173d5e", "5a18873a72ff", "sidon_extension_exists"],
+      "why_now": "Dense Sidon constructions from projective-plane / finite-field templates are the strongest positive prior. The goal is not to classify all dense Sidon sets, but to prove that one template can be translated, dilated, sliced, or re-indexed so it avoids the finite obstruction pattern created by A.",
+      "steps": [
+        "Formalize one dense algebraic Sidon family as a reusable template object in Lean.",
+        "State a compatibility lemma showing that only finitely many placements of the template collide with A.",
+        "Push the placement parameter large enough so one good placement survives."
+      ],
+      "lemma_templates": [
+        "For any finite Sidon A in [1,N], there exists a translate / affine image of template T_q whose support lies in (N,M] and whose cross-sums with A are collision-free.",
+        "Any bad placement of T_q is witnessed by a finite collision certificate depending on at most four elements of A and two template points.",
+        "The number of bad placements is o(number of available placements) once q or M is large."
+      ],
+      "experiment_templates": [
+        "Pick one explicit algebraic Sidon family and formalize the exact no-collision criterion against a fixed finite A.",
+        "Count or bound bad shifts / scales for a fixed template against A; prove existence of a good placement once M is large."
+      ],
+      "watchouts": [
+        "Do not leave the template implicit; Aristotle needs a concrete finite family.",
+        "Do not assume interval containment is automatic after translation; prove the support bounds explicitly."
+      ]
+    },
+    {
+      "id": "compatibility_by_counting",
+      "title": "Compatibility by counting bad placements",
+      "status": "primary",
+      "fronts": ["738454173d5e", "sidon_extension_exists"],
+      "why_now": "The obstruction created by A is finite. A solve may come from proving that every collision pattern forbids only a controlled number of candidate placements, so a good placement exists once the ambient window is large enough.",
+      "steps": [
+        "Encode every cross-sum collision as a forbidden relation on placement parameters.",
+        "Bound the total number of forbidden parameters using |A| and the template size.",
+        "Show the admissible parameter set is nonempty for large M."
+      ],
+      "lemma_templates": [
+        "Each collision identity involving A and a candidate tail B excludes at most O(1) placements of the chosen template parameter.",
+        "The total number of excluded placements is O(|A|^2 * |T_q|^2) or better.",
+        "The family of candidate placements has strictly larger cardinality than the excluded set for sufficiently large q."
+      ],
+      "experiment_templates": [
+        "Formalize a bad-placement counting lemma for one explicit Sidon template family.",
+        "Underspecify to a bounded family first: prove the count for a template indexed by q <= Q and inspect the exact obstruction shape."
+      ],
+      "watchouts": [
+        "Keep the counting target sharp enough that it yields an actual existence statement, not just a heuristic density remark."
+      ]
+    },
+    {
+      "id": "repair_by_deletion",
+      "title": "Repair a near-optimal template by deleting collisions",
+      "status": "secondary",
+      "fronts": ["738454173d5e"],
+      "why_now": "If direct compatibility is awkward, start with a dense tail candidate and delete the finite collision set caused by A. The target is to prove the deletion loss is small compared with sqrt(M).",
+      "steps": [
+        "Begin with a dense Sidon set B0 in (N,M].",
+        "Delete points participating in cross-sum collisions with A.",
+        "Bound the number of deleted points and preserve a (1-epsilon) sqrt(M) lower bound."
+      ],
+      "lemma_templates": [
+        "Every collision certificate removes at most C points from B0 under a canonical repair rule.",
+        "The total repair loss is bounded by a lower-order term relative to sqrt(M)."
+      ],
+      "experiment_templates": [
+        "Try a finite-window repair lemma for one concrete construction and compute the exact deletion bound."
+      ],
+      "watchouts": [
+        "Naive deletion can destroy the internal Sidon structure of B0; any repair rule must preserve or restore it explicitly."
+      ]
+    }
+  ],
+  "finite_examples": [
+    "Mine the existing small-N verified examples for worst-case obstruction patterns and use them to refine hypotheses.",
+    "Turn the recent counterexamples to false union lemmas into reusable negative tests for every new compatibility statement."
+  ],
+  "formal_anchors": [
+    "Target 738454173d5e: density lemma frontier.",
+    "Target 5a18873a72ff: main conjecture, keep downstream.",
+    "Experiment 4dcf599b22a2: verified Sidon set existence baseline.",
+    "Experiments a4436b59cbcd and ece693813b17: partial density lemma proofs blocked on sidon_extension_exists.",
+    "Experiments fb123da33262 and 0ae3888025f8: counterexamples to overstrong union statements."
+  ],
+  "references": [
+    {
+      "title": "Erdos Problem 44 page",
+      "url": "https://www.erdosproblems.com/forum/thread/44",
+      "note": "Problem statement and relation to nearby Erdős problems."
+    },
+    {
+      "title": "Eberhard–Manners, The Apparent Structure of Dense Sidon Sets (2023)",
+      "url": "https://www.combinatorics.org/ojs/index.php/eljc/article/view/v30i1p33",
+      "note": "Positive prior that dense Sidon sets arise from projective-plane style constructions."
+    },
+    {
+      "title": "Carter–Hunter–O'Bryant, On the diameter of finite Sidon sets (2025)",
+      "url": "https://doi.org/10.1007/s10474-024-01499-8",
+      "note": "Modern structural bounds on finite Sidon sets."
+    },
+    {
+      "title": "Forey–Fresan–Kowalski, Sidon Sets in Algebraic Geometry (2024)",
+      "url": "https://doi.org/10.1093/imrn/rnad169",
+      "note": "Additional algebraic constructions worth mining for transferable templates."
+    },
+    {
+      "title": "Alexeev–Mixon, Forbidden Sidon subsets of perfect difference sets (2026)",
+      "url": "https://arxiv.org/pdf/2510.19804",
+      "note": "Negative knowledge: do not treat finite perfect difference set extension as the main route."
+    }
+  ],
+  "operator_notes": "Bias the manager toward proving explicit compatibility lemmas for one concrete dense Sidon family at a time. Every experiment should either reduce the constructive extension gap or generate a decisive counterexample that sharpens the exact true statement."
+}

@@ -26,6 +26,7 @@ from orchestrator.problem_map_util import (
     parse_problem_map,
     parse_problem_refs,
 )
+from orchestrator.research_packets import format_research_packet_markdown, parse_research_packet
 
 
 def _strip_json_fence(text: str) -> str:
@@ -227,6 +228,13 @@ def _format_state_for_llm(state: CampaignState) -> str:
         fronts = pmap.get("active_fronts") or []
         if isinstance(fronts, list) and fronts:
             lines.append(f"active_fronts: {', '.join(str(x) for x in fronts[:12])}")
+    else:
+        fronts = []
+    packet = parse_research_packet(state.campaign.research_packet_json)
+    packet_md = format_research_packet_markdown(packet, active_fronts=fronts)
+    if packet_md:
+        lines.append("")
+        lines.append(packet_md)
     if (state.mathlib_broad_markdown or "").strip() or (
         state.mathlib_narrow_markdown or ""
     ).strip():

@@ -24,6 +24,10 @@ from orchestrator.problem_map_util import (
     parse_problem_refs,
     problem_refs_to_json,
 )
+from orchestrator.research_packets import (
+    parse_research_packet,
+    select_attack_families,
+)
 from orchestrator.workspace_migration import migrate_legacy_shared_workspaces
 from orchestrator.workspace_seed import VALID_TEMPLATES, ensure_workspace
 from orchestrator.experiment_dispatch import try_submit_experiment_now
@@ -71,10 +75,18 @@ def _operator_runtime_context() -> dict:
 def _cartography_context(state) -> dict:
     pm = parse_problem_map(state.campaign.problem_map_json)
     refs = parse_problem_refs(state.campaign.problem_refs_json)
+    packet = parse_research_packet(state.campaign.research_packet_json)
     pretty = json.dumps(pm, indent=2, ensure_ascii=False) if pm else "{}"
+    packet_pretty = json.dumps(packet, indent=2, ensure_ascii=False) if packet else "{}"
+    fronts = pm.get("active_fronts") if isinstance(pm, dict) else []
+    if not isinstance(fronts, list):
+        fronts = []
     return {
         "problem_map": pm,
         "problem_refs": refs,
+        "research_packet": packet,
+        "research_packet_attack_families": select_attack_families(packet, fronts, limit=4),
+        "research_packet_json_pretty": packet_pretty,
         "map_progress": map_progress_stats(pm),
         "problem_map_json_pretty": pretty,
     }
@@ -407,6 +419,7 @@ async def start_campaign(
     source_url: str = Form(""),
     formal_lean_path: str = Form(""),
     external_notes: str = Form(""),
+    research_packet_json: str = Form(""),
 ):
     # Checkbox "use Mathlib" takes precedence over optional legacy workspace_template field.
     if use_mathlib is not None and str(use_mathlib).strip().lower() in (
@@ -441,6 +454,7 @@ async def start_campaign(
         workspace_root=app_config.WORKSPACE_ROOT,
         workspace_template=tmpl,
         problem_refs_json=refs_json,
+        research_packet_json=research_packet_json,
         mathlib_knowledge=mk,
     )
     ws_dir = str((Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id))
@@ -465,6 +479,7 @@ class NewCampaignJSON(BaseModel):
     source_url: str = Field(default="")
     formal_lean_path: str = Field(default="")
     notes: str = Field(default="")
+    research_packet_json: str = Field(default="")
 
 
 @app.post("/api/campaign/start")
@@ -490,6 +505,7 @@ async def start_campaign_json(body: NewCampaignJSON):
         workspace_root=app_config.WORKSPACE_ROOT,
         workspace_template=tmpl,
         problem_refs_json=refs_json,
+        research_packet_json=body.research_packet_json,
         mathlib_knowledge=body.use_mathlib_knowledge,
     )
     ws_dir = str((Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id))
@@ -508,6 +524,11 @@ async def start_campaign_json(body: NewCampaignJSON):
     )
 
 
+class ResearchPacketUpdateJSON(BaseModel):
+    research_packet_json: str = Field(default="")
+    research_packet: dict[str, Any] | None = None
+
+
 @app.get("/api/campaign/{campaign_id}/ledger")
 async def campaign_ledger_json(campaign_id: str, limit: int = 200):
     """Read-only lemma / obligation ledger rows for dashboards or tooling."""
@@ -515,6 +536,33 @@ async def campaign_ledger_json(campaign_id: str, limit: int = 200):
         return JSONResponse({"error": "unknown campaign"}, status_code=404)
     rows = db.get_recent_ledger_entries(campaign_id, min(limit, 2000))
     return {"campaign_id": campaign_id, "entries": rows}
+
+
+@app.post("/api/campaign/{campaign_id}/research-packet")
+async def update_campaign_research_packet(request: Request, campaign_id: str):
+    if not db.campaign_exists(campaign_id):
+        return JSONResponse({"error": "unknown campaign"}, status_code=404)
+
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            raw_body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "invalid json"}, status_code=400)
+        if not isinstance(raw_body, dict):
+            return JSONResponse({"error": "expected object body"}, status_code=400)
+        body = ResearchPacketUpdateJSON.model_validate(raw_body)
+        raw = body.research_packet_json
+        if body.research_packet is not None:
+            raw = json.dumps(body.research_packet, ensure_ascii=False)
+        db.update_campaign_research_packet(campaign_id, raw)
+        packet = parse_research_packet(db.get_campaign_state(campaign_id).campaign.research_packet_json)
+        return {"campaign_id": campaign_id, "research_packet": packet}
+
+    form = await request.form()
+    raw = str(form.get("research_packet_json") or "")
+    db.update_campaign_research_packet(campaign_id, raw)
+    return RedirectResponse(f"/campaign/{campaign_id}", status_code=303)
 
 
 @app.get("/api/campaign/{campaign_id}/state", response_class=HTMLResponse)

@@ -23,6 +23,7 @@ from orchestrator.problem_map_util import (
     parse_problem_map,
     seed_problem_map_json,
 )
+from orchestrator.research_packets import research_packet_json_from_input
 
 
 def _new_id() -> str:
@@ -336,6 +337,13 @@ class Database:
                     "ALTER TABLE shadow_global_hypothesis ADD COLUMN kill_test TEXT NOT NULL DEFAULT ''"
                 )
             _set_user_version(conn, 9)
+            v = 9
+        if v < 10:
+            if not _column_exists(conn, "campaigns", "research_packet_json"):
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN research_packet_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            _set_user_version(conn, 10)
 
     def create_campaign(
         self,
@@ -345,6 +353,7 @@ class Database:
         workspace_template: str = "minimal",
         problem_refs_json: str = "{}",
         problem_map_json: str | None = None,
+        research_packet_json: str = "{}",
         mathlib_knowledge: bool = False,
     ) -> str:
         cid = _new_id()
@@ -358,15 +367,16 @@ class Database:
             else seed_problem_map_json(prompt)
         )
         prefs = problem_refs_json if problem_refs_json.strip() else "{}"
+        packet = research_packet_json_from_input(research_packet_json)
         conn = self._connect()
         try:
             conn.execute(
                 """
                 INSERT INTO campaigns (
                   id, prompt, status, workspace_dir, workspace_template,
-                  problem_map_json, problem_refs_json, mathlib_knowledge, created_at
+                  problem_map_json, problem_refs_json, research_packet_json, mathlib_knowledge, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cid,
@@ -376,6 +386,7 @@ class Database:
                     tmpl,
                     pmap,
                     prefs,
+                    packet,
                     mk,
                     now,
                 ),
@@ -457,6 +468,17 @@ class Database:
         finally:
             conn.close()
 
+    def update_campaign_research_packet(self, campaign_id: str, research_packet_json: str) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE campaigns SET research_packet_json = ? WHERE id = ?",
+                (research_packet_json_from_input(research_packet_json), campaign_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def add_targets(self, campaign_id: str, descriptions: list[str]) -> list[str]:
         ids: list[str] = []
         now = datetime.utcnow().isoformat()
@@ -479,6 +501,9 @@ class Database:
         tmpl = row["workspace_template"] if "workspace_template" in keys else "minimal"
         pmap = str(row["problem_map_json"] or "{}") if "problem_map_json" in keys else "{}"
         prefs = str(row["problem_refs_json"] or "{}") if "problem_refs_json" in keys else "{}"
+        packet = (
+            str(row["research_packet_json"] or "{}") if "research_packet_json" in keys else "{}"
+        )
         mk_raw = row["mathlib_knowledge"] if "mathlib_knowledge" in keys else 0
         try:
             mk_bool = bool(int(mk_raw)) if mk_raw is not None else False
@@ -493,6 +518,7 @@ class Database:
             created_at=_parse_dt(row["created_at"]) or datetime.utcnow(),
             problem_map_json=pmap,
             problem_refs_json=prefs,
+            research_packet_json=packet,
             mathlib_knowledge=mk_bool,
         )
 

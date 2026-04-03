@@ -52,6 +52,7 @@ class Campaign(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     problem_map_json: str = "{}"
     problem_refs_json: str = "{}"
+    research_packet_json: str = "{}"
     # Per-campaign: LeanSearch hints for the manager (requires MATHLIB_KNOWLEDGE_MODE=leansearch on server).
     mathlib_knowledge: bool = False
 
