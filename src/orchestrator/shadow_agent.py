@@ -55,6 +55,52 @@ def _counter_suffix(value: Any) -> str:
     return raw[:80] or "unknown"
 
 
+def _shadow_json_retry_user_message(user: str) -> str:
+    return (
+        user
+        + "\n\nIMPORTANT: Return only one valid JSON object."
+        + " No markdown fences, no commentary, no duplicated keys."
+        + " Keep string fields concise so the response stays compact."
+    )
+
+
+async def _invoke_shadow_json(
+    *,
+    system: str,
+    user: str,
+    model: str,
+    temperature: float,
+    log_name: str,
+) -> tuple[dict[str, Any], str, int]:
+    raw = await invoke_llm(
+        system,
+        user,
+        model=model,
+        temperature=temperature,
+        json_object=True,
+    )
+    data = _safe_json_loads(raw)
+    if data:
+        return data, raw, 0
+
+    logger.warning("%s_invalid_json attempt=1 preview=%s", log_name, _clip_text(raw, 400))
+    retry_temp = min(0.2, temperature)
+    retry_raw = await invoke_llm(
+        system,
+        _shadow_json_retry_user_message(user),
+        model=model,
+        temperature=retry_temp,
+        json_object=True,
+    )
+    retry_data = _safe_json_loads(retry_raw)
+    if retry_data:
+        logger.info("%s_json_retry_recovered retry_temperature=%s", log_name, retry_temp)
+        return retry_data, retry_raw, 1
+
+    logger.warning("%s_invalid_json attempt=2 preview=%s", log_name, _clip_text(retry_raw, 400))
+    return {}, retry_raw, 1
+
+
 def _clip_text(v: Any, n: int) -> str:
     return str(v or "")[:n]
 
@@ -497,18 +543,17 @@ async def run_shadow_lab(
     temp = float(app_config.SHADOW_LLM_TEMPERATURE)
 
     try:
-        raw = await invoke_llm(
-            SHADOW_SYSTEM,
-            user,
+        data, raw, json_retry_count = await _invoke_shadow_json(
+            system=SHADOW_SYSTEM,
+            user=user,
             model=model,
             temperature=temp,
-            json_object=True,
+            log_name="shadow",
         )
     except Exception:
         logger.exception("Shadow LLM call failed")
         return {"ok": False, "error": "llm_request_failed"}
 
-    data = _safe_json_loads(raw)
     if not data:
         logger.warning(
             "shadow_invalid_json campaign_id=%s trigger=%s preview=%s",
@@ -516,7 +561,12 @@ async def run_shadow_lab(
             trigger_kind,
             _clip_text(raw, 400),
         )
-        return {"ok": False, "error": "invalid_json", "raw_preview": raw[:2000]}
+        return {
+            "ok": False,
+            "error": "invalid_json",
+            "raw_preview": raw[:2000],
+            "json_retry_count": json_retry_count,
+        }
 
     ep = db.get_shadow_epistemic_state(campaign_id)
     try:
@@ -574,6 +624,7 @@ async def run_shadow_lab(
         "hypothesis_count": len(hypotheses),
         "promotion_count": len(promotions),
         "summary": run_summary,
+        "json_retry_count": json_retry_count,
     }
 
 
@@ -604,25 +655,29 @@ async def run_shadow_global_lab(
         }
 
         try:
-            raw = await invoke_llm(
-                SHADOW_GLOBAL_SYSTEM,
-                user,
+            data, raw, json_retry_count = await _invoke_shadow_json(
+                system=SHADOW_GLOBAL_SYSTEM,
+                user=user,
                 model=model,
                 temperature=temp,
-                json_object=True,
+                log_name="shadow_global",
             )
         except Exception:
             logger.exception("Global shadow LLM call failed")
             return {"ok": False, "error": "llm_request_failed"}
 
-        data = _safe_json_loads(raw)
         if not data:
             logger.warning(
                 "shadow_global_invalid_json trigger=%s preview=%s",
                 trigger_kind,
                 _clip_text(raw, 400),
             )
-            return {"ok": False, "error": "invalid_json", "raw_preview": raw[:2000]}
+            return {
+                "ok": False,
+                "error": "invalid_json",
+                "raw_preview": raw[:2000],
+                "json_retry_count": json_retry_count,
+            }
         normalized, validation_warnings = _normalize_global_response(data, db)
 
         ep = db.get_shadow_global_state(SHADOW_GLOBAL_GOAL_ID)
@@ -656,6 +711,7 @@ async def run_shadow_global_lab(
                 **request_meta,
                 "validation_warnings": validation_warnings,
                 "raw_preview": _clip_text(raw, 4000),
+                "json_retry_count": json_retry_count,
             },
         }
         try:
@@ -681,6 +737,7 @@ async def run_shadow_global_lab(
             "promotion_count": len(promotions),
             "summary": run_summary,
             "validation_warnings": validation_warnings,
+            "json_retry_count": json_retry_count,
         }
     finally:
         _GLOBAL_SHADOW_RUN_LOCK = False
@@ -705,6 +762,8 @@ async def shadow_global_loop(db: Database) -> None:
                 )
                 if res.get("ok"):
                     db.increment_ops_counter("shadow_global:auto_run_ok", 1)
+                    if int(res.get("json_retry_count") or 0) > 0:
+                        db.increment_ops_counter("shadow_global:auto_run_json_retry_recovered", 1)
                 else:
                     db.increment_ops_counter("shadow_global:auto_run_fail", 1)
                     err = _counter_suffix(res.get("error"))
