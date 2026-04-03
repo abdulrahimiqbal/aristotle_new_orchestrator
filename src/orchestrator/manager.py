@@ -45,6 +45,14 @@ from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 logger = logging.getLogger("orchestrator.manager")
 
 
+def _completion_wait_note(inflight: int) -> str:
+    return (
+        f"[Orchestrator: campaign completion deferred while {inflight} Aristotle job(s) "
+        "are submitted/running — keep polling for final signal. "
+        "Set ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS=1 to allow early close.]"
+    )
+
+
 def _campaign_mathlib_knowledge_enabled(campaign: dict) -> bool:
     """LeanSearch hints: server allows + per-campaign opt-in."""
     if app_config.MATHLIB_KNOWLEDGE_MODE != "leansearch":
@@ -343,6 +351,27 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 campaign_id,
                 MAX_EXPERIMENTS,
             )
+            if (
+                active_count > 0
+                and not app_config.ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS
+            ):
+                db.increment_ops_counter("manager:defer_complete_max_experiments_inflight", 1)
+                halt_actions = {
+                    "halt": "max_experiments_waiting_for_inflight",
+                    "inflight_experiments": active_count,
+                }
+                if pending_submitted_ids:
+                    halt_actions["pending_experiments_submitted"] = pending_submitted_ids
+                db.record_tick(
+                    campaign_id,
+                    tick_number,
+                    reasoning=(
+                        f"Stopped: reached MAX_EXPERIMENTS ({MAX_EXPERIMENTS}) but waiting for "
+                        f"{active_count} in-flight Aristotle job(s) before completing campaign."
+                    ),
+                    actions=halt_actions,
+                )
+                return
             db.complete_campaign(campaign_id)
             halt_actions: dict[str, Any] = {"halt": "max_experiments"}
             if pending_submitted_ids:
@@ -431,7 +460,6 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
         if (
             decision.campaign_complete
             and not app_config.ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS
-            and not all_targets_done
         ):
             state_q = db.get_campaign_state(campaign_id)
             inflight = sum(
@@ -440,11 +468,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 if e.status in (ExperimentStatus.SUBMITTED, ExperimentStatus.RUNNING)
             )
             if inflight > 0:
-                note = (
-                    f"[Orchestrator: campaign_complete ignored while {inflight} Aristotle job(s) "
-                    "are submitted/running — keep polling for discovery signal. "
-                    "Set ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS=1 to allow early close.]"
-                )
+                note = _completion_wait_note(inflight)
                 decision = decision.model_copy(
                     update={
                         "campaign_complete": False,
@@ -516,8 +540,20 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                     fc = failure_class_from_message(error)
                     db.increment_ops_counter(f"aristotle:submit:{fc}", 1)
 
-        if decision.campaign_complete or db.all_targets_resolved(campaign_id):
-            db.complete_campaign(campaign_id)
+        completion_requested = decision.campaign_complete or db.all_targets_resolved(campaign_id)
+        completion_deferred_reason = ""
+        if completion_requested:
+            state_q = db.get_campaign_state(campaign_id)
+            inflight = sum(
+                1
+                for e in state_q.experiments
+                if e.status in (ExperimentStatus.SUBMITTED, ExperimentStatus.RUNNING)
+            )
+            if inflight > 0 and not app_config.ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS:
+                completion_deferred_reason = _completion_wait_note(inflight)
+                db.increment_ops_counter("manager:defer_complete_inflight", 1)
+            else:
+                db.complete_campaign(campaign_id)
 
         tick_actions: dict[str, Any] = {
             "target_updates": [
@@ -530,6 +566,9 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
             "campaign_complete_reason": decision.campaign_complete_reason,
             "problem_map_refreshed": map_refreshed,
         }
+        if completion_deferred_reason:
+            tick_actions["campaign_completion_deferred"] = True
+            tick_actions["campaign_completion_deferred_reason"] = completion_deferred_reason
         if pending_submitted_ids:
             tick_actions["pending_experiments_submitted"] = pending_submitted_ids
         db.record_tick(
