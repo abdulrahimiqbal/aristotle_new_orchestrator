@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -35,6 +37,8 @@ STRUCTURED_JSON_NAMES = frozenset(
 
 # Embedded in synthesized JSON so parse_result_json sets parse_source=markdown_derived.
 RESULT_ORIGIN_ORCHESTRATOR_MARKDOWN_V1 = "orchestrator_markdown_v1"
+_SUBMIT_EXCLUDE_PREFIXES = ("aristotle_result_",)
+_SUBMIT_EXCLUDE_NAMES = frozenset({"__pycache__", ".pytest_cache"})
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,42 @@ def classify_failure(stdout: str, stderr: str) -> tuple[str, str]:
         return "api_error", "Aristotle returned an error"
 
     return "unknown", "Non-zero exit code from Aristotle CLI"
+
+
+def _clip_command_output(stdout: str, stderr: str, limit: int = 500) -> str:
+    chunks = []
+    for raw in (stderr, stdout):
+        text = " ".join((raw or "").split()).strip()
+        if text:
+            chunks.append(text)
+    merged = " | ".join(chunks)
+    if len(merged) > limit:
+        return merged[: limit - 1] + "…"
+    return merged
+
+
+def _ignore_submit_artifacts(_src: str, names: list[str]) -> set[str]:
+    ignored: set[str] = set()
+    for name in names:
+        if name in _SUBMIT_EXCLUDE_NAMES:
+            ignored.add(name)
+            continue
+        if any(name.startswith(prefix) for prefix in _SUBMIT_EXCLUDE_PREFIXES):
+            ignored.add(name)
+    return ignored
+
+
+def _stage_project_dir_for_submit(project_dir: str) -> tempfile.TemporaryDirectory[str]:
+    src = Path(project_dir).resolve()
+    tmp = tempfile.TemporaryDirectory(prefix=f"aristotle-submit-{src.name}-")
+    dst = Path(tmp.name) / src.name
+    shutil.copytree(
+        src,
+        dst,
+        ignore=_ignore_submit_artifacts,
+        symlinks=False,
+    )
+    return tmp
 
 
 def _age_seconds(submitted_at: str) -> float | None:
@@ -297,31 +337,45 @@ async def submit(objective: str, project_dir: str) -> tuple[str, str]:
         return "", "ARISTOTLE_API_KEY not set"
 
     project_dir = str(Path(project_dir).resolve())
-    command = ["aristotle", "submit", objective, "--project-dir", project_dir]
+    try:
+        staging = _stage_project_dir_for_submit(project_dir)
+    except (OSError, shutil.Error) as e:
+        return "", f"Failed to prepare clean submit workspace: {e!s}"
+    staged_project_dir = str((Path(staging.name) / Path(project_dir).name).resolve())
+    command = ["aristotle", "submit", objective, "--project-dir", staged_project_dir]
 
     try:
-        completed = subprocess.run(
-            command,
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=SUBPROCESS_TIMEOUT,
-        )
-    except FileNotFoundError:
-        return "", "aristotle CLI not found on PATH"
-    except subprocess.TimeoutExpired:
-        return "", "submission timed out"
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=staged_project_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=SUBPROCESS_TIMEOUT,
+            )
+        except FileNotFoundError:
+            return "", "aristotle CLI not found on PATH"
+        except subprocess.TimeoutExpired:
+            return "", "submission timed out"
 
-    if completed.returncode != 0:
-        error_type, error_msg = classify_failure(completed.stdout, completed.stderr)
-        return "", f"[{error_type}] {error_msg}"
+        if completed.returncode != 0:
+            error_type, error_msg = classify_failure(completed.stdout, completed.stderr)
+            detail = _clip_command_output(completed.stdout, completed.stderr)
+            if detail:
+                return "", f"[{error_type}] {error_msg}: {detail}"
+            return "", f"[{error_type}] {error_msg}"
 
-    match = PROJECT_ID_PATTERN.search(completed.stdout + "\n" + completed.stderr)
-    if not match:
-        return "", "No job UUID found in Aristotle output"
+        match = PROJECT_ID_PATTERN.search(completed.stdout + "\n" + completed.stderr)
+        if not match:
+            detail = _clip_command_output(completed.stdout, completed.stderr)
+            if detail:
+                return "", f"No job UUID found in Aristotle output: {detail}"
+            return "", "No job UUID found in Aristotle output"
 
-    return match.group(1), ""
+        return match.group(1), ""
+    finally:
+        staging.cleanup()
 
 
 async def poll(

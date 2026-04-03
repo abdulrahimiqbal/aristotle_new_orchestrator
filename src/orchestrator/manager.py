@@ -31,6 +31,7 @@ from orchestrator.manager_policy import (
     apply_map_proved_gate,
     ensure_move_kind_diversity,
     merge_skeptic_experiments,
+    resolve_planned_target_id,
 )
 from orchestrator.mathlib_knowledge import (
     fetch_broad_reconnaissance,
@@ -476,8 +477,21 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 state,
                 parse_problem_map(state.campaign.problem_map_json),
             )
-            for new_exp in planned_experiments[: max(0, slots_available)]:
-                if new_exp.target_id not in valid_target_ids:
+            for idx, new_exp in enumerate(planned_experiments[: max(0, slots_available)]):
+                resolved_target_id, alias_source = resolve_planned_target_id(
+                    new_exp.target_id,
+                    valid_target_ids,
+                )
+                if alias_source:
+                    logger.warning(
+                        "Rewriting experiment target_id %s -> %s",
+                        alias_source,
+                        resolved_target_id,
+                    )
+                    db.increment_ops_counter("manager:rewrite_target_alias", 1)
+                    new_exp = new_exp.model_copy(update={"target_id": resolved_target_id})
+                    planned_experiments[idx] = new_exp
+                if not resolved_target_id:
                     logger.warning(
                         "Skipping experiment: unknown target_id %s",
                         new_exp.target_id,

@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestrator import config as app_config
-from orchestrator.manager_policy import apply_map_proved_gate, ensure_move_kind_diversity
+from orchestrator.manager_policy import (
+    apply_map_proved_gate,
+    ensure_move_kind_diversity,
+    resolve_planned_target_id,
+)
 from orchestrator.models import (
     Campaign,
     CampaignState,
@@ -97,3 +101,21 @@ def test_ensure_move_kind_diversity_adds_explore(
     assert len(out) == 2
     assert out[1].move_kind == "explore"
     assert "manager_policy" in out[1].move_note
+
+
+def test_resolve_planned_target_id_rewrites_known_suffix() -> None:
+    resolved, alias = resolve_planned_target_id(
+        "6a0606fbea87_general",
+        {"6a0606fbea87", "4cccac8f7d02"},
+    )
+    assert resolved == "6a0606fbea87"
+    assert alias == "6a0606fbea87_general"
+
+
+def test_resolve_planned_target_id_rejects_unknown_target() -> None:
+    resolved, alias = resolve_planned_target_id(
+        "unknown_general",
+        {"6a0606fbea87", "4cccac8f7d02"},
+    )
+    assert resolved is None
+    assert alias is None

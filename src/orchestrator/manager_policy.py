@@ -84,6 +84,26 @@ def ensure_move_kind_diversity(
     return out
 
 
+def resolve_planned_target_id(
+    target_id: str, valid_target_ids: set[str]
+) -> tuple[str | None, str | None]:
+    """Resolve minor LLM target-id drift back to a real target id when safe.
+
+    Returns (resolved_target_id, alias_source). alias_source is the original id when
+    we successfully rewrote it, otherwise None.
+    """
+    candidate = str(target_id or "").strip()
+    if not candidate:
+        return None, None
+    if candidate in valid_target_ids:
+        return candidate, None
+    if "_" in candidate:
+        base = candidate.split("_", 1)[0].strip()
+        if base in valid_target_ids:
+            return base, candidate
+    return None, None
+
+
 def apply_map_proved_gate(map_json: str, *, campaign_id: str, db: Database) -> str:
     """Downgrade proved → active for gated node kinds unless operator acked (see /admin/map-node-ack)."""
     kinds = app_config.MAP_PROVED_GATE_KINDS

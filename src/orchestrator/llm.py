@@ -258,6 +258,9 @@ def _format_state_for_llm(state: CampaignState) -> str:
     )
     lines.append("")
     lines.append("## Targets")
+    lines.append(
+        "Use target ids exactly as written below. Do not invent new ids or append suffixes."
+    )
     for t in state.targets:
         lines.append(f"- id={t.id} status={t.status.value}")
         lines.append(f"  description: {t.description}")
@@ -446,6 +449,7 @@ async def reason(state: CampaignState) -> ManagerDecision:
 - Only set campaign_complete when stopping is justified: all targets resolved, or empty queue plus sustained lack of actionable progress with reasons stated.
 
 move_kind must be one of: prove, underspecify, perturb, promote, reformulate, center, refute, explore.
+Every new_experiments.target_id must exactly match one target id from the state. Do not add suffixes like _general or _extended.
 
 Return JSON:
 {
