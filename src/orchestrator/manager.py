@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
+from typing import Any
 
 from orchestrator.aristotle import (
     parse_experiment_result,
@@ -12,6 +12,7 @@ from orchestrator.aristotle import (
     submit,
     with_synthesized_json_if_needed,
 )
+from orchestrator.experiment_dispatch import failure_class_from_message
 from orchestrator.config import (
     LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK,
     MAP_REFRESH_MAX_INTERVAL_TICKS,
@@ -42,8 +43,6 @@ from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 
 logger = logging.getLogger("orchestrator.manager")
 
-_FAILURE_BRACKET = re.compile(r"^\[([^\]]+)\]")
-
 
 def _campaign_mathlib_knowledge_enabled(campaign: dict) -> bool:
     """LeanSearch hints: server allows + per-campaign opt-in."""
@@ -58,16 +57,6 @@ def _campaign_mathlib_knowledge_enabled(campaign: dict) -> bool:
         return int(v) != 0
     except (TypeError, ValueError):
         return False
-
-
-def _failure_class_from_message(msg: str) -> str:
-    m = _FAILURE_BRACKET.match((msg or "").strip())
-    if m:
-        return m.group(1)
-    low = (msg or "").lower()
-    if "not set" in low:
-        return "config_error"
-    return "unknown"
 
 
 def _ledger_rows_from_parsed(parsed: AristotleParsedResult) -> list[tuple[str, str, str]]:
@@ -102,6 +91,39 @@ async def manager_loop(db: Database) -> None:
         await asyncio.sleep(TICK_INTERVAL)
 
 
+async def _submit_pending_experiments_for_campaign(
+    db: Database,
+    campaign: dict,
+    state,
+    active_count: int,
+) -> list[str]:
+    """Submit pending experiments (no job id), e.g. from shadow promotions, up to active-cap slots."""
+    if not app_config.MANAGER_SUBMIT_PENDING_EXPERIMENTS:
+        return []
+    slots = MAX_ACTIVE_EXPERIMENTS - active_count
+    if slots <= 0:
+        return []
+    ws = str(campaign.get("workspace_dir") or "")
+    submitted: list[str] = []
+    for exp in state.experiments:
+        if exp.status != ExperimentStatus.PENDING:
+            continue
+        if exp.aristotle_job_id:
+            continue
+        if len(submitted) >= slots:
+            break
+        job_id, error = await submit(exp.objective, ws)
+        if job_id:
+            db.update_experiment_submitted(exp.id, job_id)
+            submitted.append(str(exp.id))
+            db.increment_ops_counter("manager:pending_aristotle_submit_ok", 1)
+        else:
+            db.update_experiment_failed(exp.id, error)
+            fc = failure_class_from_message(error)
+            db.increment_ops_counter(f"aristotle:submit:{fc}", 1)
+    return submitted
+
+
 async def tick(db: Database, campaign: dict, tick_number: int) -> None:
     """One tick of the manager loop for a single campaign."""
     campaign_id = campaign["id"]
@@ -110,6 +132,7 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
     evidence_delta = False
     finished_snapshots: list[dict[str, str]] = []
     map_refreshed = False
+    pending_submitted_ids: list[str] = []
     try:
         db.ensure_problem_map_initialized(campaign_id, campaign.get("prompt") or "")
 
@@ -302,6 +325,17 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
             if e.status in {ExperimentStatus.SUBMITTED, ExperimentStatus.RUNNING}
         )
 
+        pending_submitted_ids = await _submit_pending_experiments_for_campaign(
+            db, campaign, state, active_count
+        )
+        if pending_submitted_ids:
+            state = db.get_campaign_state(campaign_id)
+            active_count = sum(
+                1
+                for e in state.experiments
+                if e.status in {ExperimentStatus.SUBMITTED, ExperimentStatus.RUNNING}
+            )
+
         if total_experiments >= MAX_EXPERIMENTS:
             logger.info(
                 "Campaign %s hit max experiments (%s)",
@@ -309,11 +343,14 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                 MAX_EXPERIMENTS,
             )
             db.complete_campaign(campaign_id)
+            halt_actions: dict[str, Any] = {"halt": "max_experiments"}
+            if pending_submitted_ids:
+                halt_actions["pending_experiments_submitted"] = pending_submitted_ids
             db.record_tick(
                 campaign_id,
                 tick_number,
                 reasoning=f"Stopped: reached MAX_EXPERIMENTS ({MAX_EXPERIMENTS}).",
-                actions={"halt": "max_experiments"},
+                actions=halt_actions,
             )
             return
 
@@ -462,27 +499,30 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                     db.update_experiment_submitted(exp_id, job_id)
                 else:
                     db.update_experiment_failed(exp_id, error)
-                    fc = _failure_class_from_message(error)
+                    fc = failure_class_from_message(error)
                     db.increment_ops_counter(f"aristotle:submit:{fc}", 1)
 
         if decision.campaign_complete or db.all_targets_resolved(campaign_id):
             db.complete_campaign(campaign_id)
 
+        tick_actions: dict[str, Any] = {
+            "target_updates": [
+                u.model_dump(mode="json") for u in decision.target_updates
+            ],
+            "new_experiments": [
+                e.model_dump(mode="json") for e in planned_experiments
+            ],
+            "campaign_complete": decision.campaign_complete,
+            "campaign_complete_reason": decision.campaign_complete_reason,
+            "problem_map_refreshed": map_refreshed,
+        }
+        if pending_submitted_ids:
+            tick_actions["pending_experiments_submitted"] = pending_submitted_ids
         db.record_tick(
             campaign_id,
             tick_number,
             reasoning=decision.reasoning,
-            actions={
-                "target_updates": [
-                    u.model_dump(mode="json") for u in decision.target_updates
-                ],
-                "new_experiments": [
-                    e.model_dump(mode="json") for e in planned_experiments
-                ],
-                "campaign_complete": decision.campaign_complete,
-                "campaign_complete_reason": decision.campaign_complete_reason,
-                "problem_map_refreshed": map_refreshed,
-            },
+            actions=tick_actions,
         )
         db.clear_tick_diagnostic(campaign_id)
     except asyncio.CancelledError:

@@ -137,3 +137,19 @@ MATHLIB_CONTEXT_MAX_CHARS = _int_env("MATHLIB_CONTEXT_MAX_CHARS", 8000)
 # Uses same API key as main LLM unless you override model/temperature.
 SHADOW_LLM_MODEL = os.environ.get("SHADOW_LLM_MODEL", "").strip() or None  # None → LLM_MODEL
 SHADOW_LLM_TEMPERATURE = _float_env("SHADOW_LLM_TEMPERATURE", 0.85)
+SHADOW_GLOBAL_GOAL = os.environ.get(
+    "SHADOW_GLOBAL_GOAL",
+    "Prove the Collatz conjecture in a way that can eventually be grounded in Lean 4.",
+).strip()
+
+# Pending experiments (e.g. created by shadow promotion approve) are submitted on each manager tick.
+MANAGER_SUBMIT_PENDING_EXPERIMENTS = _bool_env("MANAGER_SUBMIT_PENDING_EXPERIMENTS", True)
+# After approving a shadow promotion that creates an experiment, call Aristotle submit immediately
+# (in addition to manager pending drain). Set false to rely only on the manager tick.
+SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE = _bool_env("SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE", True)
+
+# Run global shadow manager automatically in background.
+SHADOW_GLOBAL_AUTO_ENABLED = _bool_env("SHADOW_GLOBAL_AUTO_ENABLED", True)
+SHADOW_GLOBAL_TICK_INTERVAL_SEC = _int_env("SHADOW_GLOBAL_TICK_INTERVAL_SEC", 180)
+# Safety brake: if pending global promotions exceed this, skip auto runs to avoid unbounded queue growth.
+SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS = _int_env("SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS", 200)

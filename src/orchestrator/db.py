@@ -267,6 +267,75 @@ class Database:
                 """
             )
             _set_user_version(conn, 7)
+            v = 7
+        if v < 8:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS shadow_global_state (
+                    goal_id TEXT PRIMARY KEY,
+                    goal_text TEXT NOT NULL DEFAULT '',
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    stance_json TEXT NOT NULL DEFAULT '{}',
+                    policy_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS shadow_global_hypothesis (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'exploration',
+                    title TEXT NOT NULL DEFAULT '',
+                    body_md TEXT NOT NULL DEFAULT '',
+                    lean_snippet TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    parent_hypothesis_id TEXT REFERENCES shadow_global_hypothesis(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_global_hyp_goal ON shadow_global_hypothesis(goal_id);
+                CREATE TABLE IF NOT EXISTS shadow_global_evidence_link (
+                    id TEXT PRIMARY KEY,
+                    hypothesis_id TEXT NOT NULL REFERENCES shadow_global_hypothesis(id) ON DELETE CASCADE,
+                    campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL,
+                    experiment_id TEXT REFERENCES experiments(id) ON DELETE SET NULL,
+                    target_id TEXT REFERENCES targets(id) ON DELETE SET NULL,
+                    note TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_global_ev_hyp ON shadow_global_evidence_link(hypothesis_id);
+                CREATE TABLE IF NOT EXISTS shadow_global_run (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    trigger_kind TEXT NOT NULL DEFAULT 'manual',
+                    summary TEXT NOT NULL DEFAULT '',
+                    response_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_global_run_goal ON shadow_global_run(goal_id);
+                CREATE TABLE IF NOT EXISTS shadow_global_promotion_request (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_shadow_global_promo_goal ON shadow_global_promotion_request(goal_id);
+                """
+            )
+            _set_user_version(conn, 8)
+            v = 8
+        if v < 9:
+            if not _column_exists(conn, "shadow_global_hypothesis", "score_0_100"):
+                conn.execute(
+                    "ALTER TABLE shadow_global_hypothesis ADD COLUMN score_0_100 INTEGER NOT NULL DEFAULT 0"
+                )
+            if not _column_exists(conn, "shadow_global_hypothesis", "groundability_tier"):
+                conn.execute(
+                    "ALTER TABLE shadow_global_hypothesis ADD COLUMN groundability_tier TEXT NOT NULL DEFAULT ''"
+                )
+            if not _column_exists(conn, "shadow_global_hypothesis", "kill_test"):
+                conn.execute(
+                    "ALTER TABLE shadow_global_hypothesis ADD COLUMN kill_test TEXT NOT NULL DEFAULT ''"
+                )
+            _set_user_version(conn, 9)
 
     def create_campaign(
         self,
@@ -705,6 +774,25 @@ class Database:
         finally:
             conn.close()
         return eid
+
+    def get_experiment_for_submit(self, experiment_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT e.id, e.campaign_id, e.target_id, e.objective, e.status,
+                       e.aristotle_job_id, e.move_kind, e.move_note,
+                       c.workspace_dir AS workspace_dir
+                FROM experiments e
+                JOIN campaigns c ON c.id = e.campaign_id
+                WHERE e.id = ?
+                """,
+                (experiment_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def update_experiment_submitted(self, experiment_id: str, aristotle_job_id: str) -> None:
         now = datetime.utcnow().isoformat()
@@ -1663,3 +1751,383 @@ class Database:
 
     def reject_shadow_promotion(self, promotion_id: str) -> None:
         self.set_shadow_promotion_status(promotion_id, "rejected")
+
+    def ensure_shadow_global_state_row(self, goal_id: str, *, goal_text: str = "") -> None:
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT goal_id FROM shadow_global_state WHERE goal_id = ?",
+                (goal_id,),
+            )
+            if cur.fetchone() is None:
+                conn.execute(
+                    """
+                    INSERT INTO shadow_global_state (
+                        goal_id, goal_text, revision, stance_json, policy_json, updated_at
+                    )
+                    VALUES (?, ?, 0, '{}', '{}', ?)
+                    """,
+                    (goal_id, (goal_text or "")[:2000], now),
+                )
+            elif goal_text:
+                conn.execute(
+                    "UPDATE shadow_global_state SET goal_text = ? WHERE goal_id = ?",
+                    ((goal_text or "")[:2000], goal_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_shadow_global_state(self, goal_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM shadow_global_state WHERE goal_id = ?",
+                (goal_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def list_shadow_global_hypotheses(self, goal_id: str, limit: int = 80) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT * FROM shadow_global_hypothesis
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (goal_id, min(limit, 500)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_shadow_global_hypothesis_evidence(self, hypothesis_ids: list[str]) -> list[dict[str, Any]]:
+        if not hypothesis_ids:
+            return []
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" * len(hypothesis_ids))
+            cur = conn.execute(
+                f"""
+                SELECT * FROM shadow_global_evidence_link
+                WHERE hypothesis_id IN ({placeholders})
+                """,
+                hypothesis_ids,
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_shadow_global_promotion_requests(
+        self, goal_id: str, *, status: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            lim = min(limit, 200)
+            if status:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM shadow_global_promotion_request
+                    WHERE goal_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (goal_id, status, lim),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM shadow_global_promotion_request
+                    WHERE goal_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (goal_id, lim),
+                )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_shadow_global_runs(self, goal_id: str, limit: int = 15) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, goal_id, trigger_kind, summary, created_at
+                FROM shadow_global_run
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (goal_id, min(limit, 100)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def get_shadow_global_latest_run(self, goal_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT * FROM shadow_global_run
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (goal_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_shadow_global_ops_snapshot(self, goal_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        try:
+            c1 = conn.execute(
+                "SELECT COUNT(*) FROM shadow_global_promotion_request WHERE goal_id = ? AND status = 'pending'",
+                (goal_id,),
+            ).fetchone()
+            c2 = conn.execute(
+                "SELECT COUNT(*) FROM shadow_global_promotion_request WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            c3 = conn.execute(
+                "SELECT COUNT(*) FROM shadow_global_hypothesis WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            c4 = conn.execute(
+                "SELECT COUNT(*) FROM shadow_global_run WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            latest = self.get_shadow_global_latest_run(goal_id)
+            latest_meta: dict[str, Any] = {}
+            if latest and latest.get("response_json"):
+                try:
+                    parsed = json.loads(str(latest.get("response_json") or "{}"))
+                    if isinstance(parsed, dict):
+                        m = parsed.get("meta")
+                        if isinstance(m, dict):
+                            latest_meta = m
+                except json.JSONDecodeError:
+                    latest_meta = {}
+            return {
+                "pending_promotions": int(c1[0]) if c1 else 0,
+                "total_promotions": int(c2[0]) if c2 else 0,
+                "total_hypotheses": int(c3[0]) if c3 else 0,
+                "total_runs": int(c4[0]) if c4 else 0,
+                "latest_run": {
+                    "id": latest.get("id"),
+                    "trigger_kind": latest.get("trigger_kind"),
+                    "summary": latest.get("summary"),
+                    "created_at": latest.get("created_at"),
+                    "validation_warnings": latest_meta.get("validation_warnings") or [],
+                    "model": latest_meta.get("model") or "",
+                }
+                if latest
+                else None,
+            }
+        finally:
+            conn.close()
+
+    def shadow_global_commit_run(
+        self,
+        goal_id: str,
+        *,
+        trigger_kind: str,
+        summary: str,
+        response_obj: dict[str, Any],
+        new_stance_json: str,
+        new_policy_json: str,
+        hypotheses: list[dict[str, Any]],
+        promotions: list[dict[str, Any]],
+        goal_text: str = "",
+    ) -> str:
+        run_id = _new_id()
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            self.ensure_shadow_global_state_row(goal_id, goal_text=goal_text)
+            cur = conn.execute(
+                "SELECT revision FROM shadow_global_state WHERE goal_id = ?",
+                (goal_id,),
+            )
+            row = cur.fetchone()
+            rev = int(row["revision"]) + 1 if row else 1
+            conn.execute(
+                """
+                UPDATE shadow_global_state
+                SET revision = ?, stance_json = ?, policy_json = ?, updated_at = ?
+                WHERE goal_id = ?
+                """,
+                (rev, new_stance_json, new_policy_json, now, goal_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO shadow_global_run (
+                    id, goal_id, trigger_kind, summary, response_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    goal_id,
+                    trigger_kind[:64],
+                    summary[:8000],
+                    json.dumps(response_obj, ensure_ascii=False),
+                    now,
+                ),
+            )
+            for h in hypotheses:
+                hid = _new_id()
+                conn.execute(
+                    """
+                    INSERT INTO shadow_global_hypothesis (
+                        id, goal_id, kind, title, body_md, lean_snippet,
+                        status, parent_hypothesis_id, score_0_100, groundability_tier, kill_test, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        hid,
+                        goal_id,
+                        str(h.get("kind") or "exploration")[:64],
+                        str(h.get("title") or "")[:500],
+                        str(h.get("body_md") or ""),
+                        str(h.get("lean_snippet") or ""),
+                        str(h.get("status") or "active")[:32],
+                        h.get("parent_hypothesis_id"),
+                        int(h.get("score_0_100") or 0),
+                        str(h.get("groundability_tier") or "")[:16],
+                        str(h.get("kill_test") or "")[:2000],
+                        now,
+                    ),
+                )
+                for ev in h.get("evidence") or []:
+                    if not isinstance(ev, dict):
+                        continue
+                    eid = _new_id()
+                    conn.execute(
+                        """
+                        INSERT INTO shadow_global_evidence_link (
+                            id, hypothesis_id, campaign_id, experiment_id, target_id, note
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            eid,
+                            hid,
+                            ev.get("campaign_id"),
+                            ev.get("experiment_id"),
+                            ev.get("target_id"),
+                            str(ev.get("note") or "")[:2000],
+                        ),
+                    )
+            for p in promotions:
+                if not isinstance(p, dict):
+                    continue
+                pid = _new_id()
+                conn.execute(
+                    """
+                    INSERT INTO shadow_global_promotion_request (
+                        id, goal_id, status, payload_json, created_at
+                    )
+                    VALUES (?, ?, 'pending', ?, ?)
+                    """,
+                    (pid, goal_id, json.dumps(p, ensure_ascii=False), now),
+                )
+            conn.commit()
+            return run_id
+        finally:
+            conn.close()
+
+    def get_shadow_global_promotion_request(self, promotion_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM shadow_global_promotion_request WHERE id = ?",
+                (promotion_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def set_shadow_global_promotion_status(
+        self, promotion_id: str, status: str, reviewed_at: str | None = None
+    ) -> None:
+        now = reviewed_at or datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE shadow_global_promotion_request
+                SET status = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (status[:32], now, promotion_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def apply_shadow_global_promotion(
+        self, promotion_id: str
+    ) -> tuple[bool, str, dict[str, Any]]:
+        row = self.get_shadow_global_promotion_request(promotion_id)
+        if not row:
+            return False, "unknown promotion", {}
+        if row["status"] != "pending":
+            return False, "not pending", {}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            return False, "invalid payload json", {}
+
+        kind = str(payload.get("kind") or "").strip().lower()
+        cid = str(payload.get("campaign_id") or "").strip()
+        extra: dict[str, Any] = {}
+        if kind == "new_target":
+            desc = str(payload.get("description") or "").strip()
+            if not cid or not desc:
+                return False, "missing campaign_id or description", {}
+            if not self.campaign_exists(cid):
+                return False, "unknown campaign_id", {}
+            ids = self.add_targets(cid, [desc])
+            extra["target_ids"] = ids
+            self.set_shadow_global_promotion_status(promotion_id, "approved")
+            return True, "target created", extra
+
+        if kind == "new_experiment":
+            tid = str(payload.get("target_id") or "").strip()
+            objective = str(payload.get("objective") or "").strip()
+            if not cid or not tid or not objective:
+                return False, "missing campaign_id, target_id or objective", {}
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "SELECT id FROM targets WHERE id = ? AND campaign_id = ?",
+                    (tid, cid),
+                )
+                if not cur.fetchone():
+                    return False, "target not in campaign", {}
+            finally:
+                conn.close()
+            mk = str(payload.get("move_kind") or "explore")[:64]
+            mn = str(payload.get("move_note") or "shadow global promotion")[:2000]
+            eid = self.create_experiment(cid, tid, objective, move_kind=mk, move_note=mn)
+            extra["experiment_id"] = eid
+            self.set_shadow_global_promotion_status(promotion_id, "approved")
+            return True, "experiment created", extra
+
+        return False, f"unknown kind {kind!r}", {}
+
+    def reject_shadow_global_promotion(self, promotion_id: str) -> None:
+        self.set_shadow_global_promotion_status(promotion_id, "rejected")

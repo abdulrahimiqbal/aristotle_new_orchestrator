@@ -67,6 +67,28 @@ These pieces support **serious open-problem** campaigns (cartography, mixed tact
 
 Tests: `tests/test_verdict_reconcile.py`, `tests/test_manager_policy.py`, `tests/test_problem_map_util.py` (obligations coercion).
 
+## Global Shadow Manager (Collatz lab)
+
+The dashboard now includes a dedicated **Shadow manager** workspace (`/shadow`) separate from live campaign tabs.
+
+- **Mission-first mode**: one global objective (`SHADOW_GLOBAL_GOAL`, default Collatz) with cross-campaign memory.
+- **Aggressive ideation, grounded promotion**: shadow can propose speculative frameworks, but only approved promotions create live targets/experiments.
+- **Structured backward-chaining output**: global runs normalize and store `solved_world`, assumptions, bridge lemmas, and Lean landing hints.
+- **Hypothesis ranking**: each global hypothesis stores `score_0_100`, `groundability_tier`, and a `kill_test` to prioritize falsifiable routes.
+- **Autonomous loop**: optional background auto-runs with queue safety cap.
+- **Reproducibility metadata**: each global run stores prompt/model hash metadata in `shadow_global_run.response_json`.
+
+Endpoints:
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/shadow` | Dedicated global shadow dashboard tab |
+| GET | `/api/shadow/panel` | HTMX fragment for shadow panel |
+| POST | `/api/shadow/run` | Manual global shadow run |
+| POST | `/api/shadow/promote/{id}/approve` | Approve global promotion (optionally immediate Aristotle submit) |
+| POST | `/api/shadow/promote/{id}/reject` | Reject global promotion |
+| GET | `/api/shadow/ops` | Queue depth, latest run meta/warnings, auto-loop config snapshot |
+
 ## Workspaces and Mathlib
 
 - **Per-campaign directories**: each campaign has its own Lake project at `WORKSPACE_ROOT/<campaign_id>/` (isolated `lean-toolchain`, `lakefile.lean`, and `OrchWorkspace/`). Aristotle uses that path as `--project-dir`.
@@ -120,6 +142,14 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `SKEPTIC_PASS_MAX_EXPERIMENTS` | Cap on skeptic experiments per tick (default: `2`) |
 | `MAP_PROVED_GATE_KINDS` | Comma-separated node kinds that cannot stay `proved` without `POST /admin/map-node-ack` (default: `obstruction,equivalence`; empty disables gate) |
 | `ADMIN_TOKEN` | If set, enables `/admin/status`, `/admin/config`, `/admin/metrics`, `/admin/map-node-ack`, `/admin/ui` (use `Authorization: Bearer`, `X-Admin-Token`, or `?admin_token=`; prefer headers) |
+| `SHADOW_LLM_MODEL` | Optional model override for shadow runs (`None` falls back to `LLM_MODEL`) |
+| `SHADOW_LLM_TEMPERATURE` | Shadow run temperature (default: `0.85`) |
+| `SHADOW_GLOBAL_GOAL` | Global shadow mission text shown in `/shadow` |
+| `MANAGER_SUBMIT_PENDING_EXPERIMENTS` | If `1` (default), manager submits pending experiments (including approved shadow promotions) on tick |
+| `SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE` | If `1` (default), approving a `new_experiment` promotion can call Aristotle immediately |
+| `SHADOW_GLOBAL_AUTO_ENABLED` | Enable autonomous global shadow loop (default: on) |
+| `SHADOW_GLOBAL_TICK_INTERVAL_SEC` | Interval for auto global shadow runs (default: `180`) |
+| `SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS` | Safety cap; auto-run skips while pending promotions exceed this (default: `200`) |
 
 ## HTTP API (selected)
 
@@ -240,6 +270,9 @@ SQLite **`PRAGMA user_version`** drives migrations on startup.
 - **`ops_counters`** — failure and error class tallies for admin.
 - **`manager_tick_diagnostics`** — last exception metadata per campaign.
 - **`campaign_map_node_acks`** — operator acks for **proved**-gate map nodes (`campaign_id`, `node_id`).
+- **`shadow_epistemic_state` / `shadow_hypothesis` / `shadow_run` / `shadow_promotion_request`** — per-campaign shadow lab state, hypotheses, runs, and promotion queue.
+- **`shadow_global_state` / `shadow_global_hypothesis` / `shadow_global_run` / `shadow_global_promotion_request` / `shadow_global_evidence_link`** — global shadow manager state and artifacts.
+- **`shadow_global_hypothesis.score_0_100` / `groundability_tier` / `kill_test`** — persisted ranking + fast-falsification fields for global hypotheses.
 
 Existing `orchestrator.db` files pick up new columns and tables automatically on next process start.
 

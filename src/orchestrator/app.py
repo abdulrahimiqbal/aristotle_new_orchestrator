@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -25,7 +26,13 @@ from orchestrator.problem_map_util import (
 )
 from orchestrator.workspace_migration import migrate_legacy_shared_workspaces
 from orchestrator.workspace_seed import VALID_TEMPLATES, ensure_workspace
-from orchestrator.shadow_agent import run_shadow_lab
+from orchestrator.experiment_dispatch import try_submit_experiment_now
+from orchestrator.shadow_agent import (
+    SHADOW_GLOBAL_GOAL_ID,
+    run_shadow_global_lab,
+    run_shadow_lab,
+    shadow_global_loop,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -51,6 +58,12 @@ def _operator_runtime_context() -> dict:
         "verdict_reconcile_enabled": bool(app_config.VERDICT_RECONCILE_FROM_SUMMARY),
         "shadow_llm_model": app_config.SHADOW_LLM_MODEL or app_config.LLM_MODEL,
         "shadow_llm_temperature": app_config.SHADOW_LLM_TEMPERATURE,
+        "shadow_global_goal": app_config.SHADOW_GLOBAL_GOAL,
+        "manager_submit_pending": bool(app_config.MANAGER_SUBMIT_PENDING_EXPERIMENTS),
+        "shadow_aristotle_immediate": bool(app_config.SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE),
+        "shadow_global_auto_enabled": bool(app_config.SHADOW_GLOBAL_AUTO_ENABLED),
+        "shadow_global_tick_interval_sec": int(app_config.SHADOW_GLOBAL_TICK_INTERVAL_SEC),
+        "shadow_global_pending_cap": int(app_config.SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS),
     }
 
 
@@ -113,7 +126,66 @@ def _shadow_panel_context(campaign_id: str, *, shadow_flash: dict | None = None)
         "shadow_flash": shadow_flash,
         "operator": _operator_runtime_context(),
         "public_view": False,
+        "shadow_view": False,
     }
+
+
+def _shadow_global_panel_context(*, shadow_flash: dict | None = None) -> dict:
+    goal_id = SHADOW_GLOBAL_GOAL_ID
+    goal_text = app_config.SHADOW_GLOBAL_GOAL
+    db.ensure_shadow_global_state_row(goal_id, goal_text=goal_text)
+    ep = db.get_shadow_global_state(goal_id)
+    stance_raw = ep.get("stance_json") or "{}"
+    try:
+        stance_pretty = json.dumps(json.loads(stance_raw), indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        stance_pretty = stance_raw
+    policy_raw = ep.get("policy_json") or "{}"
+    try:
+        policy_pretty = json.dumps(json.loads(policy_raw), indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        policy_pretty = policy_raw
+    hyps = db.list_shadow_global_hypotheses(goal_id, limit=80)
+    hids = [str(h["id"]) for h in hyps]
+    ev_rows = db.list_shadow_global_hypothesis_evidence(hids)
+    ev_by_h: dict[str, list[dict]] = {}
+    for r in ev_rows:
+        hid = str(r["hypothesis_id"])
+        ev_by_h.setdefault(hid, []).append(dict(r))
+    for h in hyps:
+        h["evidence_rows"] = ev_by_h.get(str(h["id"]), [])
+    promos = db.list_shadow_global_promotion_requests(goal_id, limit=80)
+    runs = db.list_shadow_global_runs(goal_id, limit=20)
+    return {
+        "selected": None,
+        "shadow_goal_id": goal_id,
+        "shadow_goal_text": ep.get("goal_text") or goal_text,
+        "shadow_epistemic": ep,
+        "shadow_stance_pretty": stance_pretty,
+        "shadow_policy_pretty": policy_pretty,
+        "shadow_hypotheses": hyps,
+        "shadow_promotions": promos,
+        "shadow_runs": runs,
+        "shadow_flash": shadow_flash,
+        "operator": _operator_runtime_context(),
+        "public_view": False,
+        "shadow_view": True,
+        "campaigns": db.get_all_campaigns(),
+    }
+
+
+async def _maybe_submit_shadow_promoted_experiment(
+    payload_json: str | None, extra: dict[str, Any]
+) -> dict[str, Any] | None:
+    if not extra.get("experiment_id"):
+        return None
+    try:
+        payload = json.loads(payload_json or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    if payload.get("defer_aristotle_submit") is True:
+        return {"ok": True, "skipped": True, "reason": "defer_aristotle_submit"}
+    return await try_submit_experiment_now(db, str(extra["experiment_id"]))
 
 
 def _ticks_view(rows: list[dict]) -> list[dict]:
@@ -144,10 +216,16 @@ async def lifespan(app: FastAPI):
         legacy_dir=app_config.WORKSPACE_LEGACY_DIR or None,
     )
     task = asyncio.create_task(manager_loop(db))
+    shadow_task = asyncio.create_task(shadow_global_loop(db))
     try:
         yield
     finally:
+        shadow_task.cancel()
         task.cancel()
+        try:
+            await shadow_task
+        except asyncio.CancelledError:
+            pass
         try:
             await task
         except asyncio.CancelledError:
@@ -196,6 +274,7 @@ async def dashboard(request: Request):
             "progress": None,
             "operator": _operator_runtime_context(),
             "public_view": False,
+            "shadow_view": False,
         },
     )
 
@@ -220,6 +299,7 @@ async def campaign_detail(request: Request, campaign_id: str):
             "progress": progress,
             "operator": _operator_runtime_context(),
             "public_view": False,
+            "shadow_view": False,
             **_cartography_context(state),
         },
     )
@@ -248,7 +328,28 @@ async def public_campaign_detail(request: Request, campaign_id: str):
             "progress": progress,
             "operator": _operator_runtime_context(),
             "public_view": True,
+            "shadow_view": False,
             **_cartography_context(state),
+        },
+    )
+
+
+@app.get("/shadow", response_class=HTMLResponse)
+async def shadow_dashboard(request: Request):
+    ctx = _shadow_global_panel_context()
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "campaigns": ctx["campaigns"],
+            "selected": None,
+            "state": None,
+            "ticks": [],
+            "progress": None,
+            "operator": _operator_runtime_context(),
+            "public_view": False,
+            "shadow_view": True,
+            **ctx,
         },
     )
 
@@ -392,6 +493,7 @@ async def campaign_state_fragment(request: Request, campaign_id: str):
             "progress": progress,
             "operator": _operator_runtime_context(),
             "public_view": False,
+            "shadow_view": False,
             **_cartography_context(state),
         },
     )
@@ -420,8 +522,82 @@ async def public_campaign_state_fragment(request: Request, campaign_id: str):
             "progress": progress,
             "operator": _operator_runtime_context(),
             "public_view": True,
+            "shadow_view": False,
             **_cartography_context(state),
         },
+    )
+
+
+@app.get("/api/shadow/panel", response_class=HTMLResponse)
+async def shadow_global_panel_fragment(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_global_panel_context(),
+    )
+
+
+@app.get("/api/shadow/ops")
+async def shadow_global_ops():
+    snap = db.get_shadow_global_ops_snapshot(SHADOW_GLOBAL_GOAL_ID)
+    return {
+        "goal_id": SHADOW_GLOBAL_GOAL_ID,
+        "goal_text": app_config.SHADOW_GLOBAL_GOAL,
+        "auto_enabled": bool(app_config.SHADOW_GLOBAL_AUTO_ENABLED),
+        "auto_interval_sec": int(app_config.SHADOW_GLOBAL_TICK_INTERVAL_SEC),
+        "pending_cap": int(app_config.SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS),
+        "manager_submit_pending": bool(app_config.MANAGER_SUBMIT_PENDING_EXPERIMENTS),
+        "shadow_aristotle_immediate": bool(app_config.SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE),
+        **snap,
+    }
+
+
+@app.post("/api/shadow/run", response_class=HTMLResponse)
+async def shadow_global_run_fragment(request: Request):
+    flash = await run_shadow_global_lab(
+        db,
+        goal_text=app_config.SHADOW_GLOBAL_GOAL,
+        trigger_kind="manual",
+    )
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_global_panel_context(shadow_flash=flash),
+    )
+
+
+@app.post("/api/shadow/promote/{promotion_id}/approve")
+async def shadow_global_promote_approve(request: Request, promotion_id: str):
+    row = db.get_shadow_global_promotion_request(promotion_id)
+    if not row:
+        return HTMLResponse("Unknown promotion", status_code=404)
+    payload_json = row.get("payload_json")
+    ok, msg, extra = db.apply_shadow_global_promotion(promotion_id)
+    flash: dict[str, Any] = {"ok": ok, "error": None if ok else msg, "promotion": "approved"}
+    if ok:
+        ar = await _maybe_submit_shadow_promoted_experiment(
+            str(payload_json) if payload_json is not None else None, extra
+        )
+        if ar is not None:
+            flash["aristotle_submit"] = ar
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_global_panel_context(shadow_flash=flash),
+    )
+
+
+@app.post("/api/shadow/promote/{promotion_id}/reject")
+async def shadow_global_promote_reject(request: Request, promotion_id: str):
+    row = db.get_shadow_global_promotion_request(promotion_id)
+    if not row:
+        return HTMLResponse("Unknown promotion", status_code=404)
+    db.reject_shadow_global_promotion(promotion_id)
+    flash = {"ok": True, "promotion": "rejected"}
+    return templates.TemplateResponse(
+        request,
+        "shadow_panel.html",
+        _shadow_global_panel_context(shadow_flash=flash),
     )
 
 
@@ -457,8 +633,15 @@ async def shadow_promote_approve(
     row = db.get_shadow_promotion_request(promotion_id)
     if not row or row["campaign_id"] != campaign_id:
         return HTMLResponse("Unknown promotion", status_code=404)
-    ok, msg, _extra = db.apply_shadow_promotion(promotion_id)
-    flash = {"ok": ok, "error": None if ok else msg, "promotion": "approved"}
+    payload_json = row.get("payload_json")
+    ok, msg, extra = db.apply_shadow_promotion(promotion_id)
+    flash: dict[str, Any] = {"ok": ok, "error": None if ok else msg, "promotion": "approved"}
+    if ok:
+        ar = await _maybe_submit_shadow_promoted_experiment(
+            str(payload_json) if payload_json is not None else None, extra
+        )
+        if ar is not None:
+            flash["aristotle_submit"] = ar
     return templates.TemplateResponse(
         request,
         "shadow_panel.html",

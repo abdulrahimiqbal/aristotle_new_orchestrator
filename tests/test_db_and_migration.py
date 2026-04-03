@@ -40,8 +40,17 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='shadow_epistemic_state'"
         )
         assert cur.fetchone() is not None
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='shadow_global_state'"
+        )
+        assert cur.fetchone() is not None
+        cur = conn.execute("PRAGMA table_info(shadow_global_hypothesis)")
+        gh_cols = {r[1] for r in cur.fetchall()}
+        assert "score_0_100" in gh_cols
+        assert "groundability_tier" in gh_cols
+        assert "kill_test" in gh_cols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 7
+        assert int(uv) >= 9
     finally:
         conn.close()
 
@@ -90,6 +99,26 @@ def test_shadow_tables_commit_and_promote(tmp_path: Path) -> None:
     ok, msg, extra = db.apply_shadow_promotion(pid)
     assert ok, msg
     assert "experiment_id" in extra
+
+
+def test_get_experiment_for_submit_joins_workspace(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    db = Database(str(tmp_path / "e.db"))
+    db.initialize()
+    cid = db.create_campaign(
+        "hello",
+        workspace_root=str(root),
+        workspace_template="minimal",
+    )
+    tid = db.add_targets(cid, ["lemma"])[0]
+    eid = db.create_experiment(
+        cid, tid, "try a proof", move_kind="explore", move_note="t"
+    )
+    row = db.get_experiment_for_submit(eid)
+    assert row is not None
+    assert row["status"] == "pending"
+    assert row["workspace_dir"]
+    assert cid in str(row["workspace_dir"])
 
 
 def test_create_campaign_per_workspace_dir(tmp_path: Path) -> None:
