@@ -70,6 +70,9 @@ LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK = _int_env("LLM_SUMMARIZE_MAX_LLM_CALLS_PER
 # Global spacing between LLM HTTP calls (same process). 3.5s ≈ ≤17 req/min; raise for stricter APIs.
 LLM_MIN_SECONDS_BETWEEN_REQUESTS = _float_env("LLM_MIN_SECONDS_BETWEEN_REQUESTS", 3.5)
 LLM_MAX_RETRIES_429 = _int_env("LLM_MAX_RETRIES_429", 12)
+# After each inner 429 retry sweep fails, sleep this long and run the full inner sweep again.
+LLM_EXTRA_429_WAVES = max(0, _int_env("LLM_EXTRA_429_WAVES", 2))
+LLM_429_WAVE_GAP_SEC = max(0.0, _float_env("LLM_429_WAVE_GAP_SEC", 45.0))
 
 # JSON mode for chat completions
 LLM_JSON_MODE = _bool_env("LLM_JSON_MODE", True)

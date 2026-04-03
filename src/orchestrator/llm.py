@@ -42,12 +42,20 @@ _llm_next_allowed_monotonic = 0.0
 
 
 async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 120.0) -> dict[str, Any]:
-    """POST /chat/completions with global throttle and 429 retry/backoff."""
+    """POST /chat/completions with global throttle, per-wave 429 backoff, and extra waves.
+
+    Each *wave* runs up to ``LLM_MAX_RETRIES_429 + 1`` POST attempts; on 429 we sleep
+    (Retry-After or exponential backoff) and retry. If every attempt in a wave is 429,
+    we sleep ``LLM_429_WAVE_GAP_SEC`` and start another wave, up to ``1 + LLM_EXTRA_429_WAVES`` waves.
+    """
     global _llm_next_allowed_monotonic
     url = f"{app_config.LLM_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {app_config.LLM_API_KEY}"}
     spacing = max(0.0, float(app_config.LLM_MIN_SECONDS_BETWEEN_REQUESTS))
     max_attempts = max(1, int(app_config.LLM_MAX_RETRIES_429) + 1)
+    extra_waves = max(0, int(app_config.LLM_EXTRA_429_WAVES))
+    total_waves = 1 + extra_waves
+    wave_gap = max(0.0, float(app_config.LLM_429_WAVE_GAP_SEC))
 
     async with _llm_http_lock:
         now = time.monotonic()
@@ -56,31 +64,45 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
             await asyncio.sleep(wait0)
 
         last_response: httpx.Response | None = None
-        for attempt in range(max_attempts):
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                last_response = response
+        for wave in range(total_waves):
+            if wave > 0 and wave_gap > 0:
+                await asyncio.sleep(wave_gap)
 
-                if response.status_code == 429:
-                    ra = response.headers.get("Retry-After")
-                    if ra is not None:
-                        try:
-                            sleep_s = float(ra)
-                        except ValueError:
+            for attempt in range(max_attempts):
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, headers=headers, json=payload)
+                    last_response = response
+
+                    if response.status_code == 429:
+                        ra = response.headers.get("Retry-After")
+                        if ra is not None:
+                            try:
+                                sleep_s = float(ra)
+                            except ValueError:
+                                sleep_s = min(120.0, (2**attempt) + random.uniform(0.0, 1.0))
+                        else:
                             sleep_s = min(120.0, (2**attempt) + random.uniform(0.0, 1.0))
-                    else:
-                        sleep_s = min(120.0, (2**attempt) + random.uniform(0.0, 1.0))
-                    sleep_s = max(1.0, min(180.0, sleep_s))
-                    await asyncio.sleep(sleep_s)
-                    continue
+                        sleep_s = max(1.0, min(180.0, sleep_s))
+                        await asyncio.sleep(sleep_s)
+                        continue
 
-                response.raise_for_status()
-                data = response.json()
-                _llm_next_allowed_monotonic = time.monotonic() + spacing
-                return data
+                    response.raise_for_status()
+                    data = response.json()
+                    _llm_next_allowed_monotonic = time.monotonic() + spacing
+                    return data
 
         if last_response is not None:
-            last_response.raise_for_status()
+            detail = (
+                f" (HTTP {last_response.status_code}: exhausted {max_attempts} attempts "
+                f"× {total_waves} wave(s), {wave_gap}s gap between waves; "
+                "set LLM_EXTRA_429_WAVES / LLM_429_WAVE_GAP_SEC / LLM_MAX_RETRIES_429 or reduce LLM load)"
+            )
+            req = last_response.request
+            raise httpx.HTTPStatusError(
+                f"Client error: {last_response.status_code}{detail}",
+                request=req,
+                response=last_response,
+            )
         raise httpx.HTTPError("LLM request failed after retries")
 
 

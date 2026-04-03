@@ -87,6 +87,8 @@ def build_admin_router(db: Database) -> APIRouter:
             "LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK": app_config.LLM_SUMMARIZE_MAX_LLM_CALLS_PER_TICK,
             "LLM_MIN_SECONDS_BETWEEN_REQUESTS": app_config.LLM_MIN_SECONDS_BETWEEN_REQUESTS,
             "LLM_MAX_RETRIES_429": app_config.LLM_MAX_RETRIES_429,
+            "LLM_EXTRA_429_WAVES": app_config.LLM_EXTRA_429_WAVES,
+            "LLM_429_WAVE_GAP_SEC": app_config.LLM_429_WAVE_GAP_SEC,
             "MAP_REFRESH_MAX_INTERVAL_TICKS": app_config.MAP_REFRESH_MAX_INTERVAL_TICKS,
             "MATHLIB_KNOWLEDGE_MODE": app_config.MATHLIB_KNOWLEDGE_MODE,
             "LEANSEARCH_API_URL": app_config.LEANSEARCH_API_URL,
