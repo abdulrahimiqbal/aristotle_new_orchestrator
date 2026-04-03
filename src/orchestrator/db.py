@@ -1122,6 +1122,37 @@ class Database:
         finally:
             conn.close()
 
+    def get_manager_loop_campaigns(self) -> list[dict[str, Any]]:
+        """Campaigns that need a manager tick.
+
+        Includes active campaigns plus any non-active campaign that still has
+        submitted/running Aristotle jobs that need polling.
+        """
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT c.*
+                FROM campaigns c
+                WHERE c.status = ?
+                   OR EXISTS (
+                        SELECT 1
+                        FROM experiments e
+                        WHERE e.campaign_id = c.id
+                          AND e.status IN (?, ?)
+                   )
+                ORDER BY c.created_at DESC
+                """,
+                (
+                    CampaignStatus.ACTIVE.value,
+                    ExperimentStatus.SUBMITTED.value,
+                    ExperimentStatus.RUNNING.value,
+                ),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
     def get_all_campaigns(self) -> list[dict[str, Any]]:
         conn = self._connect()
         try:

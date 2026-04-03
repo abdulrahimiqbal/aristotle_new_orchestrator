@@ -35,7 +35,12 @@ async def test_tick_marks_completed_persists_parsed_and_ledger(
     db.update_experiment_submitted(eid, "00000000-0000-0000-0000-000000000099")
 
     ws_dir = str((root.resolve() / cid))
-    campaign_row = {"id": cid, "workspace_dir": ws_dir, "prompt": "benchmark prompt"}
+    campaign_row = {
+        "id": cid,
+        "workspace_dir": ws_dir,
+        "prompt": "benchmark prompt",
+        "status": "active",
+    }
 
     async def _poll(*_a, **_k):
         return "completed", ExtractedArchive(markdown=_MARKDOWN)
@@ -90,7 +95,12 @@ async def test_tick_defers_completion_at_max_experiments_while_inflight(
     db.update_experiment_submitted(eid, "00000000-0000-0000-0000-000000000099")
 
     ws_dir = str((root.resolve() / cid))
-    campaign_row = {"id": cid, "workspace_dir": ws_dir, "prompt": "benchmark prompt"}
+    campaign_row = {
+        "id": cid,
+        "workspace_dir": ws_dir,
+        "prompt": "benchmark prompt",
+        "status": "active",
+    }
 
     async def _poll(*_a, **_k):
         return "running", None
@@ -129,7 +139,12 @@ async def test_tick_defers_completion_when_targets_resolved_but_jobs_inflight(
     db.update_experiment_submitted(eid, "00000000-0000-0000-0000-000000000099")
 
     ws_dir = str((root.resolve() / cid))
-    campaign_row = {"id": cid, "workspace_dir": ws_dir, "prompt": "benchmark prompt"}
+    campaign_row = {
+        "id": cid,
+        "workspace_dir": ws_dir,
+        "prompt": "benchmark prompt",
+        "status": "active",
+    }
 
     async def _poll(*_a, **_k):
         return "running", None
@@ -155,3 +170,50 @@ async def test_tick_defers_completion_when_targets_resolved_but_jobs_inflight(
     assert "deferred while 1 Aristotle job(s)" in state.recent_ticks[-1].actions[
         "campaign_completion_deferred_reason"
     ]
+
+
+@pytest.mark.asyncio
+async def test_paused_campaign_with_inflight_job_is_polled_without_reasoning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setattr("orchestrator.manager.SKEPTIC_PASS_ENABLED", False)
+    root = tmp_path / "wsroot"
+    db = Database(str(tmp_path / "db.sqlite"))
+    db.initialize()
+    cid = db.create_campaign("benchmark prompt", workspace_root=str(root), workspace_template="minimal")
+    (tid,) = db.add_targets(cid, ["first target"])
+    eid = db.create_experiment(cid, tid, "prove triviality")
+    db.update_experiment_submitted(eid, "00000000-0000-0000-0000-000000000099")
+    db.update_campaign_status(cid, "paused")
+
+    ws_dir = str((root.resolve() / cid))
+    campaign_row = {
+        "id": cid,
+        "workspace_dir": ws_dir,
+        "prompt": "benchmark prompt",
+        "status": "paused",
+    }
+
+    async def _poll(*_a, **_k):
+        return "completed", ExtractedArchive(markdown=_MARKDOWN)
+
+    async def _submit(*_a, **_k):
+        return "", "skip"
+
+    async def _reason(*_a, **_k):
+        raise AssertionError("reason should not run for paused campaigns")
+
+    with (
+        patch("orchestrator.manager.poll", _poll),
+        patch("orchestrator.manager.submit", _submit),
+        patch("orchestrator.manager.reason", _reason),
+    ):
+        await tick(db, campaign_row, tick_number=0)
+
+    queued = db.get_manager_loop_campaigns()
+    assert any(row["id"] == cid for row in queued) is False
+    state = db.get_campaign_state(cid)
+    assert state.campaign.status.value == "paused"
+    exp = next(e for e in state.experiments if e.id == eid)
+    assert exp.status.value == "completed"

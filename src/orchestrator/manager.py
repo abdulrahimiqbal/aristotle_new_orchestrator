@@ -38,7 +38,7 @@ from orchestrator.mathlib_knowledge import (
     fetch_narrow_hints_for_state,
     format_library_anchors_markdown,
 )
-from orchestrator.models import AristotleParsedResult, ExperimentStatus, Verdict
+from orchestrator.models import AristotleParsedResult, CampaignStatus, ExperimentStatus, Verdict
 from orchestrator.verdict_reconcile import reconcile_verdict_with_summary
 from orchestrator.problem_map_util import normalize_move_kind, parse_problem_map
 
@@ -88,7 +88,7 @@ async def manager_loop(db: Database) -> None:
     tick_count = 0
     while True:
         try:
-            campaigns = db.get_active_campaigns()
+            campaigns = db.get_manager_loop_campaigns()
             for campaign in campaigns:
                 await tick(db, campaign, tick_count)
             tick_count += 1
@@ -324,6 +324,9 @@ async def tick(db: Database, campaign: dict, tick_number: int) -> None:
                         "summary_snip": "Aristotle job failed or timed out",
                     }
                 )
+
+        if campaign.get("status") != CampaignStatus.ACTIVE.value:
+            return
 
         state = db.get_campaign_state(campaign_id)
 
