@@ -24,6 +24,10 @@
   <style>
     .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
     .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-flex; }
+    .htmx-request.htmx-indicator { display: inline-flex; }
+    .htmx-request .htmx-hide-while-loading { display: none; }
     /* deploy-sync canary: sky tint (was violet) — revert after verifying GitHub→Railway */
     body { background: radial-gradient(1200px 800px at 10% -10%, rgba(56, 189, 248, 0.14), transparent), radial-gradient(900px 600px at 100% 0%, rgba(16, 185, 129, 0.08), transparent), #09090b; }
   </style>
@@ -52,7 +56,7 @@
         </a>
         <a href="/shadow"
            class="block rounded-lg px-3 py-2.5 text-sm transition-all {% if shadow_view %}bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200{% endif %}">
-          <span class="font-medium">Shadow manager</span>
+          <span class="font-medium">Shadow lab</span>
         </a>
         <div class="my-2 border-t border-zinc-800/80"></div>
         {% endif %}
@@ -128,18 +132,19 @@
       <div class="flex-1 p-6 lg:p-10 overflow-y-auto custom-scroll">
         {% if selected and not public_view and not shadow_view %}
         <div class="max-w-5xl mx-auto mb-5 flex flex-wrap gap-2">
-          <button type="button"
-                  class="rounded-xl px-4 py-2 text-sm font-semibold transition-all ring-1 bg-violet-500/20 text-violet-200 ring-violet-500/40"
-                  hx-get="/api/campaign/{{ selected }}/state"
-                  hx-target="#campaign-panel"
-                  hx-swap="innerHTML">
+          <a href="/campaign/{{ selected }}"
+             class="rounded-xl px-4 py-2 text-sm font-semibold transition-all ring-1 {% if not campaign_shadow_view %}bg-violet-500/20 text-violet-200 ring-violet-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 ring-zinc-700/70{% endif %}">
             Live campaign
-          </button>
+          </a>
+          <a href="/campaign/{{ selected }}/shadow"
+             class="rounded-xl px-4 py-2 text-sm font-semibold transition-all ring-1 {% if campaign_shadow_view %}bg-amber-500/20 text-amber-200 ring-amber-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 ring-zinc-700/70{% endif %}">
+            Shadow lab
+          </a>
         </div>
         {% endif %}
         <div id="campaign-panel"
              class="max-w-5xl mx-auto">
-          {% if shadow_view %}
+          {% if shadow_view or campaign_shadow_view %}
             {% include "shadow_panel.html" %}
           {% elif state %}
             {% include "campaign_panel.html" %}

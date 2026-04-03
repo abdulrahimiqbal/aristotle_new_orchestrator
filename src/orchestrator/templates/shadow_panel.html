@@ -1,108 +1,288 @@
 {# Shadow lab — speculative only; not verified by Lean until promoted to live targets/experiments #}
-<div class="space-y-8 max-w-5xl mx-auto">
-  <header class="rounded-2xl border border-amber-500/35 bg-amber-950/20 p-6 ring-1 ring-amber-500/20">
-    <div class="flex flex-wrap items-center gap-2 mb-2">
-      <span class="text-xs font-bold uppercase tracking-widest text-amber-400/95">Shadow lab</span>
-      <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/40">NOT VERIFIED</span>
-    </div>
-    <p class="text-sm text-zinc-300 leading-relaxed max-w-3xl">
-      {% if shadow_view %}
-      Global speculative manager focused on one mission with access to all campaigns, targets, and experiment outcomes.
-      It may propose far-fetched mathematics, then back-chain into actionable promotions.
-      {% else %}
-      Speculative research agent: own DB tables, high-temperature ideas, self-updating stance and policy.
-      Promotions enqueue <strong class="text-zinc-200">real</strong> targets or Aristotle experiments only after you approve.
-      {% endif %}
-    </p>
-    {% if shadow_view %}
-    <div class="mt-3 rounded-xl border border-amber-500/30 bg-black/30 px-4 py-3 text-sm text-amber-100">
-      <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-300/90 mb-1">Global mission</p>
-      <p>{{ shadow_goal_text }}</p>
-      <p class="mt-1 text-[11px] text-amber-200/75 font-mono">goal_id · {{ shadow_goal_id }}</p>
-    </div>
-    {% endif %}
-    <p class="text-[11px] text-zinc-500 font-mono mt-3">model · {{ operator.shadow_llm_model }} · temp {{ operator.shadow_llm_temperature }}</p>
-    <p class="text-[10px] text-zinc-600 font-mono mt-1 leading-relaxed">Aristotle · immediate on approve {% if operator.shadow_aristotle_immediate %}on{% else %}off{% endif %} · manager pending submit {% if operator.manager_submit_pending %}on{% else %}off{% endif %}</p>
-    {% if shadow_view %}
-    <p class="text-[10px] text-zinc-600 font-mono mt-1 leading-relaxed">auto-run {% if operator.shadow_global_auto_enabled %}on{% else %}off{% endif %} · every {{ operator.shadow_global_tick_interval_sec }}s · pending cap {{ operator.shadow_global_pending_cap }}</p>
-    {% endif %}
-    {% if shadow_flash %}
-    <div class="mt-4 rounded-xl border px-4 py-3 text-sm {% if shadow_flash.get('ok') %}border-emerald-500/40 bg-emerald-950/30 text-emerald-200{% else %}border-red-500/40 bg-red-950/25 text-red-200{% endif %}">
-      {% if shadow_flash.get('ok') %}
-        {% if shadow_flash.get('run_id') %}
-          Run <span class="font-mono">{{ shadow_flash.run_id }}</span> · {{ shadow_flash.get('hypothesis_count', 0) }} hypotheses · {{ shadow_flash.get('promotion_count', 0) }} promotion(s).
-          {% if shadow_flash.get('validation_warnings') %}
-          <p class="mt-2 text-xs text-amber-200/90">Validation warnings: {{ shadow_flash.validation_warnings|join(', ') }}</p>
-          {% endif %}
-        {% elif shadow_flash.get('promotion') == 'approved' %}
-          Promotion approved — live target or experiment created.
-          {% if shadow_flash.get('aristotle_submit') %}
-            {% set ar = shadow_flash.aristotle_submit %}
-            {% if ar.get('ok') and ar.get('job_id') %}
-              <p class="mt-2 text-xs font-mono text-emerald-300/90">Aristotle job {{ ar.job_id }}</p>
-            {% elif ar.get('skipped') %}
-              <p class="mt-2 text-xs text-zinc-400">Aristotle submit skipped — {{ ar.get('reason', '') }}</p>
-            {% elif not ar.get('ok') %}
-              <p class="mt-2 text-xs text-red-300/90">Aristotle submit failed — {{ ar.get('error', '') }}</p>
+<div class="space-y-6 max-w-5xl mx-auto">
+  <header class="rounded-3xl border border-amber-500/35 bg-gradient-to-br from-amber-950/35 via-zinc-950 to-zinc-950 p-6 ring-1 ring-amber-500/20 sm:p-7">
+    <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+      <div class="max-w-3xl space-y-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-bold uppercase tracking-widest text-amber-300/95">
+            {% if shadow_view %}Global shadow lab{% else %}Campaign shadow lab{% endif %}
+          </span>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-500/20 text-amber-100 ring-1 ring-amber-500/40">SPECULATIVE ONLY</span>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-zinc-800/90 text-zinc-300 ring-1 ring-zinc-700/70">approval required before live work</span>
+        </div>
+
+        <div>
+          <h1 class="font-display text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
+            {% if shadow_view %}
+            Generate speculative leads across campaigns, then promote only the ones worth live work.
+            {% else %}
+            Pressure-test this campaign before you spend real experiments.
             {% endif %}
+          </h1>
+          <p class="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-300">
+            {% if shadow_view %}
+            Use the shadow lab to brainstorm across campaigns, synthesize patterns, and queue concrete live actions.
+            The operator job here is simple: generate ideas, review the queue, and approve only what deserves real attention.
+            {% else %}
+            Use the shadow lab to explore bolder lines of attack for this campaign without polluting live targets or experiments.
+            Review the strongest ideas, then promote only the ones that are concrete enough to test for real.
+            {% endif %}
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-zinc-800/90 bg-black/25 p-4">
+          {% if shadow_view %}
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-300/90 mb-1">Global mission</p>
+          <p class="text-sm leading-relaxed text-zinc-200">{{ shadow_goal_text }}</p>
+          <p class="mt-2 text-[11px] font-mono text-zinc-500">goal_id · {{ shadow_goal_id }}</p>
+          {% else %}
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-300/90 mb-1">Campaign objective</p>
+          <p class="text-sm leading-relaxed text-zinc-200">{{ shadow_campaign_prompt }}</p>
+          <p class="mt-2 text-[11px] font-mono text-zinc-500">campaign_id · {{ selected }}</p>
           {% endif %}
-        {% elif shadow_flash.get('promotion') == 'rejected' %}
-          Promotion rejected.
-        {% else %}
-          {{ shadow_flash }}
+        </div>
+
+        <div class="rounded-2xl border border-sky-500/30 bg-sky-950/20 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-sky-300/90 mb-1">Best next action</p>
+          <p class="text-sm font-medium text-sky-100">{{ shadow_next_step.title }}</p>
+          <p class="mt-1 text-sm leading-relaxed text-sky-100/75">{{ shadow_next_step.body }}</p>
+        </div>
+
+        {% if shadow_latest_run and shadow_latest_run.summary %}
+        <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Last run takeaway</p>
+          <p class="text-sm leading-relaxed text-zinc-200">{{ shadow_latest_run.summary }}</p>
+          <p class="mt-2 text-[11px] font-mono text-zinc-500">{{ shadow_latest_run.created_at }} · {{ shadow_latest_run.trigger_kind }}</p>
+        </div>
         {% endif %}
-      {% else %}
-        {{ shadow_flash.get('error', 'error') }}
-      {% endif %}
+
+        {% if shadow_flash %}
+        <div class="rounded-2xl border px-4 py-3 text-sm {% if shadow_flash.get('ok') %}border-emerald-500/40 bg-emerald-950/25 text-emerald-100{% else %}border-red-500/40 bg-red-950/25 text-red-200{% endif %}">
+          {% if shadow_flash.get('ok') %}
+            {% if shadow_flash.get('run_id') %}
+              Generated <span class="font-semibold">{{ shadow_flash.get('hypothesis_count', 0) }}</span> idea(s) and
+              <span class="font-semibold">{{ shadow_flash.get('promotion_count', 0) }}</span> live proposal(s).
+              {% if shadow_flash.get('validation_warnings') %}
+              <p class="mt-2 text-xs text-amber-200/90">Validation warnings: {{ shadow_flash.validation_warnings|join(', ') }}</p>
+              {% endif %}
+            {% elif shadow_flash.get('promotion') == 'approved' %}
+              Promotion approved and moved into live work.
+              {% if shadow_flash.get('aristotle_submit') %}
+                {% set ar = shadow_flash.aristotle_submit %}
+                {% if ar.get('ok') and ar.get('job_id') %}
+                  <p class="mt-2 text-xs font-mono text-emerald-300/90">Aristotle job {{ ar.job_id }}</p>
+                {% elif ar.get('skipped') %}
+                  <p class="mt-2 text-xs text-zinc-400">Aristotle submit skipped — {{ ar.get('reason', '') }}</p>
+                {% elif not ar.get('ok') %}
+                  <p class="mt-2 text-xs text-red-300/90">Aristotle submit failed — {{ ar.get('error', '') }}</p>
+                {% endif %}
+              {% endif %}
+            {% elif shadow_flash.get('promotion') == 'rejected' %}
+              Promotion rejected. The idea stays speculative only.
+            {% else %}
+              {{ shadow_flash }}
+            {% endif %}
+          {% else %}
+            {{ shadow_flash.get('error', 'error') }}
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <form hx-post="{% if shadow_view %}/api/shadow/run{% else %}/api/campaign/{{ selected }}/shadow/run{% endif %}"
+              hx-target="#campaign-panel"
+              hx-swap="innerHTML"
+              hx-disabled-elt="button">
+          <button type="submit"
+                  class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-900/30 transition-colors hover:from-amber-500 hover:to-orange-500 disabled:cursor-not-allowed disabled:opacity-70">
+            <span class="htmx-hide-while-loading">{{ shadow_primary_cta }}</span>
+            <span class="htmx-indicator items-center gap-2">Generating...</span>
+          </button>
+        </form>
+
+        <div class="flex flex-wrap gap-2 text-[11px] font-mono text-zinc-500">
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">model · {{ operator.shadow_llm_model }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">temp · {{ operator.shadow_llm_temperature }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">immediate submit · {% if operator.shadow_aristotle_immediate %}on{% else %}off{% endif %}</span>
+          {% if shadow_view %}
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">auto-run · {% if operator.shadow_global_auto_enabled %}on{% else %}off{% endif %} / {{ operator.shadow_global_tick_interval_sec }}s</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="w-full max-w-sm space-y-3 lg:w-80">
+        <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Pending review</p>
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ shadow_metrics.pending_promotions }}</p>
+            <p class="mt-1 text-xs text-zinc-500">items that can become live work</p>
+          </div>
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Ideas on board</p>
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ shadow_metrics.hypothesis_count }}</p>
+            <p class="mt-1 text-xs text-zinc-500">ranked by score and evidence</p>
+          </div>
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Best current lead</p>
+            {% if shadow_best_hypothesis %}
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ shadow_best_hypothesis.score_0_100 }}</p>
+            <p class="mt-1 text-xs text-zinc-400">tier {{ shadow_best_hypothesis.groundability_tier or '—' }} · {{ shadow_best_hypothesis.title }}</p>
+            {% else %}
+            <p class="mt-2 text-lg font-semibold text-zinc-200">None yet</p>
+            <p class="mt-1 text-xs text-zinc-500">run the lab to generate ideas</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-amber-500/25 bg-amber-950/15 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-300/90">Promotion rule</p>
+          <p class="mt-2 text-sm leading-relaxed text-amber-100/90">
+            Nothing in this panel affects live work until you approve it.
+            Approved experiments {% if operator.shadow_aristotle_immediate %}submit immediately{% else %}wait for the manager tick{% endif %}.
+          </p>
+        </div>
+      </div>
     </div>
-    {% endif %}
-    <form class="mt-4"
-          hx-post="{% if shadow_view %}/api/shadow/run{% else %}/api/campaign/{{ selected }}/shadow/run{% endif %}"
-          hx-target="#campaign-panel"
-          hx-swap="innerHTML">
-      <button type="submit"
-              class="rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-900/30 hover:from-amber-500 hover:to-orange-500 transition-colors">
-        Run shadow agent
-      </button>
-    </form>
   </header>
 
   <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-3">Epistemic stance</h2>
-    <p class="text-xs text-zinc-500 mb-2">revision <span class="font-mono text-zinc-400">{{ shadow_epistemic.revision|default(0) }}</span>
-      · updated <span class="font-mono text-zinc-400">{{ shadow_epistemic.updated_at|default('—') }}</span></p>
-    <pre class="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-words max-h-80 overflow-y-auto custom-scroll rounded-lg bg-black/40 p-4 border border-zinc-800/80">{{ shadow_stance_pretty }}</pre>
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
+      <div>
+        <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Pending live promotions</h2>
+        <p class="mt-1 text-xs text-zinc-500">This is the only queue that can create real targets or experiments.</p>
+      </div>
+      {% if shadow_view %}
+      <p class="text-xs text-zinc-500">Global promotions include <span class="font-mono text-zinc-400">campaign_id</span> and may include <span class="font-mono text-zinc-400">target_id</span>.</p>
+      {% endif %}
+    </div>
+
+    <div class="space-y-3">
+      {% for p in shadow_pending_promotions %}
+      <article class="rounded-2xl border border-amber-500/20 bg-zinc-950/50 p-4">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2 mb-2">
+              <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-200 ring-1 ring-amber-500/30">{{ p.preview.action_label }}</span>
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ p.status }}</span>
+              <span class="text-[10px] font-mono text-zinc-600">{{ p.id }}</span>
+            </div>
+            <h3 class="text-sm font-medium leading-relaxed text-zinc-100">{{ p.preview.headline }}</h3>
+            <p class="mt-1 text-sm text-zinc-400">{{ p.preview.summary }}</p>
+
+            <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-mono">
+              {% if p.preview.campaign_id %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-zinc-400 ring-1 ring-zinc-800/80">campaign {{ p.preview.campaign_id }}</span>
+              {% endif %}
+              {% if p.preview.target_id %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-zinc-400 ring-1 ring-zinc-800/80">target {{ p.preview.target_id }}</span>
+              {% endif %}
+              {% if p.preview.move_kind %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-cyan-300/90 ring-1 ring-zinc-800/80">{{ p.preview.move_kind }}</span>
+              {% endif %}
+              {% if p.preview.submit_behavior %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-zinc-400 ring-1 ring-zinc-800/80">{{ p.preview.submit_behavior }}</span>
+              {% endif %}
+            </div>
+
+            {% if p.preview.move_note %}
+            <p class="mt-3 text-xs leading-relaxed text-zinc-500">{{ p.preview.move_note }}</p>
+            {% endif %}
+
+            <details class="mt-3 text-xs">
+              <summary class="cursor-pointer text-zinc-500 hover:text-zinc-400 select-none">Raw payload</summary>
+              <pre class="mt-2 max-h-40 overflow-y-auto overflow-x-auto rounded-xl border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-500 custom-scroll">{{ p.preview.payload_json_pretty }}</pre>
+            </details>
+          </div>
+
+          <div class="flex gap-2 shrink-0">
+            <form hx-post="{% if shadow_view %}/api/shadow/promote/{{ p.id }}/approve{% else %}/api/campaign/{{ selected }}/shadow/promote/{{ p.id }}/approve{% endif %}"
+                  hx-target="#campaign-panel"
+                  hx-swap="innerHTML"
+                  hx-disabled-elt="button">
+              <button type="submit"
+                      class="inline-flex items-center gap-2 rounded-lg bg-emerald-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70">
+                <span class="htmx-hide-while-loading">Promote to live</span>
+                <span class="htmx-indicator items-center gap-2">Working...</span>
+              </button>
+            </form>
+            <form hx-post="{% if shadow_view %}/api/shadow/promote/{{ p.id }}/reject{% else %}/api/campaign/{{ selected }}/shadow/promote/{{ p.id }}/reject{% endif %}"
+                  hx-target="#campaign-panel"
+                  hx-swap="innerHTML"
+                  hx-disabled-elt="button">
+              <button type="submit"
+                      class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-700 ring-1 ring-zinc-600/50 disabled:cursor-not-allowed disabled:opacity-70">
+                <span class="htmx-hide-while-loading">Reject</span>
+                <span class="htmx-indicator items-center gap-2">Working...</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      </article>
+      {% else %}
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">
+        No live proposals are waiting right now. Generate a batch or review the ideas section for the strongest lead.
+      </p>
+      {% endfor %}
+    </div>
+
+    {% if shadow_reviewed_promotions %}
+    <details class="mt-4 rounded-2xl border border-zinc-800/80 bg-zinc-950/30 p-4">
+      <summary class="cursor-pointer list-none text-sm font-medium text-zinc-300">Reviewed promotions ({{ shadow_reviewed_promotions|length }})</summary>
+      <div class="mt-4 space-y-3">
+        {% for p in shadow_reviewed_promotions %}
+        <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider {% if p.status == 'approved' %}bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30{% else %}bg-zinc-800/90 text-zinc-400 ring-1 ring-zinc-700/70{% endif %}">{{ p.status }}</span>
+            <span class="text-[10px] font-mono text-zinc-600">{{ p.id }}</span>
+          </div>
+          <p class="mt-2 text-sm text-zinc-200">{{ p.preview.headline }}</p>
+          <p class="mt-1 text-xs text-zinc-500">{{ p.preview.summary }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
   </section>
 
   <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-3">Evolving policy (self-merge)</h2>
-    <pre class="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-words max-h-48 overflow-y-auto custom-scroll rounded-lg bg-black/40 p-4 border border-zinc-800/80">{{ shadow_policy_pretty }}</pre>
-  </section>
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
+      <div>
+        <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Best current ideas</h2>
+        <p class="mt-1 text-xs text-zinc-500">Sorted by score, groundability tier, and evidence links.</p>
+      </div>
+      {% if shadow_best_hypothesis %}
+      <p class="text-xs text-zinc-500">Top lead: <span class="font-medium text-zinc-300">{{ shadow_best_hypothesis.title }}</span> · score <span class="font-mono text-zinc-300">{{ shadow_best_hypothesis.score_0_100 }}</span></p>
+      {% endif %}
+    </div>
 
-  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-4">Hypotheses & sketches</h2>
     <div class="space-y-4">
-      {% for h in shadow_hypotheses %}
-      <article class="rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+      {% for h in shadow_ranked_hypotheses %}
+      <article class="rounded-2xl border border-zinc-800/80 bg-zinc-950/50 p-4">
         <div class="flex flex-wrap items-center gap-2 mb-2">
-          <span class="text-[10px] font-mono uppercase text-violet-400/90">{{ h.kind }}</span>
-          {% if h.score_0_100 is defined %}
-          <span class="text-[10px] font-mono rounded px-1.5 py-0.5 bg-violet-500/15 text-violet-200 ring-1 ring-violet-500/30">score {{ h.score_0_100 }}</span>
-          {% endif %}
-          {% if h.groundability_tier %}
-          <span class="text-[10px] font-mono rounded px-1.5 py-0.5 bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-500/30">tier {{ h.groundability_tier }}</span>
-          {% endif %}
-          <span class="text-[10px] text-zinc-600 font-mono">{{ h.id }}</span>
+          <span class="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-mono uppercase text-violet-200 ring-1 ring-violet-500/30">{{ h.kind }}</span>
+          <span class="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-mono text-violet-100 ring-1 ring-violet-500/30">score {{ h.score_0_100 or 0 }}</span>
+          <span class="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-mono text-cyan-100 ring-1 ring-cyan-500/30">tier {{ h.groundability_tier or '—' }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-[10px] font-mono text-zinc-400 ring-1 ring-zinc-800/80">evidence {{ h.evidence_rows|length }}</span>
+          <span class="text-[10px] font-mono text-zinc-600">{{ h.id }}</span>
           <span class="text-[10px] text-zinc-500">{{ h.created_at }}</span>
         </div>
-        <h3 class="font-medium text-zinc-100 text-sm mb-2">{{ h.title }}</h3>
-        <div class="text-sm text-zinc-400 whitespace-pre-wrap leading-relaxed">{{ h.body_md }}</div>
-        {% if h.lean_snippet %}
-        <pre class="mt-3 text-[11px] font-mono text-amber-200/90 overflow-x-auto rounded-lg bg-black/50 p-3 border border-amber-900/40">{{ h.lean_snippet }}</pre>
+
+        <h3 class="text-sm font-medium text-zinc-100">{{ h.title }}</h3>
+        <div class="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-zinc-400">{{ h.body_md }}</div>
+
+        {% if h.kill_test %}
+        <div class="mt-3 rounded-xl border border-amber-900/50 bg-amber-950/20 p-3 text-xs text-amber-100/90">
+          <span class="font-semibold uppercase tracking-widest text-[10px] text-amber-300/90">Kill test</span>
+          <p class="mt-1 text-[11px] leading-relaxed">{{ h.kill_test }}</p>
+        </div>
         {% endif %}
+
+        {% if h.lean_snippet %}
+        <pre class="mt-3 overflow-x-auto rounded-xl border border-amber-900/40 bg-black/50 p-3 text-[11px] font-mono text-amber-200/90">{{ h.lean_snippet }}</pre>
+        {% endif %}
+
         {% if h.evidence_rows %}
         <div class="mt-3 text-xs text-zinc-500">
-          <span class="font-semibold text-zinc-600 uppercase text-[10px]">Evidence links</span>
+          <span class="font-semibold uppercase tracking-widest text-[10px] text-zinc-500">Evidence links</span>
           <ul class="mt-1 space-y-1 list-disc list-inside">
             {% for ev in h.evidence_rows %}
             <li class="font-mono text-[11px]">
@@ -112,65 +292,47 @@
           </ul>
         </div>
         {% endif %}
-        {% if h.kill_test %}
-        <div class="mt-3 text-xs text-amber-200/90 border border-amber-900/50 bg-amber-950/20 rounded-lg p-2">
-          <span class="font-semibold uppercase text-[10px] tracking-widest text-amber-300/90">Kill test</span>
-          <p class="mt-1 text-[11px]">{{ h.kill_test }}</p>
-        </div>
-        {% endif %}
       </article>
       {% else %}
-      <p class="text-sm text-zinc-600 italic">No shadow hypotheses yet. Run the shadow agent.</p>
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">
+        No shadow ideas yet. Generate a batch to get speculative hypotheses and possible live promotions.
+      </p>
       {% endfor %}
     </div>
   </section>
 
   <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-4">Promotion queue → live campaign</h2>
-    {% if shadow_view %}
-    <p class="text-xs text-zinc-500 mb-3">Global payloads include <span class="font-mono text-zinc-400">campaign_id</span> and optionally <span class="font-mono text-zinc-400">target_id</span>.</p>
-    {% endif %}
-    <div class="space-y-3">
-      {% for p in shadow_promotions %}
-      <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2 mb-1">
-            <span class="text-[10px] font-mono uppercase {% if p.status == 'pending' %}text-amber-400{% elif p.status == 'approved' %}text-emerald-400{% else %}text-zinc-500{% endif %}">{{ p.status }}</span>
-            <span class="text-[10px] font-mono text-zinc-600">{{ p.id }}</span>
-          </div>
-          <pre class="text-[11px] font-mono text-zinc-400 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{{ p.payload_json }}</pre>
-        </div>
-        {% if p.status == 'pending' %}
-        <div class="flex gap-2 shrink-0">
-          <form hx-post="{% if shadow_view %}/api/shadow/promote/{{ p.id }}/approve{% else %}/api/campaign/{{ selected }}/shadow/promote/{{ p.id }}/approve{% endif %}"
-                hx-target="#campaign-panel" hx-swap="innerHTML">
-            <button type="submit" class="rounded-lg bg-emerald-600/90 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500">Approve</button>
-          </form>
-          <form hx-post="{% if shadow_view %}/api/shadow/promote/{{ p.id }}/reject{% else %}/api/campaign/{{ selected }}/shadow/promote/{{ p.id }}/reject{% endif %}"
-                hx-target="#campaign-panel" hx-swap="innerHTML">
-            <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 ring-1 ring-zinc-600/50">Reject</button>
-          </form>
-        </div>
-        {% endif %}
-      </div>
-      {% else %}
-      <p class="text-sm text-zinc-600 italic">No promotion requests.</p>
-      {% endfor %}
-    </div>
-  </section>
-
-  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-3">Recent shadow runs</h2>
-    <ul class="space-y-2 text-sm text-zinc-400">
+    <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest mb-3">Recent shadow runs</h2>
+    <ul class="space-y-3">
       {% for r in shadow_runs %}
-      <li class="font-mono text-xs border-b border-zinc-800/60 pb-2">
-        <span class="text-zinc-500">{{ r.created_at }}</span>
-        · {{ r.trigger_kind }}
-        · {{ r.summary[:160] }}{% if r.summary|length > 160 %}…{% endif %}
+      <li class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
+        <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono text-zinc-500">
+          <span>{{ r.created_at }}</span>
+          <span>·</span>
+          <span>{{ r.trigger_kind }}</span>
+        </div>
+        <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ r.summary[:220] }}{% if r.summary|length > 220 %}…{% endif %}</p>
       </li>
       {% else %}
-      <li class="text-zinc-600 italic">No runs yet.</li>
+      <li class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No runs yet.</li>
       {% endfor %}
     </ul>
+  </section>
+
+  <section>
+    <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+      <summary class="cursor-pointer list-none text-sm font-semibold uppercase tracking-widest text-zinc-400">Internal state and debug details</summary>
+      <div class="mt-4 grid gap-4 lg:grid-cols-2">
+        <div class="rounded-2xl border border-zinc-800/80 bg-black/25 p-4">
+          <h3 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-2">Epistemic stance</h3>
+          <p class="mb-2 text-xs text-zinc-500">revision <span class="font-mono text-zinc-400">{{ shadow_epistemic.revision|default(0) }}</span> · updated <span class="font-mono text-zinc-400">{{ shadow_epistemic.updated_at|default('—') }}</span></p>
+          <pre class="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-zinc-800/80 bg-black/40 p-4 text-xs font-mono text-zinc-300 custom-scroll">{{ shadow_stance_pretty }}</pre>
+        </div>
+        <div class="rounded-2xl border border-zinc-800/80 bg-black/25 p-4">
+          <h3 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-2">Evolving policy</h3>
+          <pre class="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-zinc-800/80 bg-black/40 p-4 text-xs font-mono text-zinc-300 custom-scroll">{{ shadow_policy_pretty }}</pre>
+        </div>
+      </div>
+    </details>
   </section>
 </div>

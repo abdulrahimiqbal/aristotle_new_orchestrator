@@ -33,6 +33,7 @@ from orchestrator.shadow_agent import (
     run_shadow_lab,
     shadow_global_loop,
 )
+from orchestrator.shadow_presenter import build_shadow_ui_context
 
 logging.basicConfig(level=logging.INFO)
 
@@ -93,6 +94,7 @@ def _progress_stats(state) -> dict:
 
 def _shadow_panel_context(campaign_id: str, *, shadow_flash: dict | None = None) -> dict:
     db.ensure_shadow_state_row(campaign_id)
+    campaign = db.get_campaign_state(campaign_id).campaign
     ep = db.get_shadow_epistemic_state(campaign_id)
     stance_raw = ep.get("stance_json") or "{}"
     try:
@@ -115,8 +117,14 @@ def _shadow_panel_context(campaign_id: str, *, shadow_flash: dict | None = None)
         h["evidence_rows"] = ev_by_h.get(str(h["id"]), [])
     promos = db.list_shadow_promotion_requests(campaign_id, limit=40)
     runs = db.list_shadow_runs(campaign_id, limit=12)
+    ui_ctx = build_shadow_ui_context(
+        hypotheses=hyps,
+        promotions=promos,
+        runs=runs,
+    )
     return {
         "selected": campaign_id,
+        "shadow_campaign_prompt": campaign.prompt,
         "shadow_epistemic": ep,
         "shadow_stance_pretty": stance_pretty,
         "shadow_policy_pretty": policy_pretty,
@@ -127,6 +135,7 @@ def _shadow_panel_context(campaign_id: str, *, shadow_flash: dict | None = None)
         "operator": _operator_runtime_context(),
         "public_view": False,
         "shadow_view": False,
+        **ui_ctx,
     }
 
 
@@ -156,6 +165,11 @@ def _shadow_global_panel_context(*, shadow_flash: dict | None = None) -> dict:
         h["evidence_rows"] = ev_by_h.get(str(h["id"]), [])
     promos = db.list_shadow_global_promotion_requests(goal_id, limit=80)
     runs = db.list_shadow_global_runs(goal_id, limit=20)
+    ui_ctx = build_shadow_ui_context(
+        hypotheses=hyps,
+        promotions=promos,
+        runs=runs,
+    )
     return {
         "selected": None,
         "shadow_goal_id": goal_id,
@@ -171,6 +185,7 @@ def _shadow_global_panel_context(*, shadow_flash: dict | None = None) -> dict:
         "public_view": False,
         "shadow_view": True,
         "campaigns": db.get_all_campaigns(),
+        **ui_ctx,
     }
 
 
@@ -275,6 +290,7 @@ async def dashboard(request: Request):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": False,
+            "campaign_shadow_view": False,
         },
     )
 
@@ -300,7 +316,32 @@ async def campaign_detail(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": False,
+            "campaign_shadow_view": False,
             **_cartography_context(state),
+        },
+    )
+
+
+@app.get("/campaign/{campaign_id}/shadow", response_class=HTMLResponse)
+async def campaign_shadow_detail(request: Request, campaign_id: str):
+    campaigns = db.get_all_campaigns()
+    if not db.campaign_exists(campaign_id):
+        return RedirectResponse("/", status_code=303)
+    ctx = _shadow_panel_context(campaign_id)
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "campaigns": campaigns,
+            "selected": campaign_id,
+            "state": None,
+            "ticks": [],
+            "progress": None,
+            "operator": _operator_runtime_context(),
+            "public_view": False,
+            "shadow_view": False,
+            "campaign_shadow_view": True,
+            **ctx,
         },
     )
 
@@ -329,6 +370,7 @@ async def public_campaign_detail(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": True,
             "shadow_view": False,
+            "campaign_shadow_view": False,
             **_cartography_context(state),
         },
     )
@@ -349,6 +391,7 @@ async def shadow_dashboard(request: Request):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": True,
+            "campaign_shadow_view": False,
             **ctx,
         },
     )
