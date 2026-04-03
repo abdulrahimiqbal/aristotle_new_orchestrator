@@ -151,5 +151,10 @@ SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE = _bool_env("SHADOW_ARISTOTLE_IMMEDIATE_ON
 # Run global shadow manager automatically in background.
 SHADOW_GLOBAL_AUTO_ENABLED = _bool_env("SHADOW_GLOBAL_AUTO_ENABLED", True)
 SHADOW_GLOBAL_TICK_INTERVAL_SEC = _int_env("SHADOW_GLOBAL_TICK_INTERVAL_SEC", 180)
-# Safety brake: if pending global promotions exceed this, skip auto runs to avoid unbounded queue growth.
-SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS = _int_env("SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS", 200)
+# Soft cap: above this, auto-runs still refine the proof program but suppress new live promotions.
+SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS = _int_env("SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS", 24)
+# Keep live grounding scarce: shadow should invent mathematics first, then ask for a few focused checks.
+SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN = _int_env("SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN", 3)
+SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN = _int_env(
+    "SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN", 2
+)

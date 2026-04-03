@@ -19,6 +19,55 @@ _GLOBAL_SHADOW_RUN_LOCK = False
 
 _STRIP_JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _COUNTER_KEY_SANITIZE = re.compile(r"[^a-z0-9_.:-]+")
+_PROMOTION_TOKEN_RE = re.compile(r"[a-z0-9^]+")
+_PROMOTION_NUMBER_RE = re.compile(r"10\^\d+|\d+")
+_PROMOTION_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "that",
+        "with",
+        "this",
+        "from",
+        "into",
+        "then",
+        "than",
+        "only",
+        "under",
+        "using",
+        "prove",
+        "show",
+        "such",
+        "there",
+        "exists",
+        "every",
+        "each",
+        "where",
+        "when",
+        "have",
+        "will",
+        "would",
+        "should",
+        "could",
+        "their",
+        "about",
+        "through",
+        "collatz",
+        "shadow",
+    }
+)
+_PROMOTION_RUBRIC_KEYS = (
+    "novel_math",
+    "proof_program_leverage",
+    "grounding_need",
+    "expected_signal",
+    "queue_fitness",
+)
+_PROMOTION_RUBRIC_TOTAL_MIN = 10
+_PROMOTION_RUBRIC_MIN_GROUNDING_NEED = 2
+_PROMOTION_RUBRIC_MIN_LEVERAGE = 2
+_PROMOTION_RUBRIC_MIN_SIGNAL = 2
 
 
 def _strip_json_fence(text: str) -> str:
@@ -105,6 +154,267 @@ def _clip_text(v: Any, n: int) -> str:
     return str(v or "")[:n]
 
 
+def _append_warning_once(warnings: list[str], warning: str) -> None:
+    if warning not in warnings:
+        warnings.append(warning)
+
+
+def _load_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _promotion_text(kind: str, payload: dict[str, Any]) -> str:
+    if kind == "new_target":
+        return _clip_text(payload.get("description"), 2400)
+    if kind == "new_experiment":
+        return _clip_text(payload.get("objective"), 2400)
+    return ""
+
+
+def _promotion_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for tok in _PROMOTION_TOKEN_RE.findall(str(text or "").lower()):
+        if len(tok) < 3 or tok in _PROMOTION_STOPWORDS:
+            continue
+        tokens.add(tok)
+    return tokens
+
+
+def _promotion_number_markers(text: str) -> frozenset[str]:
+    return frozenset(_PROMOTION_NUMBER_RE.findall(str(text or "").lower()))
+
+
+def _int_in_range(value: Any, default: int = 0, *, lo: int = 0, hi: int = 3) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(lo, min(hi, n))
+
+
+def _infer_proof_program_role(kind: str, payload: dict[str, Any]) -> str:
+    role = _clip_text(payload.get("proof_program_role"), 64).strip().lower()
+    if role:
+        return role
+    blob = " ".join(
+        [
+            kind,
+            _promotion_text(kind, payload),
+            _clip_text(payload.get("grounding_reason"), 400),
+            _clip_text(payload.get("expected_signal"), 400),
+            _clip_text(payload.get("move_kind"), 64),
+        ]
+    ).lower()
+    if kind == "new_target":
+        if any(k in blob for k in ("define", "formalize", "interface", "scaffold", "object")):
+            return "new_object"
+        return "bridge_lemma"
+    if any(k in blob for k in ("kill test", "falsify", "refute", "counterexample")):
+        return "kill_test"
+    if any(k in blob for k in ("finite", "bounded", "native_decide", "verify", "search")):
+        return "finite_check"
+    if "equivalence" in blob or "equivalent" in blob:
+        return "equivalence"
+    if any(k in blob for k in ("define", "formalize", "scaffold", "interface")):
+        return "scaffold"
+    return "bridge_lemma"
+
+
+def _promotion_context(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    text = _promotion_text(kind, payload)
+    return {
+        "kind": kind,
+        "campaign_id": _clip_text(payload.get("campaign_id"), 40),
+        "target_id": _clip_text(payload.get("target_id"), 40),
+        "text": text,
+        "_tokens": _promotion_tokens(text),
+        "_numbers": _promotion_number_markers(text),
+    }
+
+
+def _promotion_expected_signal_has_branching(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "success or failure",
+            "succeeds or fails",
+            "either we get",
+            "either we learn",
+            "if this fails",
+            "if it fails",
+            "if this succeeds",
+            "if it succeeds",
+        )
+    )
+
+
+def _promotion_queue_fitness(kind: str, payload: dict[str, Any]) -> int:
+    if kind == "new_target":
+        return 3
+    role = _infer_proof_program_role(kind, payload)
+    text = _promotion_text(kind, payload).lower()
+    if role in ("kill_test", "finite_check"):
+        if "10^7" in text or "10^8" in text or "10^9" in text:
+            return 1
+        if any(marker in text for marker in ("10^6", "10^5", "10^4", "n ≤ 1000", "n <= 1000")):
+            return 3
+        return 2
+    if any(k in text for k in ("for all n", "all residue classes", "all mod 8", "all mod 16")):
+        return 1
+    return 2
+
+
+def _infer_promotion_rubric(kind: str, payload: dict[str, Any]) -> dict[str, int]:
+    role = _infer_proof_program_role(kind, payload)
+    novelty_reason = _clip_text(payload.get("novelty_reason"), 1200).strip()
+    grounding_reason = _clip_text(payload.get("grounding_reason"), 1600).strip()
+    expected_signal = _clip_text(payload.get("expected_signal"), 1600).strip()
+    move_kind = _clip_text(payload.get("move_kind"), 64).lower()
+
+    novel_math = 1
+    if role in ("new_object", "bridge_lemma", "equivalence"):
+        novel_math = 2
+    if novelty_reason or kind == "new_target":
+        novel_math += 1
+    if move_kind in ("refute", "explore") and role in ("kill_test", "finite_check"):
+        novel_math = max(novel_math, 2)
+
+    proof_program_leverage = 1
+    if role in ("new_object", "bridge_lemma", "equivalence"):
+        proof_program_leverage = 3
+    elif role in ("kill_test", "finite_check", "scaffold"):
+        proof_program_leverage = 2
+
+    grounding_need = 1
+    if grounding_reason:
+        grounding_need = 2
+    if any(k in grounding_reason.lower() for k in ("depends on", "unlock", "needed now", "requires live", "bridge")):
+        grounding_need = 3
+
+    signal_score = 1
+    if expected_signal:
+        signal_score = 2
+    if _promotion_expected_signal_has_branching(expected_signal):
+        signal_score = 3
+
+    queue_fitness = _promotion_queue_fitness(kind, payload)
+    return {
+        "novel_math": min(3, novel_math),
+        "proof_program_leverage": min(3, proof_program_leverage),
+        "grounding_need": min(3, grounding_need),
+        "expected_signal": min(3, signal_score),
+        "queue_fitness": min(3, queue_fitness),
+    }
+
+
+def _normalize_promotion_rubric(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("rubric_scores")
+    inferred = _infer_promotion_rubric(kind, payload)
+    normalized: dict[str, int] = {}
+    if isinstance(raw, dict):
+        for key in _PROMOTION_RUBRIC_KEYS:
+            normalized[key] = _int_in_range(raw.get(key), inferred[key])
+    else:
+        normalized = inferred
+    total = sum(normalized[key] for key in _PROMOTION_RUBRIC_KEYS)
+    passes = (
+        total >= _PROMOTION_RUBRIC_TOTAL_MIN
+        and normalized["proof_program_leverage"] >= _PROMOTION_RUBRIC_MIN_LEVERAGE
+        and normalized["grounding_need"] >= _PROMOTION_RUBRIC_MIN_GROUNDING_NEED
+        and normalized["expected_signal"] >= _PROMOTION_RUBRIC_MIN_SIGNAL
+    )
+    return {"scores": normalized, "total_0_15": total, "passes": passes}
+
+
+def _same_promotion_lane(candidate: dict[str, Any], existing: dict[str, Any]) -> bool:
+    if candidate.get("kind") != existing.get("kind"):
+        return False
+    if candidate.get("campaign_id") != existing.get("campaign_id"):
+        return False
+    if candidate.get("kind") == "new_experiment":
+        return candidate.get("target_id") == existing.get("target_id")
+    return True
+
+
+def _looks_like_duplicate_promotion(candidate: dict[str, Any], existing_rows: list[dict[str, Any]]) -> bool:
+    candidate_tokens = set(candidate.get("_tokens") or [])
+    if not candidate_tokens:
+        return False
+    candidate_numbers = frozenset(candidate.get("_numbers") or [])
+    for existing in existing_rows:
+        if not _same_promotion_lane(candidate, existing):
+            continue
+        existing_tokens = set(existing.get("_tokens") or [])
+        if not existing_tokens:
+            continue
+        intersection = len(candidate_tokens & existing_tokens)
+        if intersection == 0:
+            continue
+        smaller = min(len(candidate_tokens), len(existing_tokens))
+        union = len(candidate_tokens | existing_tokens)
+        similar = (smaller >= 4 and intersection / smaller >= 0.78) or (
+            union >= 6 and intersection / union >= 0.65 and intersection >= 5
+        )
+        if not similar:
+            continue
+        existing_numbers = frozenset(existing.get("_numbers") or [])
+        if candidate_numbers and existing_numbers and candidate_numbers != existing_numbers:
+            continue
+        return True
+    return False
+
+
+def _existing_global_grounding_context(db: Database) -> list[dict[str, Any]]:
+    existing: list[dict[str, Any]] = []
+    for row in db.list_shadow_global_promotion_requests(
+        SHADOW_GLOBAL_GOAL_ID, status="pending", limit=120
+    ):
+        payload = _load_json_object(row.get("payload_json"))
+        kind = _clip_text(payload.get("kind"), 40).lower()
+        if kind in ("new_target", "new_experiment"):
+            existing.append(_promotion_context(kind, payload))
+
+    for c in db.get_all_campaigns()[:80]:
+        cid = str(c["id"])
+        try:
+            state = db.get_campaign_state(cid)
+        except ValueError:
+            continue
+        for t in state.targets[:80]:
+            existing.append(
+                _promotion_context(
+                    "new_target",
+                    {"campaign_id": cid, "description": t.description},
+                )
+            )
+        recent_experiments = sorted(
+            [e for e in state.experiments if (e.objective or "").strip()],
+            key=lambda x: (x.completed_at or x.submitted_at or ""),
+            reverse=True,
+        )
+        for e in recent_experiments[:24]:
+            existing.append(
+                _promotion_context(
+                    "new_experiment",
+                    {
+                        "campaign_id": cid,
+                        "target_id": e.target_id,
+                        "objective": e.objective,
+                    },
+                )
+            )
+    return existing
+
+
 def _str_list(v: Any, *, max_items: int, max_item_chars: int) -> list[str]:
     if not isinstance(v, list):
         return []
@@ -174,6 +484,17 @@ def _build_shadow_user_message(db: Database, campaign_id: str) -> str:
             f"move {e.move_kind}\n  objective: {(e.objective or '')[:800]}\n  summary: {summ}"
         )
     lines.append("")
+    lines.append("## Strategic reminder")
+    lines.append(
+        "Invent new mathematics and proof-program structure first. Do not optimize for the number of live promotions."
+    )
+    lines.append(
+        "Promotions are scarce grounding requests. Use them only when live work is needed to formalize a new object/interface, ground a bridge lemma, or run a bounded kill-test that will change the campaign strategy."
+    )
+    lines.append(
+        "Promotion rubric: novel_math, proof_program_leverage, grounding_need, expected_signal, queue_fitness. Only promotions scoring at least 10/15 overall with leverage/grounding_need/expected_signal at least 2 should survive."
+    )
+    lines.append("")
     lines.append("## Your previous epistemic stance (JSON) — revise freely")
     lines.append(json.dumps(stance_obj, ensure_ascii=False, indent=2)[:24000])
     lines.append("")
@@ -190,6 +511,11 @@ SHADOW_SYSTEM = """You are the Shadow Research Agent for a formal verification c
 You are NOT the live manager. Nothing you say is verified truth. You may speculate aggressively: new lemmas, reformulations,
 alternative proof programs, new measures or invariants, even hypothetical foundational shifts or new axioms — but you must
 label speculative content clearly inside body_md and lean_snippet (e.g. "SPECULATIVE", "requires new axioms").
+
+Your purpose is to invent new mathematical structure and proof programs without polluting live work.
+Do NOT optimize for number of promotions or immediate theorem throughput. Promotions are rare grounding requests:
+use them only when live work is needed to formalize a new object/interface, ground a bridge lemma, or run a bounded kill-test.
+If the queue already has enough live work, emit 0 promotions and focus on hypotheses + strategy.
 
 You read campaign state and prior shadow stance/policy. You OUTPUT STRICT JSON with this shape:
 {
@@ -212,14 +538,55 @@ You read campaign state and prior shadow stance/policy. You OUTPUT STRICT JSON w
     }
   ],
   "promotion_requests": [
-    { "kind": "new_target", "description": "concrete verification target text for Aristotle" },
-    { "kind": "new_experiment", "target_id": "must match an existing target id", "objective": "...", "move_kind": "explore|prove|refute|...", "move_note": "shadow:...", "defer_aristotle_submit": false }
+    {
+      "kind": "new_target",
+      "description": "concrete verification target text for Aristotle",
+      "proof_program_role": "new_object|bridge_lemma|equivalence|kill_test|finite_check|scaffold",
+      "grounding_reason": "why this deserves live grounding now",
+      "expected_signal": "what success or failure teaches us",
+      "novelty_reason": "how this differs from queued/recent work",
+      "rubric_scores": {
+        "novel_math": 0,
+        "proof_program_leverage": 0,
+        "grounding_need": 0,
+        "expected_signal": 0,
+        "queue_fitness": 0
+      }
+    },
+    {
+      "kind": "new_experiment",
+      "target_id": "must match an existing target id",
+      "objective": "...",
+      "move_kind": "explore|prove|refute|...",
+      "move_note": "shadow:...",
+      "proof_program_role": "new_object|bridge_lemma|equivalence|kill_test|finite_check|scaffold",
+      "grounding_reason": "why this deserves live grounding now",
+      "expected_signal": "what success or failure teaches us",
+      "novelty_reason": "how this differs from queued/recent work",
+      "rubric_scores": {
+        "novel_math": 0,
+        "proof_program_leverage": 0,
+        "grounding_need": 0,
+        "expected_signal": 0,
+        "queue_fitness": 0
+      },
+      "defer_aristotle_submit": false
+    }
   ],
   "run_summary": "one paragraph for the run log"
 }
 
+Promotion rubric (score each 0-3 before emitting any promotion):
+- novel_math: does this introduce or ground genuinely new structure rather than restating queued work?
+- proof_program_leverage: if grounded, does it unlock multiple next moves or a key bridge?
+- grounding_need: does this truly need live grounding now, rather than staying speculative?
+- expected_signal: will success OR failure teach us something concrete?
+- queue_fitness: is this a sharp use of a scarce live slot right now?
+
 Rules:
-- hypotheses: 3–12 items; promotion_requests: 0–8 items.
+- hypotheses: 3–12 items; promotion_requests: 0–3 items.
+- Order promotion_requests from highest-value grounding request to lowest.
+- Only emit promotions that pass the rubric: total score >= 10/15, proof_program_leverage >= 2, grounding_need >= 2, expected_signal >= 2.
 - Never claim the main conjecture is proved unless you are restating a verified fact from the context (prefer not to).
 - new_experiment.target_id MUST be one of the ids listed in the user message.
 - Optional defer_aristotle_submit: if true, the experiment is only created; Aristotle submit waits for the manager tick (no immediate CLI submit on approve).
@@ -233,6 +600,14 @@ produce a mathematically correct proof program for the Collatz conjecture that c
 You are NOT bound to conservative assumptions in ideation. You may hypothesize new structures, operators, invariants,
 bridges, axiom candidates, or alternative arithmetic frameworks. Be explicit when speculative. Work backwards from a solved world:
 assume Collatz is solved, then identify the minimum chain of assumptions/lemmas needed to make that world coherent.
+
+Your job is not to act like a second live manager. Your job is to invent the mathematics and proof program that the live system
+cannot yet see. Promotions are scarce grounding requests, not the main product. Prefer hypotheses, bridge lemmas, new mathematical
+objects, and strategic reframings. Only emit a promotion when live grounding is genuinely needed to:
+1. formalize a new object/interface/lemma family the proof program now depends on,
+2. ground a bridge lemma or equivalence that unlocks multiple next steps, or
+3. run a bounded kill-test / finite check whose result will change the proof program.
+If the queue is already busy or the work is only an incremental restatement, emit 0 promotions.
 
 You OUTPUT STRICT JSON with this shape:
 {
@@ -261,21 +636,71 @@ You OUTPUT STRICT JSON with this shape:
     }
   ],
   "promotion_requests": [
-    { "kind": "new_target", "campaign_id": "required", "description": "concrete target text" },
-    { "kind": "new_experiment", "campaign_id": "required", "target_id": "required", "objective": "...", "move_kind": "explore|prove|refute|...", "move_note": "shadow:...", "defer_aristotle_submit": false }
+    {
+      "kind": "new_target",
+      "campaign_id": "required",
+      "description": "concrete target text",
+      "proof_program_role": "new_object|bridge_lemma|equivalence|kill_test|finite_check|scaffold",
+      "grounding_reason": "why this deserves live grounding now",
+      "expected_signal": "what success or failure teaches us",
+      "novelty_reason": "how this differs from queued/recent work",
+      "rubric_scores": {
+        "novel_math": 0,
+        "proof_program_leverage": 0,
+        "grounding_need": 0,
+        "expected_signal": 0,
+        "queue_fitness": 0
+      }
+    },
+    {
+      "kind": "new_experiment",
+      "campaign_id": "required",
+      "target_id": "required",
+      "objective": "...",
+      "move_kind": "explore|prove|refute|...",
+      "move_note": "shadow:...",
+      "proof_program_role": "new_object|bridge_lemma|equivalence|kill_test|finite_check|scaffold",
+      "grounding_reason": "why this deserves live grounding now",
+      "expected_signal": "what success or failure teaches us",
+      "novelty_reason": "how this differs from queued/recent work",
+      "rubric_scores": {
+        "novel_math": 0,
+        "proof_program_leverage": 0,
+        "grounding_need": 0,
+        "expected_signal": 0,
+        "queue_fitness": 0
+      },
+      "defer_aristotle_submit": false
+    }
   ],
   "run_summary": "one paragraph"
 }
 
+Promotion rubric (score each 0-3 before emitting any promotion):
+- novel_math: does this introduce or ground genuinely new structure rather than restating queued work?
+- proof_program_leverage: if grounded, does it unlock multiple next moves or a key bridge?
+- grounding_need: does this truly need live grounding now, rather than staying speculative?
+- expected_signal: will success OR failure teach us something concrete?
+- queue_fitness: is this a sharp use of a scarce live slot right now?
+
 Rules:
-- hypotheses: 4-14 items; promotion_requests: 0-12 items.
+- hypotheses: 4-14 items; promotion_requests: 0-3 items.
+- Order promotion_requests from most strategically necessary to least.
+- Only emit promotions that pass the rubric: total score >= 10/15, proof_program_leverage >= 2, grounding_need >= 2, expected_signal >= 2.
 - A promotion request must include campaign_id from the allowed list in the user message.
 - new_experiment.target_id must match a target under that campaign_id.
 - Optional defer_aristotle_submit on promotions: if true, skip immediate Aristotle submit on approve (manager will submit on its next tick if enabled).
 - Keep JSON valid. No markdown fences."""
 
 
-def _build_shadow_global_user_message(db: Database, goal_text: str) -> str:
+def _build_shadow_global_user_message(
+    db: Database,
+    goal_text: str,
+    *,
+    promotion_budget: int | None = None,
+    experiment_promotion_budget: int | None = None,
+    suppress_promotions_reason: str | None = None,
+) -> str:
     ep = db.get_shadow_global_state(SHADOW_GLOBAL_GOAL_ID)
     stance_raw = ep.get("stance_json") or "{}"
     policy_raw = ep.get("policy_json") or "{}"
@@ -293,9 +718,49 @@ def _build_shadow_global_user_message(db: Database, goal_text: str) -> str:
     lines.append("## Global mission")
     lines.append(goal_text[:4000])
     lines.append("")
+    lines.append("## Strategic reminder")
+    lines.append(
+        "Invent new mathematics and proof-program structure first. Do not optimize for the number of live promotions."
+    )
+    lines.append(
+        "Use live grounding only when it formalizes a new object/interface, grounds a bridge lemma, or runs a bounded kill-test that changes the strategy."
+    )
+    lines.append(
+        "Promotion rubric: novel_math, proof_program_leverage, grounding_need, expected_signal, queue_fitness. Only promotions scoring at least 10/15 overall with leverage/grounding_need/expected_signal at least 2 should survive."
+    )
+    if suppress_promotions_reason:
+        lines.append(f"Promotion budget this run: 0. {suppress_promotions_reason}")
+    else:
+        budget_text = "use fewer if possible"
+        if promotion_budget is not None:
+            budget_text = f"at most {max(0, promotion_budget)} total"
+            if experiment_promotion_budget is not None:
+                budget_text += f", including at most {max(0, experiment_promotion_budget)} experiments"
+        lines.append(f"Promotion budget this run: {budget_text}.")
+    lines.append("")
     lines.append("## Campaigns available for promotions (campaign_id -> prompt)")
     for c in all_campaigns[:80]:
         lines.append(f"- {c['id']} -> {(c.get('prompt') or '')[:240]}")
+    lines.append("")
+    lines.append("## Pending live grounding already in queue (avoid duplicates)")
+    pending_promotions = db.list_shadow_global_promotion_requests(
+        SHADOW_GLOBAL_GOAL_ID, status="pending", limit=24
+    )
+    if pending_promotions:
+        for row in pending_promotions:
+            payload = _load_json_object(row.get("payload_json"))
+            kind = _clip_text(payload.get("kind"), 40).lower()
+            headline = _promotion_text(kind, payload)[:320]
+            if not headline:
+                continue
+            cid = _clip_text(payload.get("campaign_id"), 40)
+            tid = _clip_text(payload.get("target_id"), 40)
+            lane = f"{kind} · campaign {cid}"
+            if tid:
+                lane += f" · target {tid}"
+            lines.append(f"- pending {lane} · {headline}")
+    else:
+        lines.append("- none")
     lines.append("")
 
     lines.append("## Cross-campaign state and recent outcomes")
@@ -450,10 +915,20 @@ def _normalize_global_hypotheses(data: dict[str, Any]) -> list[dict[str, Any]]:
     return hs[:24]
 
 
-def _normalize_global_promotions(data: dict[str, Any], db: Database) -> list[dict[str, Any]]:
+def _normalize_global_promotions(
+    data: dict[str, Any],
+    db: Database,
+    *,
+    max_promotions: int,
+    max_experiments: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
     raw = data.get("promotion_requests")
     if not isinstance(raw, list):
-        return []
+        return [], []
+    warnings: list[str] = []
+    if max_promotions <= 0:
+        _append_warning_once(warnings, "promotion_budget_zero")
+        return [], warnings
     campaigns = {str(c["id"]) for c in db.get_all_campaigns()}
     valid_targets: dict[str, set[str]] = {}
     for cid in list(campaigns)[:200]:
@@ -462,8 +937,9 @@ def _normalize_global_promotions(data: dict[str, Any], db: Database) -> list[dic
         except ValueError:
             continue
         valid_targets[cid] = {t.id for t in st.targets}
+    existing = _existing_global_grounding_context(db)
     out: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    experiments_kept = 0
     for p in raw[:40]:
         if not isinstance(p, dict):
             continue
@@ -475,13 +951,55 @@ def _normalize_global_promotions(data: dict[str, Any], db: Database) -> list[dic
             desc = _clip_text(p.get("description"), 2000).strip()
             if not desc:
                 continue
-            obj = {"kind": kind, "campaign_id": cid, "description": desc}
+            grounding_reason = _clip_text(p.get("grounding_reason"), 1600).strip()
+            expected_signal = _clip_text(p.get("expected_signal"), 1600).strip()
+            novelty_reason = _clip_text(p.get("novelty_reason"), 1200).strip()
+            if not grounding_reason:
+                _append_warning_once(warnings, "promotion_missing_grounding_reason")
+                continue
+            if not expected_signal:
+                _append_warning_once(warnings, "promotion_missing_expected_signal")
+                continue
+            if not novelty_reason:
+                _append_warning_once(warnings, "promotion_missing_novelty_reason")
+                continue
+            rubric = _normalize_promotion_rubric(kind, p)
+            if not rubric["passes"]:
+                _append_warning_once(warnings, "promotion_below_rubric")
+                continue
+            obj = {
+                "kind": kind,
+                "campaign_id": cid,
+                "description": desc,
+                "proof_program_role": _infer_proof_program_role(kind, p),
+                "grounding_reason": grounding_reason,
+                "expected_signal": expected_signal,
+                "novelty_reason": novelty_reason,
+                "rubric_scores": dict(rubric["scores"]),
+                "rubric_total_0_15": int(rubric["total_0_15"]),
+            }
         elif kind == "new_experiment":
             tid = _clip_text(p.get("target_id"), 40)
             if tid not in valid_targets.get(cid, set()):
                 continue
             objective = _clip_text(p.get("objective"), 2400).strip()
             if not objective:
+                continue
+            grounding_reason = _clip_text(p.get("grounding_reason"), 1600).strip()
+            expected_signal = _clip_text(p.get("expected_signal"), 1600).strip()
+            novelty_reason = _clip_text(p.get("novelty_reason"), 1200).strip()
+            if not grounding_reason:
+                _append_warning_once(warnings, "promotion_missing_grounding_reason")
+                continue
+            if not expected_signal:
+                _append_warning_once(warnings, "promotion_missing_expected_signal")
+                continue
+            if not novelty_reason:
+                _append_warning_once(warnings, "promotion_missing_novelty_reason")
+                continue
+            rubric = _normalize_promotion_rubric(kind, p)
+            if not rubric["passes"]:
+                _append_warning_once(warnings, "promotion_below_rubric")
                 continue
             obj = {
                 "kind": kind,
@@ -490,20 +1008,51 @@ def _normalize_global_promotions(data: dict[str, Any], db: Database) -> list[dic
                 "objective": objective,
                 "move_kind": _clip_text(p.get("move_kind") or "explore", 64),
                 "move_note": _clip_text(p.get("move_note") or "shadow:global", 2000),
+                "proof_program_role": _infer_proof_program_role(kind, p),
+                "grounding_reason": grounding_reason,
+                "expected_signal": expected_signal,
+                "novelty_reason": novelty_reason,
+                "rubric_scores": dict(rubric["scores"]),
+                "rubric_total_0_15": int(rubric["total_0_15"]),
                 "defer_aristotle_submit": bool(p.get("defer_aristotle_submit")),
             }
         else:
             continue
-        key = json.dumps(obj, ensure_ascii=False, sort_keys=True)
-        if key in seen:
+        candidate = _promotion_context(kind, obj)
+        if _looks_like_duplicate_promotion(candidate, existing):
+            _append_warning_once(warnings, "promotion_duplicate_filtered")
             continue
-        seen.add(key)
+        if len(out) >= max_promotions:
+            _append_warning_once(warnings, "promotion_cap_applied")
+            break
+        if kind == "new_experiment":
+            if experiments_kept >= max(0, max_experiments):
+                _append_warning_once(warnings, "experiment_promotion_cap_applied")
+                continue
+            experiments_kept += 1
         out.append(obj)
-    return out[:20]
+        existing.append(candidate)
+    return out[:20], warnings
 
 
-def _normalize_global_response(data: dict[str, Any], db: Database) -> tuple[dict[str, Any], list[str]]:
+def _normalize_global_response(
+    data: dict[str, Any],
+    db: Database,
+    *,
+    max_promotions: int | None = None,
+    max_experiments: int | None = None,
+) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
+    max_promotions = (
+        int(app_config.SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN)
+        if max_promotions is None
+        else int(max_promotions)
+    )
+    max_experiments = (
+        int(app_config.SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN)
+        if max_experiments is None
+        else int(max_experiments)
+    )
     stance = _normalize_stance(data)
     solved_world = _normalize_solved_world(data)
     if not solved_world.get("claim"):
@@ -511,7 +1060,13 @@ def _normalize_global_response(data: dict[str, Any], db: Database) -> tuple[dict
     hypotheses = _normalize_global_hypotheses(data)
     if not hypotheses:
         warnings.append("no_hypotheses")
-    promotions = _normalize_global_promotions(data, db)
+    promotions, promotion_warnings = _normalize_global_promotions(
+        data,
+        db,
+        max_promotions=max_promotions,
+        max_experiments=max_experiments,
+    )
+    warnings.extend(promotion_warnings)
     run_summary = _clip_text(data.get("run_summary"), 4000)
     if not run_summary:
         run_summary = _clip_text(stance.get("summary"), 2000)
@@ -633,6 +1188,9 @@ async def run_shadow_global_lab(
     *,
     goal_text: str,
     trigger_kind: str = "manual",
+    promotion_budget: int | None = None,
+    experiment_promotion_budget: int | None = None,
+    suppress_promotions_reason: str | None = None,
 ) -> dict[str, Any]:
     global _GLOBAL_SHADOW_RUN_LOCK
     if not app_config.LLM_API_KEY:
@@ -642,7 +1200,19 @@ async def run_shadow_global_lab(
     _GLOBAL_SHADOW_RUN_LOCK = True
     db.ensure_shadow_global_state_row(SHADOW_GLOBAL_GOAL_ID, goal_text=goal_text)
     try:
-        user = _build_shadow_global_user_message(db, goal_text)
+        if promotion_budget is None:
+            promotion_budget = int(app_config.SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN)
+        if experiment_promotion_budget is None:
+            experiment_promotion_budget = int(
+                app_config.SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN
+            )
+        user = _build_shadow_global_user_message(
+            db,
+            goal_text,
+            promotion_budget=promotion_budget,
+            experiment_promotion_budget=experiment_promotion_budget,
+            suppress_promotions_reason=suppress_promotions_reason,
+        )
         model = app_config.SHADOW_LLM_MODEL or app_config.LLM_MODEL
         temp = float(app_config.SHADOW_LLM_TEMPERATURE)
         request_meta = {
@@ -650,8 +1220,11 @@ async def run_shadow_global_lab(
             "temperature": temp,
             "system_prompt_sha256": hashlib.sha256(SHADOW_GLOBAL_SYSTEM.encode("utf-8")).hexdigest(),
             "user_prompt_sha256": hashlib.sha256(user.encode("utf-8")).hexdigest(),
-            "schema_version": 2,
+            "schema_version": 3,
             "trigger_kind": trigger_kind,
+            "promotion_budget": promotion_budget,
+            "experiment_promotion_budget": experiment_promotion_budget,
+            "suppress_promotions_reason": suppress_promotions_reason or "",
         }
 
         try:
@@ -678,7 +1251,12 @@ async def run_shadow_global_lab(
                 "raw_preview": raw[:2000],
                 "json_retry_count": json_retry_count,
             }
-        normalized, validation_warnings = _normalize_global_response(data, db)
+        normalized, validation_warnings = _normalize_global_response(
+            data,
+            db,
+            max_promotions=promotion_budget,
+            max_experiments=experiment_promotion_budget,
+        )
 
         ep = db.get_shadow_global_state(SHADOW_GLOBAL_GOAL_ID)
         try:
@@ -744,7 +1322,7 @@ async def run_shadow_global_lab(
 
 
 async def shadow_global_loop(db: Database) -> None:
-    """Autonomous global shadow loop (skips when pending queue is too large)."""
+    """Autonomous global shadow loop (keeps thinking; suppresses promotions when queue is full)."""
     if not app_config.SHADOW_GLOBAL_AUTO_ENABLED:
         return
     while True:
@@ -754,30 +1332,45 @@ async def shadow_global_loop(db: Database) -> None:
                     SHADOW_GLOBAL_GOAL_ID, status="pending", limit=500
                 )
             )
-            if pending <= int(app_config.SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS):
-                res = await run_shadow_global_lab(
-                    db,
-                    goal_text=app_config.SHADOW_GLOBAL_GOAL,
-                    trigger_kind="auto",
+            promotion_budget = int(app_config.SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN)
+            experiment_promotion_budget = int(
+                app_config.SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN
+            )
+            suppress_promotions_reason = ""
+            if pending >= int(app_config.SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS):
+                promotion_budget = 0
+                experiment_promotion_budget = 0
+                suppress_promotions_reason = (
+                    f"{pending} promotion(s) are already waiting for review, so this run should"
+                    " refine the proof program without adding more live queue pressure."
                 )
-                if res.get("ok"):
-                    db.increment_ops_counter("shadow_global:auto_run_ok", 1)
-                    if int(res.get("json_retry_count") or 0) > 0:
-                        db.increment_ops_counter("shadow_global:auto_run_json_retry_recovered", 1)
-                else:
-                    db.increment_ops_counter("shadow_global:auto_run_fail", 1)
-                    err = _counter_suffix(res.get("error"))
-                    db.increment_ops_counter(f"shadow_global:auto_run_fail:{err}", 1)
-                    if res.get("raw_preview"):
-                        logger.warning(
-                            "shadow_global_auto_run_failed error=%s preview=%s",
-                            err,
-                            _clip_text(res.get("raw_preview"), 400),
-                        )
-                    else:
-                        logger.warning("shadow_global_auto_run_failed error=%s", err)
+                db.increment_ops_counter(
+                    "shadow_global:auto_run_promotions_suppressed_pending_cap", 1
+                )
+            res = await run_shadow_global_lab(
+                db,
+                goal_text=app_config.SHADOW_GLOBAL_GOAL,
+                trigger_kind="auto",
+                promotion_budget=promotion_budget,
+                experiment_promotion_budget=experiment_promotion_budget,
+                suppress_promotions_reason=suppress_promotions_reason or None,
+            )
+            if res.get("ok"):
+                db.increment_ops_counter("shadow_global:auto_run_ok", 1)
+                if int(res.get("json_retry_count") or 0) > 0:
+                    db.increment_ops_counter("shadow_global:auto_run_json_retry_recovered", 1)
             else:
-                db.increment_ops_counter("shadow_global:auto_run_skipped_pending_cap", 1)
+                db.increment_ops_counter("shadow_global:auto_run_fail", 1)
+                err = _counter_suffix(res.get("error"))
+                db.increment_ops_counter(f"shadow_global:auto_run_fail:{err}", 1)
+                if res.get("raw_preview"):
+                    logger.warning(
+                        "shadow_global_auto_run_failed error=%s preview=%s",
+                        err,
+                        _clip_text(res.get("raw_preview"), 400),
+                    )
+                else:
+                    logger.warning("shadow_global_auto_run_failed error=%s", err)
         except asyncio.CancelledError:
             raise
         except Exception:

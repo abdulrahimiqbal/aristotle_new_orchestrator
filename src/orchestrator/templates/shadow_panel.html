@@ -175,6 +175,12 @@
               {% if p.preview.target_id %}
               <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-zinc-400 ring-1 ring-zinc-800/80">target {{ p.preview.target_id }}</span>
               {% endif %}
+              {% if p.preview.rubric_total_0_15 %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-emerald-200/90 ring-1 ring-zinc-800/80">rubric {{ p.preview.rubric_total_0_15 }}/15</span>
+              {% endif %}
+              {% if p.preview.proof_program_role %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-amber-200/90 ring-1 ring-zinc-800/80">{{ p.preview.proof_program_role }}</span>
+              {% endif %}
               {% if p.preview.move_kind %}
               <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-cyan-300/90 ring-1 ring-zinc-800/80">{{ p.preview.move_kind }}</span>
               {% endif %}
@@ -185,6 +191,16 @@
 
             {% if p.preview.move_note %}
             <p class="mt-3 text-xs leading-relaxed text-zinc-500">{{ p.preview.move_note }}</p>
+            {% endif %}
+            {% if p.preview.expected_signal %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-400">
+              <span class="text-zinc-500">Expected update:</span> {{ p.preview.expected_signal }}
+            </p>
+            {% endif %}
+            {% if p.preview.novelty_reason %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-500">
+              <span class="text-zinc-600">Why it is new:</span> {{ p.preview.novelty_reason }}
+            </p>
             {% endif %}
 
             <details class="mt-3 text-xs">

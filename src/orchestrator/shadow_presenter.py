@@ -35,6 +35,10 @@ def _present_promotion(row: dict[str, Any]) -> dict[str, Any]:
     pretty = str(row.get("payload_json") or "{}")
     if payload:
         pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+    grounding_reason = str(payload.get("grounding_reason") or "").strip()
+    expected_signal = str(payload.get("expected_signal") or "").strip()
+    novelty_reason = str(payload.get("novelty_reason") or "").strip()
+    rubric_total = int(payload.get("rubric_total_0_15") or 0)
     preview = {
         "kind": kind or "promotion",
         "action_label": "Review promotion",
@@ -44,18 +48,25 @@ def _present_promotion(row: dict[str, Any]) -> dict[str, Any]:
         "target_id": str(payload.get("target_id") or ""),
         "move_kind": str(payload.get("move_kind") or ""),
         "move_note": str(payload.get("move_note") or ""),
+        "proof_program_role": str(payload.get("proof_program_role") or ""),
+        "grounding_reason": grounding_reason,
+        "expected_signal": expected_signal,
+        "novelty_reason": novelty_reason,
+        "rubric_total_0_15": rubric_total,
         "submit_behavior": "",
         "payload_json_pretty": pretty,
     }
     if kind == "new_target":
         preview["action_label"] = "Create live target"
         preview["headline"] = str(payload.get("description") or "No target description provided.")
-        preview["summary"] = "Adds a concrete target to the live campaign."
+        preview["summary"] = grounding_reason or "Adds a concrete target to the live campaign."
         return preview
     if kind == "new_experiment":
         preview["action_label"] = "Launch live experiment"
         preview["headline"] = str(payload.get("objective") or "No experiment objective provided.")
-        preview["summary"] = "Creates a live experiment tied to an existing target."
+        preview["summary"] = (
+            grounding_reason or "Creates a live experiment tied to an existing target."
+        )
         preview["submit_behavior"] = (
             "Wait for the manager tick"
             if payload.get("defer_aristotle_submit")
