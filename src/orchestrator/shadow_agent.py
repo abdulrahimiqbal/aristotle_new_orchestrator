@@ -18,6 +18,7 @@ logger = logging.getLogger("orchestrator.shadow")
 _GLOBAL_SHADOW_RUN_LOCK = False
 
 _STRIP_JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+_COUNTER_KEY_SANITIZE = re.compile(r"[^a-z0-9_.:-]+")
 
 
 def _strip_json_fence(text: str) -> str:
@@ -27,11 +28,31 @@ def _strip_json_fence(text: str) -> str:
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any]:
-    try:
-        v = json.loads(_strip_json_fence(raw))
-        return v if isinstance(v, dict) else {}
-    except json.JSONDecodeError:
+    text = _strip_json_fence(raw)
+    if not text:
         return {}
+    decoder = json.JSONDecoder()
+    candidates = [text]
+    first_obj = text.find("{")
+    if first_obj > 0:
+        candidates.append(text[first_obj:])
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        try:
+            v, _ = decoder.raw_decode(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(v, dict):
+            return v
+    return {}
+
+
+def _counter_suffix(value: Any) -> str:
+    raw = str(value or "unknown").strip().lower().replace(" ", "_")
+    raw = _COUNTER_KEY_SANITIZE.sub("_", raw)
+    return raw[:80] or "unknown"
 
 
 def _clip_text(v: Any, n: int) -> str:
@@ -489,6 +510,12 @@ async def run_shadow_lab(
 
     data = _safe_json_loads(raw)
     if not data:
+        logger.warning(
+            "shadow_invalid_json campaign_id=%s trigger=%s preview=%s",
+            campaign_id,
+            trigger_kind,
+            _clip_text(raw, 400),
+        )
         return {"ok": False, "error": "invalid_json", "raw_preview": raw[:2000]}
 
     ep = db.get_shadow_epistemic_state(campaign_id)
@@ -590,6 +617,11 @@ async def run_shadow_global_lab(
 
         data = _safe_json_loads(raw)
         if not data:
+            logger.warning(
+                "shadow_global_invalid_json trigger=%s preview=%s",
+                trigger_kind,
+                _clip_text(raw, 400),
+            )
             return {"ok": False, "error": "invalid_json", "raw_preview": raw[:2000]}
         normalized, validation_warnings = _normalize_global_response(data, db)
 
@@ -675,6 +707,16 @@ async def shadow_global_loop(db: Database) -> None:
                     db.increment_ops_counter("shadow_global:auto_run_ok", 1)
                 else:
                     db.increment_ops_counter("shadow_global:auto_run_fail", 1)
+                    err = _counter_suffix(res.get("error"))
+                    db.increment_ops_counter(f"shadow_global:auto_run_fail:{err}", 1)
+                    if res.get("raw_preview"):
+                        logger.warning(
+                            "shadow_global_auto_run_failed error=%s preview=%s",
+                            err,
+                            _clip_text(res.get("raw_preview"), 400),
+                        )
+                    else:
+                        logger.warning("shadow_global_auto_run_failed error=%s", err)
             else:
                 db.increment_ops_counter("shadow_global:auto_run_skipped_pending_cap", 1)
         except asyncio.CancelledError:
