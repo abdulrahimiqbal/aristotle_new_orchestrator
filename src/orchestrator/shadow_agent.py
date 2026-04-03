@@ -109,7 +109,25 @@ def _shadow_json_retry_user_message(user: str) -> str:
         user
         + "\n\nIMPORTANT: Return only one valid JSON object."
         + " No markdown fences, no commentary, no duplicated keys."
-        + " Keep string fields concise so the response stays compact."
+        + " Keep the response compact: no more than 6 hypotheses,"
+        + " no more than 1 promotion unless absolutely necessary,"
+        + " and keep long text fields under 600 characters."
+    )
+
+
+def _shadow_json_repair_user_message(raw: str) -> str:
+    preview = _clip_text(raw, 12000)
+    return (
+        "Your previous answer was invalid JSON."
+        " Rewrite it as ONE valid JSON object that matches the system schema.\n"
+        "Keep only the highest-signal content and stay compact:\n"
+        "- at most 6 hypotheses\n"
+        "- at most 1 promotion unless absolutely necessary\n"
+        "- keep long text fields under 600 characters\n"
+        "- prefer empty strings or shorter lists over verbose prose\n"
+        "- return ONLY JSON\n\n"
+        "Invalid draft to repair:\n"
+        f"{preview}"
     )
 
 
@@ -147,7 +165,20 @@ async def _invoke_shadow_json(
         return retry_data, retry_raw, 1
 
     logger.warning("%s_invalid_json attempt=2 preview=%s", log_name, _clip_text(retry_raw, 400))
-    return {}, retry_raw, 1
+    repair_raw = await invoke_llm(
+        system,
+        _shadow_json_repair_user_message(retry_raw or raw),
+        model=model,
+        temperature=0.0,
+        json_object=True,
+    )
+    repair_data = _safe_json_loads(repair_raw)
+    if repair_data:
+        logger.info("%s_json_repair_recovered", log_name)
+        return repair_data, repair_raw, 2
+
+    logger.warning("%s_invalid_json attempt=3 preview=%s", log_name, _clip_text(repair_raw, 400))
+    return {}, repair_raw, 2
 
 
 def _clip_text(v: Any, n: int) -> str:

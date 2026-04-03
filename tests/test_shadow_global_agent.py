@@ -300,6 +300,55 @@ def test_run_shadow_global_lab_retries_invalid_json_once(
     assert calls["n"] == 2
 
 
+def test_run_shadow_global_lab_repairs_invalid_json_after_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    db = Database(str(tmp_path / "g.db"))
+    db.initialize()
+    cid = db.create_campaign("c", workspace_root=str(tmp_path / "ws"))
+    tid = db.add_targets(cid, ["t"])[0]
+    calls = {"n": 0}
+
+    async def fake_invoke_llm(*args, **kwargs) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return '{"stance":{"summary":"broken"}'
+        if calls["n"] == 2:
+            return '{"run_summary":"still broken","solved_world":{"claim":"world"}'
+        return json.dumps(
+            {
+                "run_summary": "repair ok",
+                "solved_world": {"claim": "world"},
+                "hypotheses": [
+                    {
+                        "kind": "proof_program",
+                        "title": "H1",
+                        "body_md": "Compact repaired result.",
+                        "lean_snippet": "",
+                        "evidence": [{"campaign_id": cid, "target_id": tid, "note": "ok"}],
+                    }
+                ],
+                "promotion_requests": [],
+            }
+        )
+
+    monkeypatch.setattr("orchestrator.shadow_agent.invoke_llm", fake_invoke_llm)
+    monkeypatch.setattr(app_config, "LLM_API_KEY", "test-key")
+
+    res = asyncio.run(
+        run_shadow_global_lab(
+            db,
+            goal_text="goal",
+            trigger_kind="auto",
+        )
+    )
+
+    assert res["ok"] is True
+    assert res["json_retry_count"] == 2
+    assert res["promotion_count"] == 0
+    assert calls["n"] == 3
+
+
 def test_run_shadow_global_lab_can_think_without_emitting_promotions(
     tmp_path: Path, monkeypatch
 ) -> None:
