@@ -165,8 +165,14 @@ def build_supershadow_ui_context(
     for concept in concepts:
         presented = dict(concept)
         presented["concepts"] = _load_json_list(presented.get("concepts_json"))
+        presented["fundamental_entities"] = _load_json_list(
+            presented.get("fundamental_entities_json")
+        )
         presented["ontological_moves"] = _load_json_list(
             presented.get("ontological_moves_json")
+        )
+        presented["backward_translation"] = _load_json_list(
+            presented.get("backward_translation_json")
         )
         presented["bridge_lemmas"] = _load_json_list(
             presented.get("bridge_lemmas_json")
@@ -199,6 +205,11 @@ def build_supershadow_ui_context(
         presented["concept_family"] = str(presented.get("concept_family") or "")
         presented["family_kind"] = str(presented.get("family_kind") or "")
         presented["parent_family"] = str(presented.get("parent_family") or "")
+        presented["branch_of_math"] = str(presented.get("branch_of_math") or "")
+        presented["solved_world"] = str(presented.get("solved_world") or "")
+        presented["why_collatz_is_easy_here"] = str(
+            presented.get("why_collatz_is_easy_here") or ""
+        )
         presented["why_not_same_as_existing_family"] = str(
             presented.get("why_not_same_as_existing_family") or ""
         )

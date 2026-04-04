@@ -374,8 +374,13 @@ class Database:
                     goal_id TEXT NOT NULL,
                     title TEXT NOT NULL DEFAULT '',
                     worldview_summary TEXT NOT NULL DEFAULT '',
+                    branch_of_math TEXT NOT NULL DEFAULT '',
+                    solved_world TEXT NOT NULL DEFAULT '',
+                    why_collatz_is_easy_here TEXT NOT NULL DEFAULT '',
                     concepts_json TEXT NOT NULL DEFAULT '[]',
+                    fundamental_entities_json TEXT NOT NULL DEFAULT '[]',
                     ontological_moves_json TEXT NOT NULL DEFAULT '[]',
+                    backward_translation_json TEXT NOT NULL DEFAULT '[]',
                     bridge_lemmas_json TEXT NOT NULL DEFAULT '[]',
                     reduce_frontier_or_rename TEXT NOT NULL DEFAULT '',
                     compression_power INTEGER NOT NULL DEFAULT 0,
@@ -499,6 +504,19 @@ class Database:
                 if not _column_exists(conn, "supershadow_concept", column_name):
                     conn.execute(column_sql)
             _set_user_version(conn, 14)
+            v = 14
+        if v < 15:
+            for column_sql in (
+                "ALTER TABLE supershadow_concept ADD COLUMN branch_of_math TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN solved_world TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN why_collatz_is_easy_here TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN fundamental_entities_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE supershadow_concept ADD COLUMN backward_translation_json TEXT NOT NULL DEFAULT '[]'",
+            ):
+                column_name = column_sql.split(" ADD COLUMN ", 1)[1].split(" ", 1)[0]
+                if not _column_exists(conn, "supershadow_concept", column_name):
+                    conn.execute(column_sql)
+            _set_user_version(conn, 15)
 
     def create_campaign(
         self,
@@ -3042,7 +3060,9 @@ class Database:
                     """
                     INSERT INTO supershadow_concept (
                         id, run_id, goal_id, title, worldview_summary,
-                        concepts_json, ontological_moves_json, bridge_lemmas_json,
+                        branch_of_math, solved_world, why_collatz_is_easy_here,
+                        concepts_json, fundamental_entities_json, ontological_moves_json,
+                        backward_translation_json, bridge_lemmas_json,
                         reduce_frontier_or_rename, compression_power, fit_to_known_facts,
                         ontological_delta, falsifiability, bridgeability, grounding_cost,
                         speculative_risk, concept_family, family_kind, parent_family,
@@ -3052,7 +3072,7 @@ class Database:
                         self_test_results_json, signs_of_life_json, negative_signs_json,
                         invention_lesson, super_universe_json, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cid,
@@ -3060,9 +3080,20 @@ class Database:
                         goal_id,
                         title,
                         str(concept.get("worldview_summary") or "")[:4000],
+                        str(concept.get("branch_of_math") or "")[:160],
+                        str(concept.get("solved_world") or "")[:4000],
+                        str(concept.get("why_collatz_is_easy_here") or "")[:4000],
                         json.dumps(concept.get("concepts") or [], ensure_ascii=False),
                         json.dumps(
+                            concept.get("fundamental_entities") or [],
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
                             concept.get("ontological_moves") or [], ensure_ascii=False
+                        ),
+                        json.dumps(
+                            concept.get("backward_translation") or [],
+                            ensure_ascii=False,
                         ),
                         json.dumps(concept.get("bridge_lemmas") or [], ensure_ascii=False),
                         str(concept.get("reduce_frontier_or_rename") or "")[:2000],

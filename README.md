@@ -98,15 +98,15 @@ Endpoints:
 The dashboard also includes a dedicated **Supershadow Lab** (`/supershadow`) for ontology-expanding conceptual search.
 
 - **Zero live authority**: Supershadow cannot create targets, experiments, or direct Aristotle work.
-- **Universe-first search**: discovery runs now optimize for inventing mathematical universes that could make Collatz feel easy, not for producing several equally polite concepts.
+- **Solved-world-first search**: discovery runs now optimize for inventing mathematical universes in any branch of math where Collatz would already feel easy, then working backward toward the ordinary problem.
 - **Self-testing workflow**: Supershadow first hunts 1-3 candidate universes, then attacks only the best survivor itself before deciding whether it has signs of life.
-- **Compression over novelty**: concepts are judged by whether they make several grounded facts feel structural at once, not by how exotic they sound.
+- **Compression over novelty**: concepts are judged by whether they make several grounded facts feel structural at once, not by how exotic they sound, even when the starting point is a very alien branch-level invention.
 - **Conceptual handoffs, not queue spam**: only the strongest surviving concept should emit a Shadow-facing handoff, and only after self-testing sharpens it.
 - **Incubation layer**: approving a handoff creates a tracked incubation packet rather than a live task. This preserves the conceptual leap as a first-class object instead of dissolving it into generic Shadow context.
 - **Lineage tracking**: Shadow can operationalize an incubation by citing its `source_incubation_ids`; approved live promotions can then mark that incubation as grounded contact with reality.
 - **Lifecycle visibility**: incubations move through states such as `incubating`, `operationalized`, and `grounded`, with event history shown in the Supershadow UI.
 - **Family discovery control**: Supershadow concepts now carry `concept_family`, `family_kind` (`established|adjacent|new`), `parent_family`, `smallest_transfer_probe`, and explicit “why this is not the same family again” text.
-- **Universe state tracking**: each concept also carries a `universe_status`, `conditional_theorem`, internal `self_test_results`, `signs_of_life`, `negative_signs`, and an `invention_lesson`.
+- **Universe state tracking**: each concept also carries a `branch_of_math`, `solved_world`, `why_collatz_is_easy_here`, `fundamental_entities`, `backward_translation`, `universe_status`, `conditional_theorem`, internal `self_test_results`, `signs_of_life`, `negative_signs`, and an `invention_lesson`.
 - **Rare super-universe escalation**: if a universe survives multiple internal attacks, still fits the grounded facts, and proposes a tiny Aristotle probe, Supershadow can mark it as a `super_universe_candidate` for human review.
 - **Worldview-first ranking**: concept ranking now prefers compression, fit to stubborn facts, ontological delta, and falsifiability before transfer-readiness.
 - **Anti-circling pressure**: repeated families that have not produced incubations or grounded descendants accumulate saturation penalty, but the system no longer forces artificial family diversity when one line looks substantially stronger.
@@ -133,8 +133,9 @@ Operationally, a Supershadow run now behaves like:
 ```
 grounded facts + pressure map
   -> discovery pass (1-3 universe candidates, no live authority)
+  -> describe the solved world and why Collatz is easy there
   -> pick dominant survivor
-  -> self-test pass (internal attacks, signs of life, theorem-shaped claim, optional first bridge)
+  -> self-test pass (internal attacks, signs of life, theorem-shaped claim, backward translation, optional first bridge)
   -> optional Shadow handoff for that survivor only
   -> rare super-universe candidate packet if the survivor still looks like a strong shot
 ```
@@ -146,8 +147,10 @@ Conceptually, the target loop is now:
 
 ```
 invent a universe
+  -> describe the solved world first
   -> attack it inside Supershadow
   -> look for signs of life
+  -> work backward toward ordinary Collatz
   -> deepen or kill it
   -> record what was learned about inventing stronger universes
   -> repeat

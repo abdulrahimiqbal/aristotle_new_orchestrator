@@ -78,8 +78,13 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         assert "family_novelty" in sh_cols
         assert "transfer_value" in sh_cols
         assert "family_saturation_penalty" in sh_cols
+        assert "branch_of_math" in sh_cols
+        assert "solved_world" in sh_cols
+        assert "why_collatz_is_easy_here" in sh_cols
+        assert "fundamental_entities_json" in sh_cols
+        assert "backward_translation_json" in sh_cols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 13
+        assert int(uv) >= 15
     finally:
         conn.close()
 

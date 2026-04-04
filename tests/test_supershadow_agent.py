@@ -366,11 +366,21 @@ def test_normalize_supershadow_response_preserves_super_universe_candidate() -> 
                 "title": "Odd grammar completion",
                 "concept_family": "odd_grammar_completion",
                 "family_kind": "new",
+                "branch_of_math": "symbolic dynamics",
                 "worldview_summary": "Treat odd trajectories as words in a constrained grammar.",
+                "solved_world": "Collatz is a grammar theorem forbidding admissible bad infinite words.",
+                "why_collatz_is_easy_here": "Admissibility rules force negative drift on every legal infinite word.",
                 "universe_thesis": "A grammar on odd states may forbid all nontrivial infinite words.",
                 "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
                 "concepts": ["Encode odd trajectories as admissible words."],
+                "fundamental_entities": [
+                    "Admissible odd-word alphabet",
+                    "Drift functional",
+                ],
                 "ontological_moves": ["Odd-word grammar", "Drift functional"],
+                "backward_translation": [
+                    "Map each odd iterate to a grammar letter using its residue and valuation."
+                ],
                 "explains_facts": [
                     {"fact_key": "builtin:modular_descent_mod_8"},
                     {"fact_key": "builtin:collatz_2_adic_extension"},
@@ -432,6 +442,16 @@ def test_normalize_supershadow_response_preserves_super_universe_candidate() -> 
     assert len(normalized["concepts"]) == 1
     concept = normalized["concepts"][0]
     assert concept["universe_status"] == "super_candidate"
+    assert concept["branch_of_math"] == "symbolic dynamics"
+    assert concept["solved_world"].startswith("Collatz is a grammar theorem")
+    assert concept["why_collatz_is_easy_here"].startswith("Admissibility rules force")
+    assert concept["fundamental_entities"] == [
+        "Admissible odd-word alphabet",
+        "Drift functional",
+    ]
+    assert concept["backward_translation"][0].startswith(
+        "Map each odd iterate to a grammar letter"
+    )
     assert len(concept["self_test_results"]) == 2
     assert len(concept["signs_of_life"]) == 2
     assert concept["super_universe_candidate"]["why_now"].startswith("This is the first universe")
@@ -797,11 +817,21 @@ def test_run_supershadow_global_lab_updates_universe_memory(
                             "title": "Odd grammar completion",
                             "concept_family": "odd_grammar_completion",
                             "family_kind": "new",
+                            "branch_of_math": "symbolic dynamics",
                             "worldview_summary": "Treat odd trajectories as words in a constrained grammar.",
+                            "solved_world": "Collatz is a grammar theorem forbidding admissible bad infinite words.",
+                            "why_collatz_is_easy_here": "Admissibility rules force negative drift on every legal infinite word.",
                             "universe_thesis": "A grammar on odd states may forbid all nontrivial infinite words.",
                             "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
                             "concepts": ["Encode odd trajectories as admissible words."],
+                            "fundamental_entities": [
+                                "Admissible odd-word alphabet",
+                                "Drift functional",
+                            ],
                             "ontological_moves": ["Odd-word grammar", "Drift functional"],
+                            "backward_translation": [
+                                "Map each odd iterate to a grammar letter via its residue and valuation."
+                            ],
                             "explains_facts": [
                                 {"fact_key": "builtin:modular_descent_mod_8"},
                                 {"fact_key": "builtin:collatz_2_adic_extension"},
@@ -826,11 +856,21 @@ def test_run_supershadow_global_lab_updates_universe_memory(
                         "title": "Odd grammar completion",
                         "concept_family": "odd_grammar_completion",
                         "family_kind": "new",
+                        "branch_of_math": "symbolic dynamics",
                         "worldview_summary": "Treat odd trajectories as words in a constrained grammar.",
+                        "solved_world": "Collatz is a grammar theorem forbidding admissible bad infinite words.",
+                        "why_collatz_is_easy_here": "Admissibility rules force negative drift on every legal infinite word.",
                         "universe_thesis": "A grammar on odd states may forbid all nontrivial infinite words.",
                         "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
                         "concepts": ["Encode odd trajectories as admissible words."],
+                        "fundamental_entities": [
+                            "Admissible odd-word alphabet",
+                            "Drift functional",
+                        ],
                         "ontological_moves": ["Odd-word grammar", "Drift functional"],
+                        "backward_translation": [
+                            "Map each odd iterate to a grammar letter via its residue and valuation."
+                        ],
                         "explains_facts": [
                             {"fact_key": "builtin:modular_descent_mod_8"},
                             {"fact_key": "builtin:collatz_2_adic_extension"},
@@ -905,6 +945,12 @@ def test_run_supershadow_global_lab_updates_universe_memory(
     policy = json.loads(state["policy_json"])
     memory = policy["_supershadow_universe_memory"]["odd_grammar_completion"]
     assert memory["status"] == "super_candidate"
+    assert memory["branch_of_math"] == "symbolic dynamics"
+    assert memory["solved_world"].startswith("Collatz is a grammar theorem")
+    assert memory["fundamental_entities"] == [
+        "Admissible odd-word alphabet",
+        "Drift functional",
+    ]
     assert memory["tests_run"] == 2
     assert memory["super_candidate_runs"] == 1
     assert policy["_supershadow_invention_lessons_tail"][-1].startswith(
@@ -912,3 +958,5 @@ def test_run_supershadow_global_lab_updates_universe_memory(
     )
     concepts = db.list_supershadow_concepts(SUPERSHADOW_GLOBAL_GOAL_ID, limit=10)
     assert concepts[0]["universe_status"] == "super_candidate"
+    assert concepts[0]["branch_of_math"] == "symbolic dynamics"
+    assert concepts[0]["solved_world"].startswith("Collatz is a grammar theorem")

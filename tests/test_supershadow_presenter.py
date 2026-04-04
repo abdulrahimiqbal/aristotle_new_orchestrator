@@ -97,12 +97,17 @@ def test_supershadow_presenter_surfaces_super_universe_review() -> None:
                 "id": "c-super",
                 "title": "Odd grammar completion",
                 "concepts_json": '["Encode odd trajectories as admissible words."]',
+                "fundamental_entities_json": '["Admissible odd-word alphabet","Drift functional"]',
                 "ontological_moves_json": '["Odd-word grammar"]',
+                "backward_translation_json": '["Map each odd iterate to a grammar letter via its residue and valuation."]',
                 "bridge_lemmas_json": '["Define admissible odd words."]',
                 "self_test_results_json": '[{"attack":"Try to build a bad word","result":"survived","note":"The grammar rejects it."}]',
                 "signs_of_life_json": '["The drift statement became theorem-shaped."]',
                 "negative_signs_json": '["Orbit correspondence is still incomplete."]',
                 "super_universe_json": '{"why_now":"This survived multiple attacks.","survived_attacks":["Attack A"],"full_fact_audit":{"explains":[],"awkward":[]},"smallest_aristotle_probe":"Formalize one drift lemma."}',
+                "branch_of_math": "symbolic dynamics",
+                "solved_world": "Collatz becomes a grammar theorem forbidding admissible bad infinite words.",
+                "why_collatz_is_easy_here": "Negative drift is baked into the admissibility rules.",
                 "universe_status": "super_candidate",
                 "universe_thesis": "A grammar on odd states may forbid bad infinite words.",
                 "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
@@ -139,6 +144,14 @@ def test_supershadow_presenter_surfaces_super_universe_review() -> None:
     )
 
     assert ctx["supershadow_best_concept"]["universe_status"] == "super_candidate"
+    assert ctx["supershadow_best_concept"]["branch_of_math"] == "symbolic dynamics"
+    assert ctx["supershadow_best_concept"]["fundamental_entities"] == [
+        "Admissible odd-word alphabet",
+        "Drift functional",
+    ]
+    assert ctx["supershadow_best_concept"]["backward_translation"][0].startswith(
+        "Map each odd iterate"
+    )
     assert (
         ctx["supershadow_pending_handoffs"][0]["preview"]["action_label"]
         == "Super-universe review"

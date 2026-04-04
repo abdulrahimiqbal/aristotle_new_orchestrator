@@ -492,6 +492,11 @@ def _normalize_universe_memory(raw: Any) -> dict[str, dict[str, Any]]:
             "slug": slug,
             "title": _clip_text(value.get("title"), 200).strip(),
             "status": _normalize_universe_status_value(value.get("status")),
+            "branch_of_math": _clip_text(value.get("branch_of_math"), 160).strip(),
+            "solved_world": _clip_text(value.get("solved_world"), 1200).strip(),
+            "why_collatz_is_easy_here": _clip_text(
+                value.get("why_collatz_is_easy_here"), 1200
+            ).strip(),
             "seen_count": max(0, min(999, seen_count)),
             "tests_run": max(0, min(999, tests_run)),
             "positive_signs": _str_list(
@@ -499,6 +504,12 @@ def _normalize_universe_memory(raw: Any) -> dict[str, dict[str, Any]]:
             ),
             "negative_signs": _str_list(
                 value.get("negative_signs"), max_items=4, max_item_chars=500
+            ),
+            "fundamental_entities": _str_list(
+                value.get("fundamental_entities"), max_items=4, max_item_chars=500
+            ),
+            "backward_translation": _str_list(
+                value.get("backward_translation"), max_items=4, max_item_chars=500
             ),
             "conditional_theorem": _clip_text(
                 value.get("conditional_theorem"), 1200
@@ -525,10 +536,15 @@ def _update_universe_memory(
                 "slug": slug,
                 "title": "",
                 "status": "proposed",
+                "branch_of_math": "",
+                "solved_world": "",
+                "why_collatz_is_easy_here": "",
                 "seen_count": 0,
                 "tests_run": 0,
                 "positive_signs": [],
                 "negative_signs": [],
+                "fundamental_entities": [],
+                "backward_translation": [],
                 "conditional_theorem": "",
                 "invention_lesson": "",
                 "super_candidate_runs": 0,
@@ -540,6 +556,15 @@ def _update_universe_memory(
         entry["status"] = _normalize_universe_status_value(
             concept.get("universe_status"), default=str(entry.get("status") or "proposed")
         )
+        branch_of_math = _clip_text(concept.get("branch_of_math"), 160).strip()
+        if branch_of_math:
+            entry["branch_of_math"] = branch_of_math
+        solved_world = _clip_text(concept.get("solved_world"), 1200).strip()
+        if solved_world:
+            entry["solved_world"] = solved_world
+        why_easy = _clip_text(concept.get("why_collatz_is_easy_here"), 1200).strip()
+        if why_easy:
+            entry["why_collatz_is_easy_here"] = why_easy
         entry["seen_count"] = int(entry.get("seen_count") or 0) + 1
         entry["tests_run"] = int(entry.get("tests_run") or 0) + len(
             concept.get("self_test_results") or []
@@ -550,6 +575,12 @@ def _update_universe_memory(
         entry["negative_signs"] = _str_list(
             concept.get("negative_signs"), max_items=4, max_item_chars=500
         ) or list(entry.get("negative_signs") or [])
+        entry["fundamental_entities"] = _str_list(
+            concept.get("fundamental_entities"), max_items=4, max_item_chars=500
+        ) or list(entry.get("fundamental_entities") or [])
+        entry["backward_translation"] = _str_list(
+            concept.get("backward_translation"), max_items=4, max_item_chars=500
+        ) or list(entry.get("backward_translation") or [])
         conditional_theorem = _clip_text(concept.get("conditional_theorem"), 1200).strip()
         if conditional_theorem:
             entry["conditional_theorem"] = conditional_theorem
@@ -930,17 +961,22 @@ Critical constraint:
 
 Mission:
 - Invent new mathematical universes that could make Collatz feel easy instead of stubborn.
-- Optimize for worldview power first: ask what ambient world, operator, grammar, energy, completion, or geometry would make the theorem feel almost tautological.
+- Work backwards from solved worlds: first imagine a world where Collatz is almost tautological, then ask what primitives, laws, or translations would make that world meaningful.
+- Optimize for worldview power first: ask what ambient world, operator, grammar, energy, completion, geometry, logic, algebra, dynamical system, category, or symbolic language would make the theorem feel almost tautological.
 - Run the universe loop inside your own response: invent, self-attack, look for signs of life, then either deepen, downgrade, or kill the universe.
-- Stay grounded against the fact basis, but do not force discovery to look prematurely respectable.
+- Stay grounded against the fact basis eventually, but do not force discovery to look prematurely respectable.
 - A weird universe that survives attack is better than a polished restatement of modular folklore.
 
 You must explicitly search over language shifts such as:
+- entirely new primitives, operations, symbols, or laws
 - new state spaces
 - completions or compactifications
 - new conserved or Lyapunov-like quantities
 - symbolic-dynamics or grammar views of trajectories
 - renormalization or scaling operators
+- non-associative, tropical, or operator-theoretic algebras
+- geometric, topological, or categorical ambient worlds
+- logical, model-theoretic, or information-theoretic reformulations
 - algebraic encodings of parity dynamics
 - dual descriptions where descent is easier
 - embeddings where Collatz becomes linear, contractive, monotone, or spectrally constrained
@@ -957,11 +993,16 @@ Your output is STRICT JSON with this shape:
       "family_kind": "established|adjacent|new",
       "parent_family": "required when family_kind is adjacent, else empty string",
       "why_not_same_as_existing_family": "why this is genuinely a new or adjacent universe rather than a restatement",
+      "branch_of_math": "operator theory|logic|algebra|topology|symbolic dynamics|new arithmetic|etc",
       "worldview_summary": "why this universe matters",
+      "solved_world": "describe the world where Collatz becomes easy",
+      "why_collatz_is_easy_here": "what mechanism or law makes Collatz almost tautological in that world",
       "universe_thesis": "one-sentence thesis for why this universe could make Collatz natural",
       "conditional_theorem": "if this universe is right, what theorem-shaped claim would imply Collatz or sharply reduce the frontier",
       "concepts": ["first conceptual claim", "second conceptual claim"],
+      "fundamental_entities": ["new primitive symbol", "new law", "new ambient object"],
       "ontological_moves": ["new ambient space", "new operator", "new quotient"],
+      "backward_translation": ["how ordinary Collatz data would embed into this world"],
       "explains_facts": [
         {
           "fact_key": "must refer to a grounded fact key from the user message",
@@ -1042,6 +1083,8 @@ Rules:
 - If you repeat an existing family, you must explain what changed and why this is not the same family again.
 - Supershadow should not be rewarded for novelty alone. High ontological delta without compression is weak.
 - A good concept names a mechanism, a theorem-shaped claim, and the best reason it could still collapse.
+- Prefer universes that first make Collatz easy and then work backward to explain the known facts.
+- It is acceptable to invent a new primitive, operation, or branch-level object if it makes the theorem structurally easy.
 - A concept that merely renames the frontier should score poorly.
 - Emit super_universe_candidate only rarely, and only when the universe survives multiple self-attacks, explains multiple grounded facts, names a theorem-shaped claim, and proposes a tiny Aristotle probe.
 - Only the single strongest surviving concept should emit a shadow_handoff, and only if it also has a sharp falsifier plus at least one credible bridge lemma.
@@ -1057,6 +1100,7 @@ Goal:
 - attack this universe as if you want to kill it,
 - record whether it survives, strengthens, or collapses,
 - if it survives, sharpen it into the minimum theorem-shaped claim,
+- preserve the solved-world picture: explain exactly why Collatz would be easy there before worrying about backward translation,
 - preserve the conceptual leap if it still looks alive,
 - add only the smallest bridge back to Shadow and Lean that the idea truly earns,
 - escalate to a super-universe candidate only if the universe looks like a genuinely strong shot.
@@ -1065,6 +1109,7 @@ Return STRICT JSON with the same top-level shape as discovery, but:
 - emit exactly 1 concept,
 - focus on the same dominant family unless the candidate clearly collapses,
 - include at least 2 self_test_results when possible,
+- keep the branch_of_math, solved_world, why_collatz_is_easy_here, fundamental_entities, and backward_translation sharp and concrete,
 - keep only 1 to 2 kill tests,
 - include bridge_lemmas only if they are concrete first-bridge statements,
 - emit super_universe_candidate only if the universe survives multiple attacks, still fits the data, and has a narrow Aristotle probe,
@@ -1111,11 +1156,18 @@ def _infer_concept_scores(
             str(concept.get("title") or ""),
             str(concept.get("concept_family") or ""),
             str(concept.get("family_kind") or ""),
+            str(concept.get("branch_of_math") or ""),
+            str(concept.get("solved_world") or ""),
+            str(concept.get("why_collatz_is_easy_here") or ""),
             str(concept.get("why_not_same_as_existing_family") or ""),
             str(concept.get("smallest_transfer_probe") or ""),
             str(concept.get("worldview_summary") or ""),
+            str(concept.get("universe_thesis") or ""),
+            str(concept.get("conditional_theorem") or ""),
             " ".join(str(item) for item in concept.get("concepts") or []),
+            " ".join(str(item) for item in concept.get("fundamental_entities") or []),
             " ".join(str(item) for item in concept.get("ontological_moves") or []),
+            " ".join(str(item) for item in concept.get("backward_translation") or []),
             str(concept.get("reduce_frontier_or_rename") or ""),
         ]
     ).lower()
@@ -1128,6 +1180,11 @@ def _infer_concept_scores(
     conditional_theorem = _clip_text(concept.get("conditional_theorem"), 1200).strip()
     super_universe_candidate = concept.get("super_universe_candidate") or {}
     tensions = concept.get("tensions") or []
+    solved_world = _clip_text(concept.get("solved_world"), 1600).strip()
+    why_easy = _clip_text(concept.get("why_collatz_is_easy_here"), 1600).strip()
+    branch_of_math = _clip_text(concept.get("branch_of_math"), 160).strip()
+    backward_translation = concept.get("backward_translation") or []
+    fundamental_entities = concept.get("fundamental_entities") or []
     family_kind = _normalize_family_kind(concept.get("family_kind"))
     smallest_transfer_probe = _clip_text(
         concept.get("smallest_transfer_probe"), 1200
@@ -1143,7 +1200,13 @@ def _infer_concept_scores(
     )
     compression = min(
         5,
-        max(1, explained_count + (1 if conditional_theorem else 0) + min(1, len(signs_of_life))),
+        max(
+            1,
+            explained_count
+            + (1 if conditional_theorem else 0)
+            + min(1, len(signs_of_life))
+            + (1 if solved_world and why_easy else 0),
+        ),
     )
     fit = min(
         5,
@@ -1155,7 +1218,14 @@ def _infer_concept_scores(
             + min(1, len(signs_of_life)),
         ),
     )
-    ontological_delta = min(5, max(1, len(concept.get("ontological_moves") or [])))
+    ontological_delta = min(
+        5,
+        max(
+            1,
+            len(concept.get("ontological_moves") or [])
+            + min(2, len(fundamental_entities)),
+        ),
+    )
     falsifiability = min(
         5,
         max(
@@ -1174,9 +1244,12 @@ def _infer_concept_scores(
     bridgeability = min(5, bridgeability)
     grounding_cost = 2
     speculative_risk = 2
-    if any(token in title_blob for token in ("axiom", "foundational", "foundation shift")):
-        grounding_cost = 5
-        speculative_risk = 5
+    if any(
+        token in title_blob
+        for token in ("axiom", "foundational", "foundation shift", "primitive", "new law")
+    ):
+        grounding_cost = 4
+        speculative_risk = 4
     elif any(token in title_blob for token in ("compactification", "completion", "spectral", "functorial", "category")):
         grounding_cost = 3
         speculative_risk = 3
@@ -1194,6 +1267,8 @@ def _infer_concept_scores(
         family_novelty = 4
     if why_not_same:
         family_novelty = min(5, family_novelty + 1)
+    if branch_of_math:
+        family_novelty = min(5, family_novelty + 1)
 
     transfer_value = 1
     if smallest_transfer_probe:
@@ -1209,6 +1284,10 @@ def _infer_concept_scores(
     if signs_of_life:
         transfer_value += 1
     if super_universe_candidate:
+        transfer_value += 1
+    if solved_world and why_easy:
+        transfer_value += 1
+    if backward_translation:
         transfer_value += 1
     transfer_value = min(5, transfer_value)
 
@@ -1499,6 +1578,15 @@ def _normalize_shadow_handoffs(
             "title": title,
             "summary": summary,
             "why_compressive": why_compressive,
+            "branch_of_math": str(concept.get("branch_of_math") or ""),
+            "solved_world": str(concept.get("solved_world") or ""),
+            "why_collatz_is_easy_here": str(
+                concept.get("why_collatz_is_easy_here") or ""
+            ),
+            "universe_thesis": str(concept.get("universe_thesis") or ""),
+            "conditional_theorem": str(concept.get("conditional_theorem") or ""),
+            "fundamental_entities": list(concept.get("fundamental_entities") or []),
+            "backward_translation": list(concept.get("backward_translation") or []),
             "bridge_lemmas": bridge_lemmas,
             "shadow_task": shadow_task,
             "recommended_next_step": recommended_next_step,
@@ -1555,6 +1643,15 @@ def _default_handoff_payload(concept: dict[str, Any]) -> list[dict[str, Any]]:
             "why_compressive": (
                 f"Preserves the concept family '{concept.get('concept_family')}' while testing a smaller actionable descendant."
             ),
+            "branch_of_math": str(concept.get("branch_of_math") or ""),
+            "solved_world": str(concept.get("solved_world") or ""),
+            "why_collatz_is_easy_here": str(
+                concept.get("why_collatz_is_easy_here") or ""
+            ),
+            "universe_thesis": str(concept.get("universe_thesis") or ""),
+            "conditional_theorem": str(concept.get("conditional_theorem") or ""),
+            "fundamental_entities": list(concept.get("fundamental_entities") or []),
+            "backward_translation": list(concept.get("backward_translation") or []),
             "bridge_lemmas": list(concept.get("bridge_lemmas") or []),
             "shadow_task": probe
             or _clip_text(
@@ -1681,10 +1778,19 @@ def _normalize_supershadow_response(
         concept = {
             "title": title,
             **family_fields,
+            "branch_of_math": _clip_text(
+                concept_raw.get("branch_of_math"), 160
+            ).strip(),
             "worldview_summary": _clip_text(
                 concept_raw.get("worldview_summary"), 2000
             ).strip()
             or worldview_summary,
+            "solved_world": _clip_text(
+                concept_raw.get("solved_world"), 2000
+            ).strip(),
+            "why_collatz_is_easy_here": _clip_text(
+                concept_raw.get("why_collatz_is_easy_here"), 2000
+            ).strip(),
             "universe_thesis": _clip_text(
                 concept_raw.get("universe_thesis"), 1200
             ).strip()
@@ -1696,8 +1802,18 @@ def _normalize_supershadow_response(
             "concepts": _str_list(
                 concept_raw.get("concepts"), max_items=8, max_item_chars=600
             ),
+            "fundamental_entities": _str_list(
+                concept_raw.get("fundamental_entities"),
+                max_items=8,
+                max_item_chars=600,
+            ),
             "ontological_moves": _str_list(
                 concept_raw.get("ontological_moves"), max_items=8, max_item_chars=600
+            ),
+            "backward_translation": _str_list(
+                concept_raw.get("backward_translation"),
+                max_items=8,
+                max_item_chars=600,
             ),
             "explains_facts": explains_facts,
             "tensions": _normalize_tensions(concept_raw.get("tensions")),
@@ -1810,13 +1926,19 @@ def _build_supershadow_user_message(
         "Invent the one strongest mathematical universe that could make Collatz feel easy."
     )
     lines.append(
+        "Search across any branch of math, not just arithmetic. It is valid to invent a new primitive, law, operator, space, logic, category, geometry, or symbolic language if that world makes Collatz structurally easy."
+    )
+    lines.append(
         "Supershadow is not allowed to create live work. Do not output executable targets, experiments, or Aristotle tasks."
     )
     lines.append(
         "Run the universe loop yourself: invent, self-attack, look for signs of life, then either deepen or kill the universe."
     )
     lines.append(
-        "Discovery first: a good universe explains grounded facts and names a sharp kill-test, even if the first bridge lemma is not clear yet."
+        "Work backwards from solved worlds: first describe why Collatz becomes almost tautological there, then explain how ordinary Collatz data could translate into that world."
+    )
+    lines.append(
+        "Discovery first: a good universe explains grounded facts eventually and names a sharp kill-test, even if the first bridge lemma is not clear yet."
     )
     lines.append(
         "Prefer one dominant line over performative family diversity when a single worldview looks alive."
@@ -1908,11 +2030,30 @@ def _build_supershadow_user_message(
         )
         for row in universe_rows[:10]:
             lines.append(
-                f"- universe={row.get('slug')} | status={row.get('status')} | seen={row.get('seen_count')} | tests={row.get('tests_run')} | super_candidate_runs={row.get('super_candidate_runs')}"
+                f"- universe={row.get('slug')} | branch={row.get('branch_of_math') or 'unspecified'} | status={row.get('status')} | seen={row.get('seen_count')} | tests={row.get('tests_run')} | super_candidate_runs={row.get('super_candidate_runs')}"
             )
+            if row.get("solved_world"):
+                lines.append(
+                    f"  solved_world: {_clip_text(row.get('solved_world'), 700)}"
+                )
+            if row.get("why_collatz_is_easy_here"):
+                lines.append(
+                    "  why_easy: "
+                    + _clip_text(row.get("why_collatz_is_easy_here"), 700)
+                )
             if row.get("conditional_theorem"):
                 lines.append(
                     f"  conditional_theorem: {_clip_text(row.get('conditional_theorem'), 700)}"
+                )
+            if row.get("fundamental_entities"):
+                lines.append(
+                    "  fundamental_entities: "
+                    + " | ".join(row.get("fundamental_entities") or [])[:700]
+                )
+            if row.get("backward_translation"):
+                lines.append(
+                    "  backward_translation: "
+                    + " | ".join(row.get("backward_translation") or [])[:700]
                 )
             if row.get("positive_signs"):
                 lines.append(
@@ -2053,7 +2194,8 @@ async def run_supershadow_global_lab(
                 SUPERSHADOW_SYSTEM.encode("utf-8")
             ).hexdigest(),
             "user_prompt_sha256": hashlib.sha256(user.encode("utf-8")).hexdigest(),
-            "schema_version": 2,
+            "schema_version": 3,
+            "search_mode": "solved_world_any_branch",
             "trigger_kind": trigger_kind,
             "handoff_budget": handoff_budget,
             "suppress_handoffs_reason": suppress_handoffs_reason or "",
@@ -2180,7 +2322,15 @@ async def run_supershadow_global_lab(
                 {
                     "concept_family": str(concept.get("concept_family") or ""),
                     "title": str(concept.get("title") or ""),
+                    "branch_of_math": str(concept.get("branch_of_math") or ""),
                     "status": str(concept.get("universe_status") or ""),
+                    "solved_world": str(concept.get("solved_world") or ""),
+                    "why_collatz_is_easy_here": str(
+                        concept.get("why_collatz_is_easy_here") or ""
+                    ),
+                    "conditional_theorem": str(
+                        concept.get("conditional_theorem") or ""
+                    ),
                     "signs_of_life": list(concept.get("signs_of_life") or [])[:2],
                 }
                 for concept in normalized.get("concepts") or []
@@ -2217,9 +2367,9 @@ async def run_supershadow_global_lab(
             "distillation_output": distillation_normalized or {},
             "fact_basis": fact_basis,
             "pressure_map": pressure_map,
-                "family_memory": family_memory,
-                "universe_memory": universe_memory,
-                "meta": {
+            "family_memory": family_memory,
+            "universe_memory": universe_memory,
+            "meta": {
                 **request_meta,
                 "validation_warnings": validation_warnings,
                 "raw_preview": _clip_text(raw, 4000),
