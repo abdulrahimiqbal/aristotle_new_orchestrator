@@ -256,6 +256,59 @@ def test_normalize_supershadow_response_prefers_new_family_and_synthesizes_probe
     assert "stale_family_suppressed" in warnings
 
 
+def test_normalize_supershadow_response_keeps_discovery_concept_without_bridge_lemma() -> None:
+    fact_basis = [
+        {
+            "fact_key": "builtin:modular_descent_mod_8",
+            "label": "Mod 8 descent is grounded.",
+            "detail": "detail",
+            "kind": "modular",
+            "provenance": "builtin_seed",
+        },
+        {
+            "fact_key": "builtin:naive_height_survives_odd_inputs",
+            "label": "Naive height survives on odd inputs.",
+            "detail": "detail",
+            "kind": "odd_subdynamics",
+            "provenance": "builtin_seed",
+        },
+    ]
+    raw = {
+        "worldview_summary": "Keep the board focused on one live idea.",
+        "run_summary": "One bridge-free concept survives discovery.",
+        "concepts": [
+            {
+                "title": "Odd-state split without bridge",
+                "concept_family": "odd_state_split",
+                "family_kind": "new",
+                "worldview_summary": "Odd dynamics may need their own ambient state space before any formal interface is clear.",
+                "concepts": ["Treat even transport as derived structure rather than native state."],
+                "ontological_moves": ["Odd-state split", "Derived even transport"],
+                "explains_facts": [
+                    {"fact_key": "builtin:modular_descent_mod_8"},
+                    {"fact_key": "builtin:naive_height_survives_odd_inputs"},
+                ],
+                "kill_tests": [
+                    {
+                        "description": "Check whether the induced odd-only update rule preserves the proposed state class.",
+                        "expected_failure_signal": "The class breaks on the first odd residue obstruction.",
+                    }
+                ],
+                "smallest_transfer_probe": "Find the first odd-state obstruction class.",
+            }
+        ],
+    }
+
+    normalized, warnings = _normalize_supershadow_response(
+        raw, fact_basis, [], max_handoffs=0
+    )
+
+    assert len(normalized["concepts"]) == 1
+    assert normalized["concepts"][0]["title"] == "Odd-state split without bridge"
+    assert normalized["concepts"][0]["bridge_lemmas"] == []
+    assert "concept_missing_bridge_lemmas" in warnings
+
+
 def test_normalize_supershadow_response_blocks_stale_exact_title_repeats() -> None:
     fact_basis = [
         {
@@ -333,16 +386,58 @@ def test_run_supershadow_global_lab_can_think_without_emitting_handoffs(
 ) -> None:
     db = Database(str(tmp_path / "run.db"))
     db.initialize()
+    calls = {"count": 0}
 
     async def fake_invoke_llm(*args, **kwargs) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return json.dumps(
+                {
+                    "worldview_summary": "Keep searching for a compact odd-state language.",
+                    "run_summary": "The concept is promising but still underdistilled.",
+                    "concepts": [
+                        {
+                            "title": "Odd-state quotient",
+                            "worldview_summary": "A quotient may compress the odd-input survival phenomenon.",
+                            "concepts": ["Model even transport as a derived odd-state operator."],
+                            "ontological_moves": ["Odd-state quotient"],
+                            "explains_facts": [
+                                {"fact_key": "builtin:modular_descent_mod_8"},
+                                {"fact_key": "builtin:naive_height_survives_odd_inputs"},
+                            ],
+                            "tensions": [{"text": "Needs to explain the global failure mode."}],
+                            "kill_tests": [
+                                {
+                                    "description": "Check quotient invariance on the first obstructing residue.",
+                                    "expected_failure_signal": "The residue leaves the quotient instantly.",
+                                    "suggested_grounding_path": "Shadow should only formalize the quotient interface.",
+                                }
+                            ],
+                            "smallest_transfer_probe": "Identify the first obstructing odd residue class.",
+                            "reduce_frontier_or_rename": "Only reduces the frontier if it predicts the odd-only invariant window.",
+                            "scores": {
+                                "compression_power": 5,
+                                "fit_to_known_facts": 5,
+                                "ontological_delta": 4,
+                                "falsifiability": 4,
+                                "bridgeability": 1,
+                                "grounding_cost": 2,
+                                "speculative_risk": 2,
+                            },
+                        }
+                    ],
+                }
+            )
         return json.dumps(
             {
-                "worldview_summary": "Keep searching for a compact odd-state language.",
+                "worldview_summary": "Distill the quotient into one falsifier and one bridge.",
                 "run_summary": "The concept is not ready for Shadow yet.",
                 "concepts": [
                     {
                         "title": "Odd-state quotient",
-                        "worldview_summary": "A quotient may compress the odd-input survival phenomenon.",
+                        "concept_family": "odd_state_quotient",
+                        "family_kind": "new",
+                        "worldview_summary": "Sharpen the quotient into a single falsifiable interface claim.",
                         "concepts": ["Model even transport as a derived odd-state operator."],
                         "ontological_moves": ["Odd-state quotient"],
                         "explains_facts": [
@@ -360,26 +455,8 @@ def test_run_supershadow_global_lab_can_think_without_emitting_handoffs(
                         "bridge_lemmas": [
                             "Define the odd-state quotient and prove one-step compatibility."
                         ],
+                        "smallest_transfer_probe": "Formalize the quotient operator on one odd residue class.",
                         "reduce_frontier_or_rename": "Only reduces the frontier if it predicts the odd-only invariant window.",
-                        "scores": {
-                            "compression_power": 5,
-                            "fit_to_known_facts": 5,
-                            "ontological_delta": 4,
-                            "falsifiability": 4,
-                            "bridgeability": 4,
-                            "grounding_cost": 2,
-                            "speculative_risk": 2,
-                        },
-                        "shadow_handoffs": [
-                            {
-                                "title": "Formalize quotient",
-                                "summary": "Shadow should operationalize this if budget allows.",
-                                "why_compressive": "Connects two grounded facts with one language shift.",
-                                "bridge_lemmas": ["Lemma A"],
-                                "shadow_task": "Build the quotient proof program.",
-                                "recommended_next_step": "Define the quotient operator.",
-                            }
-                        ],
                     }
                 ],
             }
@@ -399,6 +476,122 @@ def test_run_supershadow_global_lab_can_think_without_emitting_handoffs(
     )
 
     assert result["ok"] is True
+    assert calls["count"] == 2
     assert result["handoff_count"] == 0
     assert "handoff_budget_zero" in result["validation_warnings"]
     assert db.list_supershadow_handoff_requests(SUPERSHADOW_GLOBAL_GOAL_ID, limit=10) == []
+
+
+def test_run_supershadow_global_lab_distills_top_concept_before_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    db = Database(str(tmp_path / "distill.db"))
+    db.initialize()
+    calls = {"count": 0}
+
+    async def fake_invoke_llm(*args, **kwargs) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return json.dumps(
+                {
+                    "worldview_summary": "One odd-state line is clearly strongest.",
+                    "run_summary": "Discovery keeps one dominant candidate and one backup.",
+                    "concepts": [
+                        {
+                            "title": "Odd-state quotient",
+                            "concept_family": "odd_state_quotient",
+                            "family_kind": "new",
+                            "worldview_summary": "A quotient may make modular and odd-input behavior structural at once.",
+                            "concepts": ["Push even transport into a derived odd-state operator."],
+                            "ontological_moves": ["Odd-state quotient"],
+                            "explains_facts": [
+                                {"fact_key": "builtin:modular_descent_mod_8"},
+                                {"fact_key": "builtin:naive_height_survives_odd_inputs"},
+                            ],
+                            "tensions": [{"text": "Still must explain the global height failure."}],
+                            "kill_tests": [
+                                {
+                                    "description": "Check whether the derived odd operator preserves the proposed quotient class.",
+                                    "expected_failure_signal": "The quotient breaks on the first obstructing residue.",
+                                }
+                            ],
+                            "smallest_transfer_probe": "Locate the first obstructing odd residue class.",
+                        },
+                        {
+                            "title": "Backup lens",
+                            "concept_family": "backup_lens",
+                            "family_kind": "adjacent",
+                            "worldview_summary": "A weaker backup language.",
+                            "concepts": ["Backup."],
+                            "ontological_moves": ["Backup move"],
+                            "explains_facts": [{"fact_key": "builtin:modular_descent_mod_8"}],
+                            "kill_tests": [{"description": "Try it."}],
+                            "bridge_lemmas": ["Backup lemma"],
+                        },
+                    ],
+                }
+            )
+        return json.dumps(
+            {
+                "worldview_summary": "Distill the dominant line only.",
+                "run_summary": "The quotient now has one sharp bridge.",
+                "concepts": [
+                    {
+                        "title": "Odd-state quotient",
+                        "concept_family": "odd_state_quotient",
+                        "family_kind": "new",
+                        "worldview_summary": "A quotient may make modular and odd-input behavior structural at once.",
+                        "concepts": ["Push even transport into a derived odd-state operator."],
+                        "ontological_moves": ["Odd-state quotient"],
+                        "explains_facts": [
+                            {"fact_key": "builtin:modular_descent_mod_8"},
+                            {"fact_key": "builtin:naive_height_survives_odd_inputs"},
+                        ],
+                        "tensions": [{"text": "Still must explain the global height failure."}],
+                        "kill_tests": [
+                            {
+                                "description": "Check whether the derived odd operator preserves the proposed quotient class.",
+                                "expected_failure_signal": "The quotient breaks on the first obstructing residue.",
+                                "suggested_grounding_path": "Formalize the quotient interface on one residue class.",
+                            }
+                        ],
+                        "bridge_lemmas": [
+                            "Define the odd-state quotient and prove one-step compatibility."
+                        ],
+                        "smallest_transfer_probe": "Formalize the quotient operator on one odd residue class.",
+                        "shadow_handoffs": [
+                            {
+                                "title": "Distill the odd-state quotient",
+                                "summary": "Shadow should pressure-test the first bridge lemma.",
+                                "why_compressive": "This one line explains modular and odd-input structure together.",
+                                "bridge_lemmas": [
+                                    "Define the odd-state quotient and prove one-step compatibility."
+                                ],
+                                "shadow_task": "Build the proof program around the quotient interface.",
+                                "recommended_next_step": "Formalize the quotient operator on one residue class.",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr("orchestrator.supershadow_agent.invoke_llm", fake_invoke_llm)
+    monkeypatch.setattr(app_config, "LLM_API_KEY", "test-key")
+
+    result = asyncio.run(
+        run_supershadow_global_lab(
+            db,
+            goal_text="goal",
+            trigger_kind="manual",
+            handoff_budget=1,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls["count"] == 2
+    assert result["handoff_count"] == 1
+    handoffs = db.list_supershadow_handoff_requests(SUPERSHADOW_GLOBAL_GOAL_ID, limit=10)
+    assert len(handoffs) == 1
+    concepts = db.list_supershadow_concepts(SUPERSHADOW_GLOBAL_GOAL_ID, limit=10)
+    assert concepts[0]["title"] == "Odd-state quotient"

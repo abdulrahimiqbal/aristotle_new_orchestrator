@@ -30,18 +30,18 @@ def _load_json_object(raw: Any) -> dict[str, Any]:
 
 def _concept_sort_key(
     concept: dict[str, Any]
-) -> tuple[int, int, int, int, int, int, int, int, int, str, str]:
+) -> tuple[Any, ...]:
     return (
-        int(concept.get("transfer_value") or 0),
-        int(concept.get("family_novelty") or 0),
-        -int(concept.get("family_saturation_penalty") or 0),
         int(concept.get("compression_power") or 0),
         int(concept.get("fit_to_known_facts") or 0),
-        int(concept.get("bridgeability") or 0),
-        int(concept.get("falsifiability") or 0),
-        -int(concept.get("grounding_cost") or 0),
-        -int(concept.get("speculative_risk") or 0),
         int(concept.get("ontological_delta") or 0),
+        int(concept.get("falsifiability") or 0),
+        int(concept.get("family_novelty") or 0),
+        int(concept.get("transfer_value") or 0),
+        -int(concept.get("family_saturation_penalty") or 0),
+        int(concept.get("bridgeability") or 0),
+        -int(concept.get("speculative_risk") or 0),
+        -int(concept.get("grounding_cost") or 0),
         str(concept.get("family_kind") or ""),
         str(concept.get("concept_family") or ""),
         str(concept.get("created_at") or ""),
@@ -118,21 +118,21 @@ def _build_next_step(
         return {
             "title": "Generate the first conceptual sweep",
             "body": (
-                "Run Supershadow to search for language shifts, ambient spaces, and bridgeable concepts."
+                "Run Supershadow to search for a dominant new language, then distill the best survivor into a falsifier and first bridge."
             ),
         }
     if best_concept and int(best_concept.get("compression_power") or 0) >= 4:
         return {
-            "title": "Interrogate the strongest concept",
+            "title": "Pressure-test the dominant worldview",
             "body": (
-                "Start with the highest-compression concept below and decide whether its kill-test and bridge lemmas are sharp enough for Shadow."
+                "Start with the strongest concept below. Ask whether its kill-test is sharp and whether the first bridge is earned rather than decorative."
             ),
         }
     if concept_count > 0:
         return {
-            "title": "Broaden the conceptual search",
+            "title": "Keep refining the board",
             "body": (
-                "There are concepts on the board, but nothing is clearly ready for Shadow yet. Generate another pass after more evidence lands."
+                "There are concepts on the board, but no dominant survivor yet. Generate another pass and look for a stronger worldview instead of polishing weak bridges."
             ),
         }
     return {

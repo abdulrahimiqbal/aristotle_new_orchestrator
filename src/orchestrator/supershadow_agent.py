@@ -156,8 +156,8 @@ def _supershadow_json_retry_user_message(user: str) -> str:
         user
         + "\n\nIMPORTANT: Return only one valid JSON object."
         + " No markdown fences, no commentary, no executable live task fields."
-        + " Keep the response compact: no more than 6 concepts,"
-        + " no more than 2 shadow_handoffs total,"
+        + " Keep the response compact: no more than 3 concepts,"
+        + " no more than 1 shadow_handoff total,"
         + " and keep long text fields under 700 characters."
     )
 
@@ -168,9 +168,9 @@ def _supershadow_json_repair_user_message(raw: str) -> str:
         "Your previous answer was invalid JSON."
         " Rewrite it as ONE valid JSON object matching the requested schema.\n"
         "Keep only the highest-signal concepts and stay compact:\n"
-        "- at most 6 concepts\n"
-        "- at most 2 shadow handoffs total\n"
-        "- every concept must explain grounded facts, include a kill test, and include bridge lemmas\n"
+        "- at most 3 concepts\n"
+        "- at most 1 shadow handoff total\n"
+        "- every concept must explain grounded facts and include a kill test\n"
         "- return ONLY JSON\n\n"
         "Invalid draft to repair:\n"
         f"{preview}"
@@ -567,10 +567,11 @@ Critical constraint:
 Mission:
 - Search for ontology-expanding ideas of the kind that once looked strange but later became the right language:
   negative numbers, irrational numbers, imaginary numbers, p-adics, distributions, and similar shifts.
-- Optimize for compression, not novelty.
+- Optimize for worldview power first: look for the one language shift that would make the problem feel newly legible.
 - Search for the smallest conceptual enlargement that makes multiple grounded facts feel natural at once.
 - Aggressively explore whether the right language is different.
-- Stay tethered to known facts, falsifiability, and grounding cost.
+- Stay tethered to known facts and falsifiability, but do not force every idea to look immediately formalization-ready.
+- It is acceptable if only one concept in the run is genuinely alive; do not pad the run with polite filler.
 
 You must explicitly search over language shifts such as:
 - new state spaces
@@ -647,20 +648,40 @@ Your output is STRICT JSON with this shape:
 }
 
 Rules:
-- 3 to 6 concepts.
-- If possible, include at least:
-  1 established-family exploit,
-  1 adjacent-family concept,
-  and 1 genuinely new family.
+- 1 to 3 concepts.
+- Prefer one dominant line over family diversity when one worldview looks substantially more promising than the others.
 - If a family is marked stalled or repeatedly appears without transfer, avoid emitting it again unless you can name a materially cheaper smallest_transfer_probe and a concrete reason this pass is different.
-- Every concept must explain grounded facts, include at least one kill test, and include bridge lemmas.
-- Every concept must declare a concept_family and the smallest_transfer_probe that would make it actionable for Shadow.
+- Every concept must explain grounded facts and include at least one kill test.
+- Bridge lemmas are optional during discovery; include them only when you can name a sharp first bridge instead of vague formalization theater.
+- Every concept must declare a concept_family and, when possible, the smallest_transfer_probe that would make it actionable for Shadow.
 - If you repeat an existing family, you must explain what changed and why this is not the same family again.
 - Supershadow should not be rewarded for novelty alone. High ontological delta without compression is weak.
 - A good concept explains multiple grounded facts at once and makes awkward facts feel natural.
 - A concept that merely renames the frontier should score poorly.
+- Only the single strongest surviving concept should emit a shadow_handoff, and only if it also has a sharp falsifier plus at least one credible bridge lemma.
 - No direct live-work fields such as campaign_id, target_id, objective, move_kind, new_experiment, new_target, or Aristotle instructions.
 - Keep JSON valid. No markdown fences."""
+
+
+SUPERSHADOW_DISTILLATION_SYSTEM = """You are Supershadow Distillation: the second pass after conceptual discovery.
+
+Input: one candidate worldview that already looks promising.
+
+Goal:
+- sharpen that worldview into the minimum falsifiable thesis,
+- preserve the conceptual leap if it still looks alive,
+- add only the smallest bridge back to Shadow and Lean that the idea truly earns,
+- avoid widening the search or inventing backup concepts.
+
+Return STRICT JSON with the same top-level shape as Supershadow discovery, but:
+- emit exactly 1 concept,
+- focus on the same dominant family unless the candidate clearly collapses,
+- keep only 1 to 2 kill tests,
+- include bridge_lemmas only if they are concrete first-bridge statements,
+- emit at most 1 shadow_handoff, and only if the concept now has a sharp falsifier and at least one credible bridge lemma.
+
+Do not introduce live work, campaigns, targets, or Aristotle instructions.
+Keep JSON valid. No markdown fences."""
 
 
 def _score_in_range(value: Any, default: int = 0) -> int:
@@ -1063,19 +1084,19 @@ def _normalize_shadow_handoffs(
 
 def _concept_sort_key(
     concept: dict[str, Any]
-) -> tuple[int, int, int, int, int, int, int, int, int, str]:
+) -> tuple[Any, ...]:
     scores = concept.get("scores") or {}
     return (
-        int(scores.get("transfer_value") or 0),
-        int(scores.get("family_novelty") or 0),
-        -int(scores.get("family_saturation_penalty") or 0),
         int(scores.get("compression_power") or 0),
         int(scores.get("fit_to_known_facts") or 0),
-        int(scores.get("bridgeability") or 0),
-        int(scores.get("falsifiability") or 0),
-        -int(scores.get("grounding_cost") or 0),
-        -int(scores.get("speculative_risk") or 0),
         int(scores.get("ontological_delta") or 0),
+        int(scores.get("falsifiability") or 0),
+        int(scores.get("family_novelty") or 0),
+        int(scores.get("transfer_value") or 0),
+        -int(scores.get("family_saturation_penalty") or 0),
+        int(scores.get("bridgeability") or 0),
+        -int(scores.get("speculative_risk") or 0),
+        -int(scores.get("grounding_cost") or 0),
         str(concept.get("concept_family") or ""),
     )
 
@@ -1099,41 +1120,28 @@ def _default_handoff_payload(concept: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _select_family_diverse_concepts(
-    concepts: list[dict[str, Any]], warnings: list[str]
+def _select_breakthrough_candidates(
+    concepts: list[dict[str, Any]], warnings: list[str], *, limit: int
 ) -> list[dict[str, Any]]:
-    by_family: dict[str, list[dict[str, Any]]] = {}
+    if limit <= 0:
+        return []
+    by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for concept in concepts:
-        family = str(concept.get("concept_family") or "")
-        by_family.setdefault(family, []).append(concept)
+        key = (
+            str(concept.get("concept_family") or ""),
+            str(concept.get("title") or "").strip().lower(),
+        )
+        by_identity.setdefault(key, []).append(concept)
     unique: list[dict[str, Any]] = []
-    for family, rows in by_family.items():
+    for rows in by_identity.values():
         rows.sort(key=_concept_sort_key, reverse=True)
         unique.append(rows[0])
         if len(rows) > 1:
-            _append_warning_once(warnings, "family_repeat_filtered")
+            _append_warning_once(warnings, "concept_repeat_filtered")
     unique.sort(key=_concept_sort_key, reverse=True)
-
-    selected: list[dict[str, Any]] = []
-    picked_families: set[str] = set()
-    for family_kind in ("new", "adjacent", "established"):
-        for concept in unique:
-            family = str(concept.get("concept_family") or "")
-            if family in picked_families:
-                continue
-            if str(concept.get("family_kind") or "") == family_kind:
-                selected.append(concept)
-                picked_families.add(family)
-                break
-    for concept in unique:
-        family = str(concept.get("concept_family") or "")
-        if family in picked_families:
-            continue
-        selected.append(concept)
-        picked_families.add(family)
-        if len(selected) >= 6:
-            break
-    return selected[:6]
+    if len(unique) > limit:
+        _append_warning_once(warnings, "concept_board_truncated")
+    return unique[:limit]
 
 
 def _normalize_supershadow_response(
@@ -1142,6 +1150,7 @@ def _normalize_supershadow_response(
     family_memory: list[dict[str, Any]],
     *,
     max_handoffs: int,
+    selection_limit: int = 3,
 ) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     fact_lookup = {str(fact["fact_key"]): fact for fact in fact_basis}
@@ -1182,7 +1191,6 @@ def _normalize_supershadow_response(
         )
         if not bridge_lemmas:
             _append_warning_once(warnings, "concept_missing_bridge_lemmas")
-            continue
         kill_tests = _normalize_kill_tests(concept_raw.get("kill_tests"))
         if not kill_tests:
             _append_warning_once(warnings, "concept_missing_kill_tests")
@@ -1244,12 +1252,14 @@ def _normalize_supershadow_response(
 
     if not concepts_out:
         _append_warning_once(warnings, "no_valid_concepts")
-    concepts_out = _select_family_diverse_concepts(concepts_out, warnings)
+    concepts_out = _select_breakthrough_candidates(
+        concepts_out, warnings, limit=selection_limit
+    )
     concepts_out.sort(key=_concept_sort_key, reverse=True)
     normalized = {
         "worldview_summary": worldview_summary,
         "run_summary": run_summary,
-        "concepts": concepts_out[:12],
+        "concepts": concepts_out[:selection_limit],
     }
     return normalized, warnings
 
@@ -1282,19 +1292,22 @@ def _build_supershadow_user_message(
     lines.append("")
     lines.append("## Output doctrine")
     lines.append(
-        "Search for the smallest language shift that compresses multiple grounded facts at once."
+        "Search for the one strongest language shift that compresses multiple grounded facts at once."
     )
     lines.append(
         "Supershadow is not allowed to create live work. Do not output executable targets, experiments, or Aristotle tasks."
     )
     lines.append(
-        "A good concept explains grounded facts, names a kill-test, and provides bridge lemmas back to Shadow and Lean."
+        "Discovery first: a good concept explains grounded facts and names a sharp kill-test, even if the first bridge lemma is not clear yet."
     )
     lines.append(
-        "Each run should try to spend part of its budget on family discovery: if possible include one established family, one adjacent family, and one genuinely new family."
+        "Prefer one dominant line over performative family diversity when a single worldview looks alive."
     )
     lines.append(
         "If you revisit a family that is already saturated, you must lower the transfer cost with a sharper smallest_transfer_probe or explain exactly what changed."
+    )
+    lines.append(
+        "Only the strongest surviving concept should be handed to Shadow, and only after a later distillation step sharpens its falsifier and first bridge."
     )
     if suppress_handoffs_reason:
         lines.append(f"Shadow handoff budget this run: 0. {suppress_handoffs_reason}")
@@ -1350,6 +1363,50 @@ def _build_supershadow_user_message(
     lines.append("")
     lines.append("## Supershadow policy memory / warnings tail (JSON)")
     lines.append(json.dumps(policy_obj, ensure_ascii=False, indent=2)[:12000])
+    return "\n".join(lines)
+
+
+def _build_supershadow_distillation_user_message(
+    *,
+    goal_text: str,
+    fact_basis: list[dict[str, Any]],
+    pressure_map: list[dict[str, Any]],
+    concept: dict[str, Any],
+    handoff_budget: int,
+) -> str:
+    lines: list[str] = []
+    lines.append("## Distillation mission")
+    lines.append(goal_text[:4000])
+    lines.append("")
+    lines.append("## Candidate worldview to sharpen")
+    lines.append(json.dumps(concept, ensure_ascii=False, indent=2)[:12000])
+    lines.append("")
+    lines.append("## Distillation doctrine")
+    lines.append(
+        "Do not widen the search. Sharpen this candidate into the minimum falsifiable thesis."
+    )
+    lines.append(
+        "Preserve the conceptual leap if it still looks alive, but cut decorative structure."
+    )
+    lines.append(
+        "Return exactly one concept. Keep 1-2 kill tests. Add bridge lemmas only if they are genuine first bridges."
+    )
+    lines.append(
+        f"Shadow handoff budget after distillation: at most {max(0, handoff_budget)} handoff(s)."
+    )
+    lines.append("")
+    lines.append("## Grounded fact basis")
+    for fact in fact_basis[:24]:
+        lines.append(
+            f"- {fact['fact_key']} | {fact['label']} | kind={fact['kind']} | provenance={fact['provenance']}"
+        )
+    lines.append("")
+    lines.append("## Pressure map")
+    for row in pressure_map[:8]:
+        facts = ", ".join(row.get("fact_keys") or [])
+        lines.append(
+            f"- cluster={row.get('cluster')} | facts={facts}\n  pressure: {_clip_text(row.get('pressure'), 500)}"
+        )
     return "\n".join(lines)
 
 
@@ -1427,12 +1484,79 @@ async def run_supershadow_global_lab(
                 "json_retry_count": json_retry_count,
             }
 
-        normalized, validation_warnings = _normalize_supershadow_response(
+        discovery_normalized, validation_warnings = _normalize_supershadow_response(
             data,
             fact_basis,
             family_memory,
-            max_handoffs=handoff_budget,
+            max_handoffs=0,
+            selection_limit=3,
         )
+        concepts = list(discovery_normalized.get("concepts") or [])
+
+        distillation_raw = ""
+        distillation_json_retry_count = 0
+        distillation_warnings: list[str] = []
+        distillation_normalized: dict[str, Any] | None = None
+        if concepts:
+            distill_user = _build_supershadow_distillation_user_message(
+                goal_text=goal_text,
+                fact_basis=fact_basis,
+                pressure_map=pressure_map,
+                concept=concepts[0],
+                handoff_budget=handoff_budget,
+            )
+            try:
+                distilled_data, distillation_raw, distillation_json_retry_count = (
+                    await _invoke_supershadow_json(
+                        system=SUPERSHADOW_DISTILLATION_SYSTEM,
+                        user=distill_user,
+                        model=model,
+                        temperature=min(0.35, temperature),
+                        log_name="supershadow_distillation",
+                    )
+                )
+            except Exception:
+                logger.exception("Supershadow distillation LLM call failed")
+                distilled_data = {}
+            if distilled_data:
+                distillation_normalized, distillation_warnings = (
+                    _normalize_supershadow_response(
+                        distilled_data,
+                        fact_basis,
+                        family_memory,
+                        max_handoffs=handoff_budget,
+                        selection_limit=1,
+                    )
+                )
+                if distillation_normalized.get("concepts"):
+                    distilled_best = dict(distillation_normalized["concepts"][0])
+                    remaining = [
+                        concept
+                        for concept in concepts
+                        if (
+                            str(concept.get("concept_family") or ""),
+                            str(concept.get("title") or "").strip().lower(),
+                        )
+                        != (
+                            str(distilled_best.get("concept_family") or ""),
+                            str(distilled_best.get("title") or "").strip().lower(),
+                        )
+                    ]
+                    concepts = [distilled_best] + remaining[:2]
+        validation_warnings.extend(distillation_warnings)
+        normalized = {
+            "worldview_summary": (
+                (distillation_normalized or {}).get("worldview_summary")
+                or discovery_normalized.get("worldview_summary")
+                or ""
+            ),
+            "run_summary": (
+                (distillation_normalized or {}).get("run_summary")
+                or discovery_normalized.get("run_summary")
+                or ""
+            ),
+            "concepts": concepts,
+        }
         ep = db.get_supershadow_state(SUPERSHADOW_GLOBAL_GOAL_ID)
         try:
             old_policy = json.loads(ep.get("policy_json") or "{}")
@@ -1469,6 +1593,8 @@ async def run_supershadow_global_lab(
         concepts = list(normalized.get("concepts") or [])
         response_obj = {
             "output": normalized,
+            "discovery_output": discovery_normalized,
+            "distillation_output": distillation_normalized or {},
             "fact_basis": fact_basis,
             "pressure_map": pressure_map,
             "family_memory": family_memory,
@@ -1477,6 +1603,8 @@ async def run_supershadow_global_lab(
                 "validation_warnings": validation_warnings,
                 "raw_preview": _clip_text(raw, 4000),
                 "json_retry_count": json_retry_count,
+                "distillation_raw_preview": _clip_text(distillation_raw, 4000),
+                "distillation_json_retry_count": distillation_json_retry_count,
             },
         }
         run_id = db.supershadow_commit_run(

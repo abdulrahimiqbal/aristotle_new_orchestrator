@@ -98,14 +98,16 @@ Endpoints:
 The dashboard also includes a dedicated **Supershadow Lab** (`/supershadow`) for ontology-expanding conceptual search.
 
 - **Zero live authority**: Supershadow cannot create targets, experiments, or direct Aristotle work.
+- **Breakthrough-first search**: discovery runs now optimize for the strongest worldview shift on the board, not for producing several equally polite concepts.
+- **Distill-second workflow**: Supershadow first hunts 1-3 candidate worldviews, then sharpens only the best survivor into a kill-test, smallest transfer probe, and optional first bridge.
 - **Compression over novelty**: concepts are judged by whether they make several grounded facts feel structural at once, not by how exotic they sound.
-- **Conceptual handoffs, not queue spam**: Supershadow emits Shadow-facing handoffs with kill-tests, bridge lemmas, and grounding notes.
+- **Conceptual handoffs, not queue spam**: only the strongest surviving concept should emit a Shadow-facing handoff, and only after distillation sharpens it.
 - **Incubation layer**: approving a handoff creates a tracked incubation packet rather than a live task. This preserves the conceptual leap as a first-class object instead of dissolving it into generic Shadow context.
 - **Lineage tracking**: Shadow can operationalize an incubation by citing its `source_incubation_ids`; approved live promotions can then mark that incubation as grounded contact with reality.
 - **Lifecycle visibility**: incubations move through states such as `incubating`, `operationalized`, and `grounded`, with event history shown in the Supershadow UI.
 - **Family discovery control**: Supershadow concepts now carry `concept_family`, `family_kind` (`established|adjacent|new`), `parent_family`, `smallest_transfer_probe`, and explicit “why this is not the same family again” text.
-- **Transfer-aware scoring**: concept ranking includes `family_novelty`, `transfer_value`, and `family_saturation_penalty` in addition to compression/fit/bridgeability.
-- **Anti-circling pressure**: repeated families that have not produced incubations or grounded descendants accumulate saturation penalty, while runs are nudged to include an established-family exploit, an adjacent family, and a genuinely new family when possible.
+- **Worldview-first ranking**: concept ranking now prefers compression, fit to stubborn facts, ontological delta, and falsifiability before transfer-readiness.
+- **Anti-circling pressure**: repeated families that have not produced incubations or grounded descendants accumulate saturation penalty, but the system no longer forces artificial family diversity when one line looks substantially stronger.
 - **Stale-family suppression**: once a family repeats without transfer, Supershadow no longer just ranks it lower; normalization can drop it entirely unless the run presents a materially cheaper probe and a concrete explanation of what changed.
 
 Concept transfer flow:
@@ -124,7 +126,17 @@ Supershadow family doctrine:
 - `adjacent` family: branch from an existing line with a meaningfully different object or interface.
 - `new` family: introduce a genuinely different conceptual language, but still tether it to grounded facts and a smallest transfer probe.
 
-The system is intentionally biased against abstract repetition: a family that keeps reappearing without incubation or grounding must either lower the transfer cost or lose rank to newer families.
+Operationally, a Supershadow run now behaves like:
+
+```
+grounded facts + pressure map
+  -> discovery pass (1-3 worldview candidates, no live authority)
+  -> pick dominant survivor
+  -> distillation pass (sharpest kill-test, smallest transfer probe, optional first bridge)
+  -> optional Shadow handoff for that survivor only
+```
+
+The system is intentionally biased against abstract repetition: a family that keeps reappearing without incubation or grounding must either lower the transfer cost or lose rank, but a genuinely improving line can now stay in focus across runs instead of being diluted for variety.
 Family saturation is computed from system memory rather than trusting the model's self-score, so a stale family cannot simply label itself "novel" and escape the penalty.
 
 Endpoints:
