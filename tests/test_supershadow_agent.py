@@ -341,6 +341,105 @@ def test_normalize_supershadow_response_keeps_discovery_concept_without_bridge_l
     assert "concept_missing_bridge_lemmas" in warnings
 
 
+def test_normalize_supershadow_response_preserves_super_universe_candidate() -> None:
+    fact_basis = [
+        {
+            "fact_key": "builtin:modular_descent_mod_8",
+            "label": "Mod 8 descent is grounded.",
+            "detail": "detail",
+            "kind": "modular",
+            "provenance": "builtin_seed",
+        },
+        {
+            "fact_key": "builtin:collatz_2_adic_extension",
+            "label": "The 2-adic Collatz extension has been formalized.",
+            "detail": "detail",
+            "kind": "formalized_extension",
+            "provenance": "builtin_seed",
+        },
+    ]
+    raw = {
+        "worldview_summary": "One universe is surviving repeated internal attacks.",
+        "run_summary": "Promote the strongest survivor for review.",
+        "concepts": [
+            {
+                "title": "Odd grammar completion",
+                "concept_family": "odd_grammar_completion",
+                "family_kind": "new",
+                "worldview_summary": "Treat odd trajectories as words in a constrained grammar.",
+                "universe_thesis": "A grammar on odd states may forbid all nontrivial infinite words.",
+                "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
+                "concepts": ["Encode odd trajectories as admissible words."],
+                "ontological_moves": ["Odd-word grammar", "Drift functional"],
+                "explains_facts": [
+                    {"fact_key": "builtin:modular_descent_mod_8"},
+                    {"fact_key": "builtin:collatz_2_adic_extension"},
+                ],
+                "kill_tests": [
+                    {
+                        "description": "Find an admissible infinite odd word with nonnegative drift.",
+                        "expected_failure_signal": "A legal word survives every local drift bound.",
+                    }
+                ],
+                "self_test_results": [
+                    {
+                        "attack": "Try to build a legal infinite odd word that evades the drift bound.",
+                        "result": "survived",
+                        "note": "The grammar appears to ban the obvious constructions.",
+                    },
+                    {
+                        "attack": "Push the universe against the formal 2-adic extension.",
+                        "result": "strengthened",
+                        "note": "The completion suggests a natural ambient space for the grammar.",
+                    },
+                ],
+                "signs_of_life": [
+                    "The same grammar language compresses both odd-input structure and the 2-adic anchor.",
+                    "The drift claim sharpens into a theorem-shaped statement rather than a slogan.",
+                ],
+                "negative_signs": [
+                    "It is still unclear whether every legal word corresponds to a real orbit."
+                ],
+                "universe_status": "super_candidate",
+                "invention_lesson": "Grammar universes improve when they produce a drift theorem quickly.",
+                "bridge_lemmas": [
+                    "Define admissible odd words and prove one-step compatibility with T."
+                ],
+                "smallest_transfer_probe": "Formalize one admissible-word compatibility lemma.",
+                "super_universe_candidate": {
+                    "why_now": "This is the first universe that survives multiple attacks and still names a narrow formal probe.",
+                    "survived_attacks": [
+                        "Could not produce a legal infinite odd word with nonnegative drift.",
+                        "The 2-adic completion did not break the grammar interpretation.",
+                    ],
+                    "full_fact_audit": {
+                        "explains": [
+                            "builtin:modular_descent_mod_8",
+                            "builtin:collatz_2_adic_extension",
+                        ],
+                        "awkward": [],
+                    },
+                    "smallest_aristotle_probe": "Formalize the admissible-word interface and test one local drift lemma.",
+                },
+            }
+        ],
+    }
+
+    normalized, warnings = _normalize_supershadow_response(
+        raw, fact_basis, [], max_handoffs=1
+    )
+
+    assert len(normalized["concepts"]) == 1
+    concept = normalized["concepts"][0]
+    assert concept["universe_status"] == "super_candidate"
+    assert len(concept["self_test_results"]) == 2
+    assert len(concept["signs_of_life"]) == 2
+    assert concept["super_universe_candidate"]["why_now"].startswith("This is the first universe")
+    assert len(concept["shadow_handoffs"]) == 1
+    assert concept["shadow_handoffs"][0]["review_kind"] == "super_universe_candidate"
+    assert "super_universe_downgraded" not in warnings
+
+
 def test_normalize_supershadow_response_blocks_family_on_cooldown() -> None:
     fact_basis = [
         {
@@ -677,3 +776,139 @@ def test_run_supershadow_global_lab_distills_top_concept_before_handoff(
     assert len(handoffs) == 1
     concepts = db.list_supershadow_concepts(SUPERSHADOW_GLOBAL_GOAL_ID, limit=10)
     assert concepts[0]["title"] == "Odd-state quotient"
+
+
+def test_run_supershadow_global_lab_updates_universe_memory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    db = Database(str(tmp_path / "universe-memory.db"))
+    db.initialize()
+    calls = {"count": 0}
+
+    async def fake_invoke_llm(*args, **kwargs) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return json.dumps(
+                {
+                    "worldview_summary": "Invent one bold universe and one backup.",
+                    "run_summary": "Discovery found one alive grammar universe.",
+                    "concepts": [
+                        {
+                            "title": "Odd grammar completion",
+                            "concept_family": "odd_grammar_completion",
+                            "family_kind": "new",
+                            "worldview_summary": "Treat odd trajectories as words in a constrained grammar.",
+                            "universe_thesis": "A grammar on odd states may forbid all nontrivial infinite words.",
+                            "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
+                            "concepts": ["Encode odd trajectories as admissible words."],
+                            "ontological_moves": ["Odd-word grammar", "Drift functional"],
+                            "explains_facts": [
+                                {"fact_key": "builtin:modular_descent_mod_8"},
+                                {"fact_key": "builtin:collatz_2_adic_extension"},
+                            ],
+                            "kill_tests": [
+                                {
+                                    "description": "Find an admissible infinite odd word with nonnegative drift.",
+                                    "expected_failure_signal": "A legal word survives every local drift bound.",
+                                }
+                            ],
+                            "smallest_transfer_probe": "Formalize one admissible-word compatibility lemma.",
+                        }
+                    ],
+                }
+            )
+        return json.dumps(
+            {
+                "worldview_summary": "Self-test the grammar universe and keep only the survivor.",
+                "run_summary": "The grammar universe survived multiple attacks and now looks like a super candidate.",
+                "concepts": [
+                    {
+                        "title": "Odd grammar completion",
+                        "concept_family": "odd_grammar_completion",
+                        "family_kind": "new",
+                        "worldview_summary": "Treat odd trajectories as words in a constrained grammar.",
+                        "universe_thesis": "A grammar on odd states may forbid all nontrivial infinite words.",
+                        "conditional_theorem": "If every admissible infinite odd word has negative drift, Collatz follows.",
+                        "concepts": ["Encode odd trajectories as admissible words."],
+                        "ontological_moves": ["Odd-word grammar", "Drift functional"],
+                        "explains_facts": [
+                            {"fact_key": "builtin:modular_descent_mod_8"},
+                            {"fact_key": "builtin:collatz_2_adic_extension"},
+                        ],
+                        "kill_tests": [
+                            {
+                                "description": "Find an admissible infinite odd word with nonnegative drift.",
+                                "expected_failure_signal": "A legal word survives every local drift bound.",
+                                "suggested_grounding_path": "Formalize the admissible-word interface first.",
+                            }
+                        ],
+                        "self_test_results": [
+                            {
+                                "attack": "Try to build an admissible infinite odd word.",
+                                "result": "survived",
+                                "note": "The local grammar keeps rejecting obvious counterexamples.",
+                            },
+                            {
+                                "attack": "Push the universe against the 2-adic anchor.",
+                                "result": "strengthened",
+                                "note": "The completion suggests a natural ambient space.",
+                            },
+                        ],
+                        "signs_of_life": [
+                            "The same universe compresses odd-input structure and the 2-adic anchor.",
+                            "The drift statement is theorem-shaped and locally falsifiable.",
+                        ],
+                        "negative_signs": [
+                            "The grammar-to-orbit correspondence is still incomplete."
+                        ],
+                        "universe_status": "super_candidate",
+                        "invention_lesson": "Grammar universes should be kept only when they quickly yield a drift theorem.",
+                        "bridge_lemmas": [
+                            "Define admissible odd words and prove one-step compatibility with T."
+                        ],
+                        "smallest_transfer_probe": "Formalize one admissible-word compatibility lemma.",
+                        "super_universe_candidate": {
+                            "why_now": "This universe survived the strongest local attacks and still has a tiny formal probe.",
+                            "survived_attacks": [
+                                "Could not produce an admissible infinite odd word with nonnegative drift.",
+                                "The 2-adic anchor strengthened the universe instead of breaking it.",
+                            ],
+                            "full_fact_audit": {
+                                "explains": [
+                                    "builtin:modular_descent_mod_8",
+                                    "builtin:collatz_2_adic_extension",
+                                ],
+                                "awkward": [],
+                            },
+                            "smallest_aristotle_probe": "Formalize the admissible-word interface and test one local drift lemma.",
+                        },
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr("orchestrator.supershadow_agent.invoke_llm", fake_invoke_llm)
+    monkeypatch.setattr(app_config, "LLM_API_KEY", "test-key")
+
+    result = asyncio.run(
+        run_supershadow_global_lab(
+            db,
+            goal_text="goal",
+            trigger_kind="manual",
+            handoff_budget=1,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls["count"] == 2
+    state = db.get_supershadow_state(SUPERSHADOW_GLOBAL_GOAL_ID)
+    policy = json.loads(state["policy_json"])
+    memory = policy["_supershadow_universe_memory"]["odd_grammar_completion"]
+    assert memory["status"] == "super_candidate"
+    assert memory["tests_run"] == 2
+    assert memory["super_candidate_runs"] == 1
+    assert policy["_supershadow_invention_lessons_tail"][-1].startswith(
+        "Grammar universes should be kept only"
+    )
+    concepts = db.list_supershadow_concepts(SUPERSHADOW_GLOBAL_GOAL_ID, limit=10)
+    assert concepts[0]["universe_status"] == "super_candidate"

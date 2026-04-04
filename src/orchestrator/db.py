@@ -483,6 +483,22 @@ class Database:
                 if not _column_exists(conn, "supershadow_concept", column_name):
                     conn.execute(column_sql)
             _set_user_version(conn, 13)
+            v = 13
+        if v < 14:
+            for column_sql in (
+                "ALTER TABLE supershadow_concept ADD COLUMN universe_status TEXT NOT NULL DEFAULT 'proposed'",
+                "ALTER TABLE supershadow_concept ADD COLUMN universe_thesis TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN conditional_theorem TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN self_test_results_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE supershadow_concept ADD COLUMN signs_of_life_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE supershadow_concept ADD COLUMN negative_signs_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE supershadow_concept ADD COLUMN invention_lesson TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN super_universe_json TEXT NOT NULL DEFAULT '{}'",
+            ):
+                column_name = column_sql.split(" ADD COLUMN ", 1)[1].split(" ", 1)[0]
+                if not _column_exists(conn, "supershadow_concept", column_name):
+                    conn.execute(column_sql)
+            _set_user_version(conn, 14)
 
     def create_campaign(
         self,
@@ -3031,9 +3047,12 @@ class Database:
                         ontological_delta, falsifiability, bridgeability, grounding_cost,
                         speculative_risk, concept_family, family_kind, parent_family,
                         why_not_same_as_existing_family, smallest_transfer_probe,
-                        family_novelty, transfer_value, family_saturation_penalty, created_at
+                        family_novelty, transfer_value, family_saturation_penalty,
+                        universe_status, universe_thesis, conditional_theorem,
+                        self_test_results_json, signs_of_life_json, negative_signs_json,
+                        invention_lesson, super_universe_json, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cid,
@@ -3062,6 +3081,23 @@ class Database:
                         int(scores.get("family_novelty") or 0),
                         int(scores.get("transfer_value") or 0),
                         int(scores.get("family_saturation_penalty") or 0),
+                        str(concept.get("universe_status") or "proposed")[:32],
+                        str(concept.get("universe_thesis") or "")[:2000],
+                        str(concept.get("conditional_theorem") or "")[:2400],
+                        json.dumps(
+                            concept.get("self_test_results") or [], ensure_ascii=False
+                        ),
+                        json.dumps(
+                            concept.get("signs_of_life") or [], ensure_ascii=False
+                        ),
+                        json.dumps(
+                            concept.get("negative_signs") or [], ensure_ascii=False
+                        ),
+                        str(concept.get("invention_lesson") or "")[:1200],
+                        json.dumps(
+                            concept.get("super_universe_candidate") or {},
+                            ensure_ascii=False,
+                        ),
                         now,
                     ),
                 )

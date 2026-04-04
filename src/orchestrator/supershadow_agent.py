@@ -38,6 +38,19 @@ _VALID_SCORE_KEYS = (
     "family_saturation_penalty",
 )
 _VALID_FAMILY_KINDS = frozenset({"established", "adjacent", "new"})
+_VALID_UNIVERSE_STATUSES = frozenset(
+    {
+        "proposed",
+        "no_signs_yet",
+        "has_signs",
+        "converging",
+        "dead",
+        "super_candidate",
+    }
+)
+_VALID_SELF_TEST_RESULTS = frozenset(
+    {"survived", "strengthened", "collapsed", "unclear"}
+)
 _STALE_FAMILY_REPEAT_LIMIT = 3
 _STALE_FAMILY_COOLDOWN_RUNS = 3
 _REPEAT_FAMILY_EXPLANATION_PLACEHOLDER = (
@@ -270,6 +283,23 @@ def _str_list(value: Any, *, max_items: int, max_item_chars: int) -> list[str]:
     return out
 
 
+def _append_tail_unique(
+    raw: Any, item: str, *, limit: int, max_chars: int = 800
+) -> list[str]:
+    prev = raw if isinstance(raw, list) else []
+    out = [
+        str(value or "").strip()[:max_chars]
+        for value in prev
+        if str(value or "").strip()
+    ]
+    entry = str(item or "").strip()[:max_chars]
+    if not entry:
+        return out[-limit:]
+    if not out or out[-1] != entry:
+        out.append(entry)
+    return out[-limit:]
+
+
 def _merge_policy(old: dict[str, Any], delta: dict[str, Any] | None) -> dict[str, Any]:
     out = dict(old)
     if not delta:
@@ -280,10 +310,18 @@ def _merge_policy(old: dict[str, Any], delta: dict[str, Any] | None) -> dict[str
                 out[key] = value
     notes = delta.get("notes")
     if isinstance(notes, str) and notes.strip():
-        prev = out.get("_supershadow_notes_tail", [])
-        if not isinstance(prev, list):
-            prev = []
-        out["_supershadow_notes_tail"] = (prev + [notes.strip()])[-12:]
+        out["_supershadow_notes_tail"] = _append_tail_unique(
+            out.get("_supershadow_notes_tail"),
+            notes,
+            limit=6,
+            max_chars=1200,
+        )
+    lessons = delta.get("lessons")
+    if isinstance(lessons, list):
+        tail = out.get("_supershadow_invention_lessons_tail", [])
+        for lesson in lessons:
+            tail = _append_tail_unique(tail, str(lesson or ""), limit=10, max_chars=800)
+        out["_supershadow_invention_lessons_tail"] = tail
     return out
 
 
@@ -316,6 +354,211 @@ def _advance_family_cooldowns(
         if slug:
             out[slug] = max(out.get(slug, 0), _STALE_FAMILY_COOLDOWN_RUNS)
     return out
+
+
+def _normalize_universe_status_value(value: Any, *, default: str = "proposed") -> str:
+    status = str(value or "").strip().lower()
+    if status in _VALID_UNIVERSE_STATUSES:
+        return status
+    return default
+
+
+def _universe_status_rank(value: Any) -> int:
+    status = _normalize_universe_status_value(value)
+    return {
+        "super_candidate": 5,
+        "converging": 4,
+        "has_signs": 3,
+        "no_signs_yet": 2,
+        "proposed": 1,
+        "dead": 0,
+    }.get(status, 0)
+
+
+def _normalize_self_test_results(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw[:6]:
+        if not isinstance(item, dict):
+            continue
+        attack = _clip_text(item.get("attack"), 900).strip()
+        result = str(item.get("result") or "").strip().lower()
+        note = _clip_text(item.get("note"), 1200).strip()
+        if not attack:
+            continue
+        if result not in _VALID_SELF_TEST_RESULTS:
+            result = "unclear"
+        out.append(
+            {
+                "attack": attack,
+                "result": result,
+                "note": note,
+            }
+        )
+    return out
+
+
+def _normalize_super_universe_candidate(
+    raw: Any,
+    fact_lookup: dict[str, dict[str, Any]],
+    fact_labels: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    why_now = _clip_text(raw.get("why_now"), 1400).strip()
+    survived_attacks = _str_list(
+        raw.get("survived_attacks"), max_items=4, max_item_chars=900
+    )
+    fact_audit = raw.get("full_fact_audit")
+    explains: list[dict[str, Any]] = []
+    awkward: list[dict[str, Any]] = []
+    if isinstance(fact_audit, dict):
+        for key, bucket in (("explains", explains), ("awkward", awkward)):
+            for item in fact_audit.get(key) or []:
+                normalized = _normalize_fact_reference(item, fact_lookup, fact_labels)
+                if normalized:
+                    bucket.append(normalized)
+    smallest_aristotle_probe = _clip_text(
+        raw.get("smallest_aristotle_probe") or raw.get("aristotle_probe"),
+        1400,
+    ).strip()
+    if not (why_now and survived_attacks and smallest_aristotle_probe):
+        return {}
+    return {
+        "why_now": why_now,
+        "survived_attacks": survived_attacks,
+        "full_fact_audit": {
+            "explains": explains[:8],
+            "awkward": awkward[:8],
+        },
+        "smallest_aristotle_probe": smallest_aristotle_probe,
+    }
+
+
+def _infer_universe_status(
+    raw_status: Any,
+    *,
+    self_test_results: list[dict[str, str]],
+    signs_of_life: list[str],
+    negative_signs: list[str],
+    super_candidate: bool,
+) -> str:
+    if super_candidate:
+        return "super_candidate"
+    status = _normalize_universe_status_value(raw_status, default="")
+    if status:
+        return status
+    survived = sum(
+        1
+        for item in self_test_results
+        if str(item.get("result") or "") in {"survived", "strengthened"}
+    )
+    collapsed = sum(
+        1 for item in self_test_results if str(item.get("result") or "") == "collapsed"
+    )
+    if collapsed and not survived and not signs_of_life:
+        return "dead"
+    if survived >= 2 and len(signs_of_life) >= 2:
+        return "converging"
+    if survived >= 1 or signs_of_life:
+        return "has_signs"
+    if negative_signs or self_test_results:
+        return "no_signs_yet"
+    return "proposed"
+
+
+def _normalize_universe_memory(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, value in raw.items():
+        slug = _family_slug(key)
+        if not slug or not isinstance(value, dict):
+            continue
+        try:
+            seen_count = int(value.get("seen_count") or 0)
+        except (TypeError, ValueError):
+            seen_count = 0
+        try:
+            tests_run = int(value.get("tests_run") or 0)
+        except (TypeError, ValueError):
+            tests_run = 0
+        try:
+            super_candidate_runs = int(value.get("super_candidate_runs") or 0)
+        except (TypeError, ValueError):
+            super_candidate_runs = 0
+        out[slug] = {
+            "slug": slug,
+            "title": _clip_text(value.get("title"), 200).strip(),
+            "status": _normalize_universe_status_value(value.get("status")),
+            "seen_count": max(0, min(999, seen_count)),
+            "tests_run": max(0, min(999, tests_run)),
+            "positive_signs": _str_list(
+                value.get("positive_signs"), max_items=4, max_item_chars=500
+            ),
+            "negative_signs": _str_list(
+                value.get("negative_signs"), max_items=4, max_item_chars=500
+            ),
+            "conditional_theorem": _clip_text(
+                value.get("conditional_theorem"), 1200
+            ).strip(),
+            "invention_lesson": _clip_text(
+                value.get("invention_lesson"), 900
+            ).strip(),
+            "super_candidate_runs": max(0, min(999, super_candidate_runs)),
+        }
+    return out
+
+
+def _update_universe_memory(
+    raw_memory: Any, concepts: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    memory = _normalize_universe_memory(raw_memory)
+    for concept in concepts:
+        slug = _family_slug(concept.get("concept_family") or concept.get("title"))
+        if not slug:
+            continue
+        entry = memory.setdefault(
+            slug,
+            {
+                "slug": slug,
+                "title": "",
+                "status": "proposed",
+                "seen_count": 0,
+                "tests_run": 0,
+                "positive_signs": [],
+                "negative_signs": [],
+                "conditional_theorem": "",
+                "invention_lesson": "",
+                "super_candidate_runs": 0,
+            },
+        )
+        entry["title"] = _clip_text(concept.get("title"), 200).strip() or entry.get(
+            "title", ""
+        )
+        entry["status"] = _normalize_universe_status_value(
+            concept.get("universe_status"), default=str(entry.get("status") or "proposed")
+        )
+        entry["seen_count"] = int(entry.get("seen_count") or 0) + 1
+        entry["tests_run"] = int(entry.get("tests_run") or 0) + len(
+            concept.get("self_test_results") or []
+        )
+        entry["positive_signs"] = _str_list(
+            concept.get("signs_of_life"), max_items=4, max_item_chars=500
+        ) or list(entry.get("positive_signs") or [])
+        entry["negative_signs"] = _str_list(
+            concept.get("negative_signs"), max_items=4, max_item_chars=500
+        ) or list(entry.get("negative_signs") or [])
+        conditional_theorem = _clip_text(concept.get("conditional_theorem"), 1200).strip()
+        if conditional_theorem:
+            entry["conditional_theorem"] = conditional_theorem
+        invention_lesson = _clip_text(concept.get("invention_lesson"), 900).strip()
+        if invention_lesson:
+            entry["invention_lesson"] = invention_lesson
+        if concept.get("super_universe_candidate"):
+            entry["super_candidate_runs"] = int(entry.get("super_candidate_runs") or 0) + 1
+    return memory
 
 
 def _family_slug(value: Any) -> str:
@@ -676,29 +919,28 @@ SUPERSHADOW_SYSTEM = """You are Supershadow Lab: an upstream conceptual inventio
 You are not Shadow, and you are not Aristotle/live.
 
 Role separation:
-- Supershadow invents conceptual frameworks.
-- Shadow turns promising frameworks into disciplined proof programs.
-- Aristotle/live grounds specific claims in Lean and bounded computation.
+- Supershadow invents mathematical universes.
+- Shadow turns surviving universes into disciplined proof programs.
+- Aristotle/live grounds only the strongest, narrowest probes after human approval.
 
 Critical constraint:
 - You have zero live execution authority.
 - Do not create or imply live experiments, campaign targets, executable objectives, or Aristotle tasks.
-- Your only outbound action is a Shadow-facing conceptual handoff request.
+- Your only outbound action is a conceptual handoff or a rare super-universe review packet.
 
 Mission:
-- Search for ontology-expanding ideas of the kind that once looked strange but later became the right language:
-  negative numbers, irrational numbers, imaginary numbers, p-adics, distributions, and similar shifts.
-- Optimize for worldview power first: look for the one language shift that would make the problem feel newly legible.
-- Search for the smallest conceptual enlargement that makes multiple grounded facts feel natural at once.
-- Aggressively explore whether the right language is different.
-- Stay tethered to known facts and falsifiability, but do not force every idea to look immediately formalization-ready.
-- It is acceptable if only one concept in the run is genuinely alive; do not pad the run with polite filler.
+- Invent new mathematical universes that could make Collatz feel easy instead of stubborn.
+- Optimize for worldview power first: ask what ambient world, operator, grammar, energy, completion, or geometry would make the theorem feel almost tautological.
+- Run the universe loop inside your own response: invent, self-attack, look for signs of life, then either deepen, downgrade, or kill the universe.
+- Stay grounded against the fact basis, but do not force discovery to look prematurely respectable.
+- A weird universe that survives attack is better than a polished restatement of modular folklore.
 
 You must explicitly search over language shifts such as:
 - new state spaces
 - completions or compactifications
-- new potential functions
-- functorial views of iteration
+- new conserved or Lyapunov-like quantities
+- symbolic-dynamics or grammar views of trajectories
+- renormalization or scaling operators
 - algebraic encodings of parity dynamics
 - dual descriptions where descent is easier
 - embeddings where Collatz becomes linear, contractive, monotone, or spectrally constrained
@@ -706,16 +948,18 @@ You must explicitly search over language shifts such as:
 
 Your output is STRICT JSON with this shape:
 {
-  "worldview_summary": "2-8 sentences about the conceptual search direction",
+  "worldview_summary": "2-8 sentences about the current universe hunt",
   "run_summary": "one compact paragraph for the run log",
   "concepts": [
     {
       "title": "short title",
-      "concept_family": "stable family slug like odd_state_quotient or graded_2_adic_module",
+      "concept_family": "stable universe slug like odd_state_quotient or graded_2_adic_module",
       "family_kind": "established|adjacent|new",
       "parent_family": "required when family_kind is adjacent, else empty string",
-      "why_not_same_as_existing_family": "why this is genuinely a new or adjacent family rather than a restatement",
-      "worldview_summary": "why this language shift matters",
+      "why_not_same_as_existing_family": "why this is genuinely a new or adjacent universe rather than a restatement",
+      "worldview_summary": "why this universe matters",
+      "universe_thesis": "one-sentence thesis for why this universe could make Collatz natural",
+      "conditional_theorem": "if this universe is right, what theorem-shaped claim would imply Collatz or sharply reduce the frontier",
       "concepts": ["first conceptual claim", "second conceptual claim"],
       "ontological_moves": ["new ambient space", "new operator", "new quotient"],
       "explains_facts": [
@@ -723,24 +967,44 @@ Your output is STRICT JSON with this shape:
           "fact_key": "must refer to a grounded fact key from the user message",
           "fact_label": "optional copy of the fact label",
           "role": "explains|compresses|conflicts|requires",
-          "note": "how this concept relates to that fact"
+          "note": "how this universe relates to that fact"
         }
       ],
       "tensions": [
         {
-          "text": "what remains awkward, contradictory, or unresolved in this language"
+          "text": "what remains awkward, contradictory, or unresolved in this universe"
         }
       ],
       "kill_tests": [
         {
           "description": "smallest falsifier",
-          "expected_failure_signal": "what concrete signal would kill the concept",
+          "expected_failure_signal": "what concrete signal would kill the universe",
           "suggested_grounding_path": "how Shadow or Lean could pressure-test it later"
         }
       ],
+      "self_test_results": [
+        {
+          "attack": "the strongest internal objection you tried",
+          "result": "survived|strengthened|collapsed|unclear",
+          "note": "what happened under that attack"
+        }
+      ],
+      "signs_of_life": ["concrete signal that this universe might be real"],
+      "negative_signs": ["concrete signal that this universe may still be fake"],
+      "universe_status": "proposed|no_signs_yet|has_signs|converging|dead|super_candidate",
+      "invention_lesson": "what this universe taught you about inventing stronger universes",
       "bridge_lemmas": ["lemma family that would connect this back to formal work"],
-      "smallest_transfer_probe": "smallest Shadow-facing bridge or bounded diagnostic that would make this family actionable",
+      "smallest_transfer_probe": "smallest Shadow-facing bridge or bounded diagnostic that would make this universe actionable",
       "reduce_frontier_or_rename": "does this reduce the frontier or merely rename it?",
+      "super_universe_candidate": {
+        "why_now": "why this deserves scarce Aristotle attention",
+        "survived_attacks": ["attack 1", "attack 2"],
+        "full_fact_audit": {
+          "explains": ["fact_key_1", "fact_key_2"],
+          "awkward": ["fact_key_3"]
+        },
+        "smallest_aristotle_probe": "single narrow grounding probe worth human approval"
+      },
       "scores": {
         "compression_power": 0,
         "fit_to_known_facts": 0,
@@ -757,7 +1021,7 @@ Your output is STRICT JSON with this shape:
         {
           "title": "handoff title",
           "summary": "what Shadow should operationalize",
-          "why_compressive": "why this concept explains several facts at once",
+          "why_compressive": "why this universe explains several facts at once",
           "bridge_lemmas": ["bridge lemma 1", "bridge lemma 2"],
           "shadow_task": "what proof-program work Shadow should do next",
           "recommended_next_step": "single next move for Shadow",
@@ -769,36 +1033,41 @@ Your output is STRICT JSON with this shape:
 }
 
 Rules:
-- 1 to 3 concepts.
-- Prefer one dominant line over family diversity when one worldview looks substantially more promising than the others.
-- If a family is marked stalled or repeatedly appears without transfer, avoid emitting it again unless you can name a materially cheaper smallest_transfer_probe and a concrete reason this pass is different.
-- Every concept must explain grounded facts and include at least one kill test.
+- 1 to 3 concepts, but prefer 1 dominant universe and at most 1 backup.
+- Prefer one alive universe over family diversity.
+- If a family is marked stalled or repeatedly appears without transfer, avoid emitting it again unless you can name a materially different mechanism or a much cheaper probe.
+- Every live concept must explain grounded facts and include at least one kill test.
 - Bridge lemmas are optional during discovery; include them only when you can name a sharp first bridge instead of vague formalization theater.
 - Every concept must declare a concept_family and, when possible, the smallest_transfer_probe that would make it actionable for Shadow.
 - If you repeat an existing family, you must explain what changed and why this is not the same family again.
 - Supershadow should not be rewarded for novelty alone. High ontological delta without compression is weak.
-- A good concept explains multiple grounded facts at once and makes awkward facts feel natural.
+- A good concept names a mechanism, a theorem-shaped claim, and the best reason it could still collapse.
 - A concept that merely renames the frontier should score poorly.
+- Emit super_universe_candidate only rarely, and only when the universe survives multiple self-attacks, explains multiple grounded facts, names a theorem-shaped claim, and proposes a tiny Aristotle probe.
 - Only the single strongest surviving concept should emit a shadow_handoff, and only if it also has a sharp falsifier plus at least one credible bridge lemma.
 - No direct live-work fields such as campaign_id, target_id, objective, move_kind, new_experiment, new_target, or Aristotle instructions.
 - Keep JSON valid. No markdown fences."""
 
 
-SUPERSHADOW_DISTILLATION_SYSTEM = """You are Supershadow Distillation: the second pass after conceptual discovery.
+SUPERSHADOW_DISTILLATION_SYSTEM = """You are Supershadow Self-Test: the second pass after universe discovery.
 
-Input: one candidate worldview that already looks promising.
+Input: one candidate universe that already looks promising.
 
 Goal:
-- sharpen that worldview into the minimum falsifiable thesis,
+- attack this universe as if you want to kill it,
+- record whether it survives, strengthens, or collapses,
+- if it survives, sharpen it into the minimum theorem-shaped claim,
 - preserve the conceptual leap if it still looks alive,
 - add only the smallest bridge back to Shadow and Lean that the idea truly earns,
-- avoid widening the search or inventing backup concepts.
+- escalate to a super-universe candidate only if the universe looks like a genuinely strong shot.
 
-Return STRICT JSON with the same top-level shape as Supershadow discovery, but:
+Return STRICT JSON with the same top-level shape as discovery, but:
 - emit exactly 1 concept,
 - focus on the same dominant family unless the candidate clearly collapses,
+- include at least 2 self_test_results when possible,
 - keep only 1 to 2 kill tests,
 - include bridge_lemmas only if they are concrete first-bridge statements,
+- emit super_universe_candidate only if the universe survives multiple attacks, still fits the data, and has a narrow Aristotle probe,
 - emit at most 1 shadow_handoff, and only if the concept now has a sharp falsifier and at least one credible bridge lemma.
 
 Do not introduce live work, campaigns, targets, or Aristotle instructions.
@@ -853,6 +1122,11 @@ def _infer_concept_scores(
     explained_count = len(concept.get("explains_facts") or [])
     kill_tests = concept.get("kill_tests") or []
     bridge_lemmas = concept.get("bridge_lemmas") or []
+    self_test_results = concept.get("self_test_results") or []
+    signs_of_life = concept.get("signs_of_life") or []
+    negative_signs = concept.get("negative_signs") or []
+    conditional_theorem = _clip_text(concept.get("conditional_theorem"), 1200).strip()
+    super_universe_candidate = concept.get("super_universe_candidate") or {}
     tensions = concept.get("tensions") or []
     family_kind = _normalize_family_kind(concept.get("family_kind"))
     smallest_transfer_probe = _clip_text(
@@ -862,8 +1136,25 @@ def _infer_concept_scores(
         concept.get("why_not_same_as_existing_family"), 1200
     ).strip()
 
-    compression = min(5, max(1, explained_count))
-    fit = min(5, max(1, explained_count + (1 if tensions else 0)))
+    survived_attacks = sum(
+        1
+        for item in self_test_results
+        if str(item.get("result") or "") in {"survived", "strengthened"}
+    )
+    compression = min(
+        5,
+        max(1, explained_count + (1 if conditional_theorem else 0) + min(1, len(signs_of_life))),
+    )
+    fit = min(
+        5,
+        max(
+            1,
+            explained_count
+            + (1 if tensions else 0)
+            + min(1, survived_attacks)
+            + min(1, len(signs_of_life)),
+        ),
+    )
     ontological_delta = min(5, max(1, len(concept.get("ontological_moves") or [])))
     falsifiability = min(
         5,
@@ -891,6 +1182,9 @@ def _infer_concept_scores(
         speculative_risk = 3
     if smallest_transfer_probe and _looks_low_cost_probe(smallest_transfer_probe):
         grounding_cost = min(grounding_cost, 3)
+    if super_universe_candidate:
+        grounding_cost = min(grounding_cost + 1, 5)
+        speculative_risk = max(speculative_risk, 3)
     if "rename" in title_blob and "reduce" not in title_blob:
         compression = max(1, compression - 1)
     family_novelty = 2
@@ -909,6 +1203,12 @@ def _infer_concept_scores(
     if bridge_lemmas:
         transfer_value += 1
     if kill_tests:
+        transfer_value += 1
+    if conditional_theorem:
+        transfer_value += 1
+    if signs_of_life:
+        transfer_value += 1
+    if super_universe_candidate:
         transfer_value += 1
     transfer_value = min(5, transfer_value)
 
@@ -975,6 +1275,10 @@ def _normalize_scores(
         normalized["transfer_value"] = max(normalized["transfer_value"], 4)
     if _normalize_family_kind(concept.get("family_kind")) == "new":
         normalized["family_novelty"] = max(normalized["family_novelty"], 4)
+    if _clip_text(concept.get("conditional_theorem"), 1200).strip():
+        normalized["transfer_value"] = max(normalized["transfer_value"], 4)
+    if concept.get("super_universe_candidate"):
+        normalized["transfer_value"] = max(normalized["transfer_value"], 5)
     return normalized
 
 
@@ -1191,17 +1495,24 @@ def _normalize_shadow_handoffs(
         if not bridge_lemmas:
             _append_warning_once(warnings, "handoff_missing_bridge_lemmas")
             continue
-        out.append(
-            {
-                "title": title,
-                "summary": summary,
-                "why_compressive": why_compressive,
-                "bridge_lemmas": bridge_lemmas,
-                "shadow_task": shadow_task,
-                "recommended_next_step": recommended_next_step,
-                "grounding_notes": grounding_notes,
-            }
-        )
+        handoff_payload = {
+            "title": title,
+            "summary": summary,
+            "why_compressive": why_compressive,
+            "bridge_lemmas": bridge_lemmas,
+            "shadow_task": shadow_task,
+            "recommended_next_step": recommended_next_step,
+            "grounding_notes": grounding_notes,
+        }
+        super_universe_candidate = concept.get("super_universe_candidate") or {}
+        if super_universe_candidate:
+            handoff_payload["review_kind"] = "super_universe_candidate"
+            handoff_payload["super_universe_candidate"] = super_universe_candidate
+            if not handoff_payload["grounding_notes"]:
+                handoff_payload["grounding_notes"] = (
+                    "This packet asks for human review before any Aristotle grounding."
+                )
+        out.append(handoff_payload)
     return out
 
 
@@ -1210,6 +1521,7 @@ def _concept_sort_key(
 ) -> tuple[Any, ...]:
     scores = concept.get("scores") or {}
     return (
+        _universe_status_rank(concept.get("universe_status")),
         int(scores.get("compression_power") or 0),
         int(scores.get("fit_to_known_facts") or 0),
         int(scores.get("ontological_delta") or 0),
@@ -1226,19 +1538,37 @@ def _concept_sort_key(
 
 def _default_handoff_payload(concept: dict[str, Any]) -> list[dict[str, Any]]:
     probe = _clip_text(concept.get("smallest_transfer_probe"), 1200).strip()
-    if not probe:
+    super_universe_candidate = concept.get("super_universe_candidate") or {}
+    if not probe and not super_universe_candidate:
         return []
+    title = f"Handoff: {concept['title']}"
+    grounding_notes = "Use the smallest_transfer_probe before escalating to heavier conceptual machinery."
+    if super_universe_candidate:
+        title = f"Super-universe review: {concept['title']}"
+        grounding_notes = (
+            "Human review first. If this really stays alive, escalate only the narrow Aristotle probe."
+        )
     return [
         {
-            "title": f"Handoff: {concept['title']}",
+            "title": title,
             "summary": _clip_text(concept.get("worldview_summary"), 1200).strip(),
             "why_compressive": (
                 f"Preserves the concept family '{concept.get('concept_family')}' while testing a smaller actionable descendant."
             ),
             "bridge_lemmas": list(concept.get("bridge_lemmas") or []),
-            "shadow_task": probe,
-            "recommended_next_step": probe,
-            "grounding_notes": "Use the smallest_transfer_probe before escalating to heavier conceptual machinery.",
+            "shadow_task": probe
+            or _clip_text(
+                (super_universe_candidate or {}).get("smallest_aristotle_probe"), 1200
+            ).strip(),
+            "recommended_next_step": probe
+            or _clip_text(
+                (super_universe_candidate or {}).get("smallest_aristotle_probe"), 1200
+            ).strip(),
+            "grounding_notes": grounding_notes,
+            "review_kind": "super_universe_candidate"
+            if super_universe_candidate
+            else "shadow_handoff",
+            "super_universe_candidate": super_universe_candidate,
         }
     ]
 
@@ -1319,6 +1649,31 @@ def _normalize_supershadow_response(
         if not kill_tests:
             _append_warning_once(warnings, "concept_missing_kill_tests")
             continue
+        self_test_results = _normalize_self_test_results(
+            concept_raw.get("self_test_results")
+        )
+        signs_of_life = _str_list(
+            concept_raw.get("signs_of_life"), max_items=6, max_item_chars=600
+        )
+        negative_signs = _str_list(
+            concept_raw.get("negative_signs"), max_items=6, max_item_chars=600
+        )
+        super_universe_candidate = _normalize_super_universe_candidate(
+            concept_raw.get("super_universe_candidate"), fact_lookup, fact_labels
+        )
+        survived_self_tests = sum(
+            1
+            for item in self_test_results
+            if str(item.get("result") or "") in {"survived", "strengthened"}
+        )
+        if super_universe_candidate and (
+            survived_self_tests < 2
+            or len(signs_of_life) < 2
+            or len(explains_facts) < 2
+            or not _clip_text(concept_raw.get("conditional_theorem"), 1200).strip()
+        ):
+            _append_warning_once(warnings, "super_universe_downgraded")
+            super_universe_candidate = {}
 
         family_fields = _normalize_family_fields(
             concept_raw, title, family_memory_lookup
@@ -1330,6 +1685,14 @@ def _normalize_supershadow_response(
                 concept_raw.get("worldview_summary"), 2000
             ).strip()
             or worldview_summary,
+            "universe_thesis": _clip_text(
+                concept_raw.get("universe_thesis"), 1200
+            ).strip()
+            or _clip_text(concept_raw.get("worldview_summary"), 1200).strip()
+            or title,
+            "conditional_theorem": _clip_text(
+                concept_raw.get("conditional_theorem"), 1600
+            ).strip(),
             "concepts": _str_list(
                 concept_raw.get("concepts"), max_items=8, max_item_chars=600
             ),
@@ -1339,11 +1702,25 @@ def _normalize_supershadow_response(
             "explains_facts": explains_facts,
             "tensions": _normalize_tensions(concept_raw.get("tensions")),
             "kill_tests": kill_tests,
+            "self_test_results": self_test_results,
+            "signs_of_life": signs_of_life,
+            "negative_signs": negative_signs,
             "bridge_lemmas": bridge_lemmas,
             "reduce_frontier_or_rename": _clip_text(
                 concept_raw.get("reduce_frontier_or_rename"), 1200
             ).strip(),
+            "invention_lesson": _clip_text(
+                concept_raw.get("invention_lesson"), 900
+            ).strip(),
+            "super_universe_candidate": super_universe_candidate,
         }
+        concept["universe_status"] = _infer_universe_status(
+            concept_raw.get("universe_status"),
+            self_test_results=self_test_results,
+            signs_of_life=signs_of_life,
+            negative_signs=negative_signs,
+            super_candidate=bool(super_universe_candidate),
+        )
         concept["scores"] = _normalize_scores(
             concept_raw.get("scores"),
             concept,
@@ -1414,6 +1791,15 @@ def _build_supershadow_user_message(
         policy_obj = json.loads(policy_raw) if policy_raw.strip() else {}
     except json.JSONDecodeError:
         policy_obj = {}
+    universe_memory = _normalize_universe_memory(
+        policy_obj.get("_supershadow_universe_memory")
+    )
+    invention_lessons = policy_obj.get("_supershadow_invention_lessons_tail", [])
+    if not isinstance(invention_lessons, list):
+        invention_lessons = []
+    warnings_tail = policy_obj.get("_supershadow_validation_warnings_tail", [])
+    if not isinstance(warnings_tail, list):
+        warnings_tail = []
 
     lines: list[str] = []
     lines.append("## Supershadow mission")
@@ -1421,22 +1807,28 @@ def _build_supershadow_user_message(
     lines.append("")
     lines.append("## Output doctrine")
     lines.append(
-        "Search for the one strongest language shift that compresses multiple grounded facts at once."
+        "Invent the one strongest mathematical universe that could make Collatz feel easy."
     )
     lines.append(
         "Supershadow is not allowed to create live work. Do not output executable targets, experiments, or Aristotle tasks."
     )
     lines.append(
-        "Discovery first: a good concept explains grounded facts and names a sharp kill-test, even if the first bridge lemma is not clear yet."
+        "Run the universe loop yourself: invent, self-attack, look for signs of life, then either deepen or kill the universe."
+    )
+    lines.append(
+        "Discovery first: a good universe explains grounded facts and names a sharp kill-test, even if the first bridge lemma is not clear yet."
     )
     lines.append(
         "Prefer one dominant line over performative family diversity when a single worldview looks alive."
     )
     lines.append(
-        "If you revisit a family that is already saturated, you must lower the transfer cost with a sharper smallest_transfer_probe or explain exactly what changed."
+        "If you revisit a family that is already saturated, you must name a genuinely different mechanism or a much cheaper smallest_transfer_probe."
     )
     lines.append(
-        "Only the strongest surviving concept should be handed to Shadow, and only after a later distillation step sharpens its falsifier and first bridge."
+        "A super-universe candidate is rare. It should appear only when the universe survives multiple internal attacks and still looks like a strong shot."
+    )
+    lines.append(
+        "Only the strongest surviving universe should be handed to Shadow, and only after the self-test pass sharpens its falsifier and first bridge."
     )
     if suppress_handoffs_reason:
         lines.append(f"Shadow handoff budget this run: 0. {suppress_handoffs_reason}")
@@ -1501,11 +1893,63 @@ def _build_supershadow_user_message(
     else:
         lines.append("- none")
     lines.append("")
-    lines.append("## Previous Supershadow worldview memory (JSON)")
-    lines.append(json.dumps(worldview_obj, ensure_ascii=False, indent=2)[:18000])
+    lines.append("## Universe memory")
+    if universe_memory:
+        universe_rows = sorted(
+            universe_memory.values(),
+            key=lambda row: (
+                _universe_status_rank(row.get("status")),
+                int(row.get("super_candidate_runs") or 0),
+                int(row.get("tests_run") or 0),
+                int(row.get("seen_count") or 0),
+                str(row.get("slug") or ""),
+            ),
+            reverse=True,
+        )
+        for row in universe_rows[:10]:
+            lines.append(
+                f"- universe={row.get('slug')} | status={row.get('status')} | seen={row.get('seen_count')} | tests={row.get('tests_run')} | super_candidate_runs={row.get('super_candidate_runs')}"
+            )
+            if row.get("conditional_theorem"):
+                lines.append(
+                    f"  conditional_theorem: {_clip_text(row.get('conditional_theorem'), 700)}"
+                )
+            if row.get("positive_signs"):
+                lines.append(
+                    f"  positive_signs: {' | '.join(row.get('positive_signs') or [])[:700]}"
+                )
+            if row.get("negative_signs"):
+                lines.append(
+                    f"  negative_signs: {' | '.join(row.get('negative_signs') or [])[:700]}"
+                )
+            if row.get("invention_lesson"):
+                lines.append(
+                    f"  lesson: {_clip_text(row.get('invention_lesson'), 700)}"
+                )
+    else:
+        lines.append("- none")
     lines.append("")
-    lines.append("## Supershadow policy memory / warnings tail (JSON)")
-    lines.append(json.dumps(policy_obj, ensure_ascii=False, indent=2)[:12000])
+    lines.append("## Recent invention lessons")
+    if invention_lessons:
+        for lesson in invention_lessons[-8:]:
+            lines.append(f"- {_clip_text(lesson, 700)}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## Recent warnings")
+    if warnings_tail:
+        for warning in warnings_tail[-10:]:
+            lines.append(f"- {warning}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## Latest worldview memory")
+    compact_worldview = {
+        "summary": worldview_obj.get("summary"),
+        "latest_concept_titles": worldview_obj.get("latest_concept_titles"),
+        "latest_universes": worldview_obj.get("latest_universes"),
+    }
+    lines.append(json.dumps(compact_worldview, ensure_ascii=False, indent=2)[:6000])
     return "\n".join(lines)
 
 
@@ -1526,16 +1970,19 @@ def _build_supershadow_distillation_user_message(
     lines.append("")
     lines.append("## Distillation doctrine")
     lines.append(
-        "Do not widen the search. Sharpen this candidate into the minimum falsifiable thesis."
+        "Do not widen the search. Attack this universe first, then sharpen it into the minimum falsifiable thesis if it survives."
     )
     lines.append(
         "Preserve the conceptual leap if it still looks alive, but cut decorative structure."
     )
     lines.append(
-        "Return exactly one concept. Keep 1-2 kill tests. Add bridge lemmas only if they are genuine first bridges."
+        "Return exactly one concept. Keep 1-2 kill tests. Add at least 2 self_test_results when possible. Add bridge lemmas only if they are genuine first bridges."
     )
     lines.append(
         f"Shadow handoff budget after distillation: at most {max(0, handoff_budget)} handoff(s)."
+    )
+    lines.append(
+        "Only emit super_universe_candidate if this universe still looks like a strong shot after the attacks and the Aristotle probe is tiny."
     )
     lines.append("")
     lines.append("## Grounded fact basis")
@@ -1606,7 +2053,7 @@ async def run_supershadow_global_lab(
                 SUPERSHADOW_SYSTEM.encode("utf-8")
             ).hexdigest(),
             "user_prompt_sha256": hashlib.sha256(user.encode("utf-8")).hexdigest(),
-            "schema_version": 1,
+            "schema_version": 2,
             "trigger_kind": trigger_kind,
             "handoff_budget": handoff_budget,
             "suppress_handoffs_reason": suppress_handoffs_reason or "",
@@ -1714,6 +2161,14 @@ async def run_supershadow_global_lab(
             ),
             "concepts": concepts,
         }
+        universe_memory = _update_universe_memory(
+            old_policy.get("_supershadow_universe_memory"), concepts
+        )
+        invention_lessons = [
+            str(concept.get("invention_lesson") or "").strip()
+            for concept in concepts
+            if str(concept.get("invention_lesson") or "").strip()
+        ]
 
         worldview_payload = {
             "summary": normalized.get("worldview_summary") or "",
@@ -1721,6 +2176,15 @@ async def run_supershadow_global_lab(
                 str(concept.get("title") or "")
                 for concept in normalized.get("concepts") or []
             ][:8],
+            "latest_universes": [
+                {
+                    "concept_family": str(concept.get("concept_family") or ""),
+                    "title": str(concept.get("title") or ""),
+                    "status": str(concept.get("universe_status") or ""),
+                    "signs_of_life": list(concept.get("signs_of_life") or [])[:2],
+                }
+                for concept in normalized.get("concepts") or []
+            ][:6],
             "pressure_map": pressure_map[:6],
         }
         new_worldview_json = json.dumps(worldview_payload, ensure_ascii=False)
@@ -1732,12 +2196,14 @@ async def run_supershadow_global_lab(
                     "forbid_live_authority": True,
                 },
                 "notes": normalized.get("run_summary") or "",
+                "lessons": invention_lessons,
             },
         )
         next_family_cooldowns = _advance_family_cooldowns(
             family_cooldowns, suppressed_families
         )
         merged_policy["_supershadow_family_cooldowns"] = next_family_cooldowns
+        merged_policy["_supershadow_universe_memory"] = universe_memory
         if validation_warnings:
             merged_policy["_supershadow_validation_warnings_tail"] = (
                 list(merged_policy.get("_supershadow_validation_warnings_tail", []))
@@ -1751,8 +2217,9 @@ async def run_supershadow_global_lab(
             "distillation_output": distillation_normalized or {},
             "fact_basis": fact_basis,
             "pressure_map": pressure_map,
-            "family_memory": family_memory,
-            "meta": {
+                "family_memory": family_memory,
+                "universe_memory": universe_memory,
+                "meta": {
                 **request_meta,
                 "validation_warnings": validation_warnings,
                 "raw_preview": _clip_text(raw, 4000),

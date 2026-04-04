@@ -339,6 +339,7 @@
           {% if concept.concept_family %}
           <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-zinc-300 ring-1 ring-zinc-800/80">{{ concept.concept_family }}</span>
           {% endif %}
+          <span class="rounded-full bg-emerald-950/50 px-2 py-0.5 text-emerald-100 ring-1 ring-emerald-700/40">status {{ concept.universe_status or 'proposed' }}</span>
           <span class="rounded-full bg-cyan-500/15 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-500/30">compression {{ concept.compression_power }}</span>
           <span class="rounded-full bg-sky-500/15 px-2 py-0.5 text-sky-100 ring-1 ring-sky-500/30">fit {{ concept.fit_to_known_facts }}</span>
           <span class="rounded-full bg-teal-500/15 px-2 py-0.5 text-teal-100 ring-1 ring-teal-500/30">transfer {{ concept.transfer_value }}</span>
@@ -354,8 +355,28 @@
         </div>
 
         <h3 class="text-sm font-medium text-zinc-100">{{ concept.title }}</h3>
+        {% if concept.universe_thesis %}
+        <p class="mt-2 text-sm font-medium leading-relaxed text-cyan-100/90">{{ concept.universe_thesis }}</p>
+        {% endif %}
         {% if concept.worldview_summary %}
         <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ concept.worldview_summary }}</p>
+        {% endif %}
+
+        {% if concept.conditional_theorem or concept.invention_lesson %}
+        <div class="mt-3 grid gap-3 lg:grid-cols-2">
+          {% if concept.conditional_theorem %}
+          <div class="rounded-xl border border-cyan-900/40 bg-cyan-950/20 p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-cyan-300/90">Conditional theorem</p>
+            <p class="mt-2 text-sm leading-relaxed text-cyan-100/90">{{ concept.conditional_theorem }}</p>
+          </div>
+          {% endif %}
+          {% if concept.invention_lesson %}
+          <div class="rounded-xl border border-zinc-800/80 bg-black/25 p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Invention lesson</p>
+            <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ concept.invention_lesson }}</p>
+          </div>
+          {% endif %}
+        </div>
         {% endif %}
 
         {% if concept.parent_family or concept.why_not_same_as_existing_family or concept.smallest_transfer_probe %}
@@ -424,6 +445,47 @@
         </div>
         {% endif %}
 
+        {% if concept.self_test_results or concept.signs_of_life or concept.negative_signs %}
+        <div class="mt-3 grid gap-3 lg:grid-cols-2">
+          {% if concept.self_test_results %}
+          <div class="rounded-xl border border-sky-900/40 bg-sky-950/20 p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-sky-300/90">Self-tests</p>
+            {% for test in concept.self_test_results %}
+            <div class="{% if not loop.first %}mt-3 pt-3 border-t border-sky-900/30{% endif %}">
+              <p class="text-sm text-sky-100/90">{{ test.attack }}</p>
+              <p class="mt-1 text-xs text-sky-100/75"><span class="text-sky-200/80">Result:</span> {{ test.result }}</p>
+              {% if test.note %}
+              <p class="mt-1 text-xs text-sky-100/70">{{ test.note }}</p>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if concept.signs_of_life or concept.negative_signs %}
+          <div class="rounded-xl border border-emerald-900/40 bg-emerald-950/20 p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/90">Signs of life</p>
+            {% if concept.signs_of_life %}
+            <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-emerald-100/90">
+              {% for sign in concept.signs_of_life %}
+              <li>{{ sign }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="mt-2 text-sm text-emerald-100/70">No positive signs yet.</p>
+            {% endif %}
+            {% if concept.negative_signs %}
+            <p class="mt-3 text-[10px] font-semibold uppercase tracking-widest text-amber-300/90">Negative signs</p>
+            <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-amber-100/90">
+              {% for sign in concept.negative_signs %}
+              <li>{{ sign }}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
         {% if concept.kill_tests %}
         <div class="mt-3 rounded-xl border border-red-900/40 bg-red-950/20 p-3">
           <p class="text-[10px] font-semibold uppercase tracking-widest text-red-300/90">Smallest kill-test</p>
@@ -438,6 +500,48 @@
             {% endif %}
           </div>
           {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if concept.super_universe_candidate %}
+        <div class="mt-3 rounded-xl border border-fuchsia-900/40 bg-fuchsia-950/20 p-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-fuchsia-300/90">Super-universe candidate</p>
+          <p class="mt-2 text-sm leading-relaxed text-fuchsia-100/90">{{ concept.super_universe_candidate.why_now }}</p>
+          {% if concept.super_universe_candidate.survived_attacks %}
+          <p class="mt-3 text-[10px] font-semibold uppercase tracking-widest text-fuchsia-300/90">Attacks survived</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-fuchsia-100/90">
+            {% for item in concept.super_universe_candidate.survived_attacks %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if concept.super_universe_candidate.full_fact_audit %}
+          <div class="mt-3 grid gap-3 lg:grid-cols-2">
+            <div>
+              <p class="text-[10px] font-semibold uppercase tracking-widest text-fuchsia-300/90">Fact audit: explains</p>
+              <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-fuchsia-100/85">
+                {% for fact in concept.super_universe_candidate.full_fact_audit.explains %}
+                <li>{{ fact.fact_label or fact.fact_key }}</li>
+                {% else %}
+                <li>None listed</li>
+                {% endfor %}
+              </ul>
+            </div>
+            <div>
+              <p class="text-[10px] font-semibold uppercase tracking-widest text-fuchsia-300/90">Fact audit: awkward</p>
+              <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-fuchsia-100/85">
+                {% for fact in concept.super_universe_candidate.full_fact_audit.awkward %}
+                <li>{{ fact.fact_label or fact.fact_key }}</li>
+                {% else %}
+                <li>None listed</li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+          {% endif %}
+          {% if concept.super_universe_candidate.smallest_aristotle_probe %}
+          <p class="mt-3 text-xs text-fuchsia-100/80"><span class="text-fuchsia-200/90">Smallest Aristotle probe:</span> {{ concept.super_universe_candidate.smallest_aristotle_probe }}</p>
+          {% endif %}
         </div>
         {% endif %}
 

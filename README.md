@@ -98,14 +98,16 @@ Endpoints:
 The dashboard also includes a dedicated **Supershadow Lab** (`/supershadow`) for ontology-expanding conceptual search.
 
 - **Zero live authority**: Supershadow cannot create targets, experiments, or direct Aristotle work.
-- **Breakthrough-first search**: discovery runs now optimize for the strongest worldview shift on the board, not for producing several equally polite concepts.
-- **Distill-second workflow**: Supershadow first hunts 1-3 candidate worldviews, then sharpens only the best survivor into a kill-test, smallest transfer probe, and optional first bridge.
+- **Universe-first search**: discovery runs now optimize for inventing mathematical universes that could make Collatz feel easy, not for producing several equally polite concepts.
+- **Self-testing workflow**: Supershadow first hunts 1-3 candidate universes, then attacks only the best survivor itself before deciding whether it has signs of life.
 - **Compression over novelty**: concepts are judged by whether they make several grounded facts feel structural at once, not by how exotic they sound.
-- **Conceptual handoffs, not queue spam**: only the strongest surviving concept should emit a Shadow-facing handoff, and only after distillation sharpens it.
+- **Conceptual handoffs, not queue spam**: only the strongest surviving concept should emit a Shadow-facing handoff, and only after self-testing sharpens it.
 - **Incubation layer**: approving a handoff creates a tracked incubation packet rather than a live task. This preserves the conceptual leap as a first-class object instead of dissolving it into generic Shadow context.
 - **Lineage tracking**: Shadow can operationalize an incubation by citing its `source_incubation_ids`; approved live promotions can then mark that incubation as grounded contact with reality.
 - **Lifecycle visibility**: incubations move through states such as `incubating`, `operationalized`, and `grounded`, with event history shown in the Supershadow UI.
 - **Family discovery control**: Supershadow concepts now carry `concept_family`, `family_kind` (`established|adjacent|new`), `parent_family`, `smallest_transfer_probe`, and explicit “why this is not the same family again” text.
+- **Universe state tracking**: each concept also carries a `universe_status`, `conditional_theorem`, internal `self_test_results`, `signs_of_life`, `negative_signs`, and an `invention_lesson`.
+- **Rare super-universe escalation**: if a universe survives multiple internal attacks, still fits the grounded facts, and proposes a tiny Aristotle probe, Supershadow can mark it as a `super_universe_candidate` for human review.
 - **Worldview-first ranking**: concept ranking now prefers compression, fit to stubborn facts, ontological delta, and falsifiability before transfer-readiness.
 - **Anti-circling pressure**: repeated families that have not produced incubations or grounded descendants accumulate saturation penalty, but the system no longer forces artificial family diversity when one line looks substantially stronger.
 - **Stale-family suppression**: once a family repeats without transfer, Supershadow no longer just ranks it lower; normalization can drop it entirely unless the run presents a materially cheaper probe and a concrete explanation of what changed.
@@ -130,14 +132,26 @@ Operationally, a Supershadow run now behaves like:
 
 ```
 grounded facts + pressure map
-  -> discovery pass (1-3 worldview candidates, no live authority)
+  -> discovery pass (1-3 universe candidates, no live authority)
   -> pick dominant survivor
-  -> distillation pass (sharpest kill-test, smallest transfer probe, optional first bridge)
+  -> self-test pass (internal attacks, signs of life, theorem-shaped claim, optional first bridge)
   -> optional Shadow handoff for that survivor only
+  -> rare super-universe candidate packet if the survivor still looks like a strong shot
 ```
 
 The system is intentionally biased against abstract repetition: a family that keeps reappearing without incubation or grounding must either lower the transfer cost or lose rank, but a genuinely improving line can now stay in focus across runs instead of being diluted for variety.
 Family saturation is computed from system memory rather than trusting the model's self-score, so a stale family cannot simply label itself "novel" and escape the penalty.
+
+Conceptually, the target loop is now:
+
+```
+invent a universe
+  -> attack it inside Supershadow
+  -> look for signs of life
+  -> deepen or kill it
+  -> record what was learned about inventing stronger universes
+  -> repeat
+```
 
 Endpoints:
 

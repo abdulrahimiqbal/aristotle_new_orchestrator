@@ -31,7 +31,16 @@ def _load_json_object(raw: Any) -> dict[str, Any]:
 def _concept_sort_key(
     concept: dict[str, Any]
 ) -> tuple[Any, ...]:
+    status_rank = {
+        "super_candidate": 5,
+        "converging": 4,
+        "has_signs": 3,
+        "no_signs_yet": 2,
+        "proposed": 1,
+        "dead": 0,
+    }.get(str(concept.get("universe_status") or "proposed"), 0)
     return (
+        status_rank,
         int(concept.get("compression_power") or 0),
         int(concept.get("fit_to_known_facts") or 0),
         int(concept.get("ontological_delta") or 0),
@@ -53,8 +62,11 @@ def _present_handoff(row: dict[str, Any]) -> dict[str, Any]:
     pretty = str(row.get("payload_json") or "{}")
     if payload:
         pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+    review_kind = str(payload.get("review_kind") or "").strip().lower()
     return {
-        "action_label": "Handoff to Shadow",
+        "action_label": "Super-universe review"
+        if review_kind == "super_universe_candidate"
+        else "Handoff to Shadow",
         "title": str(payload.get("title") or "Shadow handoff"),
         "summary": str(payload.get("summary") or ""),
         "why_compressive": str(payload.get("why_compressive") or ""),
@@ -65,6 +77,7 @@ def _present_handoff(row: dict[str, Any]) -> dict[str, Any]:
         "concept_id": str(payload.get("concept_id") or row.get("concept_id") or ""),
         "concept_title": str(payload.get("concept_title") or ""),
         "concept_scores": payload.get("concept_scores") or {},
+        "super_universe_candidate": payload.get("super_universe_candidate") or {},
         "payload_json_pretty": pretty,
     }
 
@@ -158,6 +171,18 @@ def build_supershadow_ui_context(
         presented["bridge_lemmas"] = _load_json_list(
             presented.get("bridge_lemmas_json")
         )
+        presented["self_test_results"] = _load_json_list(
+            presented.get("self_test_results_json")
+        )
+        presented["signs_of_life"] = _load_json_list(
+            presented.get("signs_of_life_json")
+        )
+        presented["negative_signs"] = _load_json_list(
+            presented.get("negative_signs_json")
+        )
+        presented["super_universe_candidate"] = _load_json_object(
+            presented.get("super_universe_json")
+        )
         for key in (
             "compression_power",
             "fit_to_known_facts",
@@ -180,6 +205,14 @@ def build_supershadow_ui_context(
         presented["smallest_transfer_probe"] = str(
             presented.get("smallest_transfer_probe") or ""
         )
+        presented["universe_status"] = str(
+            presented.get("universe_status") or "proposed"
+        )
+        presented["universe_thesis"] = str(presented.get("universe_thesis") or "")
+        presented["conditional_theorem"] = str(
+            presented.get("conditional_theorem") or ""
+        )
+        presented["invention_lesson"] = str(presented.get("invention_lesson") or "")
         presented["fact_links"] = list(presented.get("fact_links") or [])
         presented["tensions"] = list(presented.get("tensions") or [])
         presented["kill_tests"] = list(presented.get("kill_tests") or [])
