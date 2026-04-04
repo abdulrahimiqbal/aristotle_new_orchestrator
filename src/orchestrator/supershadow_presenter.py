@@ -28,8 +28,13 @@ def _load_json_object(raw: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _concept_sort_key(concept: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, str]:
+def _concept_sort_key(
+    concept: dict[str, Any]
+) -> tuple[int, int, int, int, int, int, int, int, int, str, str]:
     return (
+        int(concept.get("transfer_value") or 0),
+        int(concept.get("family_novelty") or 0),
+        -int(concept.get("family_saturation_penalty") or 0),
         int(concept.get("compression_power") or 0),
         int(concept.get("fit_to_known_facts") or 0),
         int(concept.get("bridgeability") or 0),
@@ -37,6 +42,8 @@ def _concept_sort_key(concept: dict[str, Any]) -> tuple[int, int, int, int, int,
         -int(concept.get("grounding_cost") or 0),
         -int(concept.get("speculative_risk") or 0),
         int(concept.get("ontological_delta") or 0),
+        str(concept.get("family_kind") or ""),
+        str(concept.get("concept_family") or ""),
         str(concept.get("created_at") or ""),
     )
 
@@ -159,8 +166,20 @@ def build_supershadow_ui_context(
             "bridgeability",
             "grounding_cost",
             "speculative_risk",
+            "family_novelty",
+            "transfer_value",
+            "family_saturation_penalty",
         ):
             presented[key] = int(presented.get(key) or 0)
+        presented["concept_family"] = str(presented.get("concept_family") or "")
+        presented["family_kind"] = str(presented.get("family_kind") or "")
+        presented["parent_family"] = str(presented.get("parent_family") or "")
+        presented["why_not_same_as_existing_family"] = str(
+            presented.get("why_not_same_as_existing_family") or ""
+        )
+        presented["smallest_transfer_probe"] = str(
+            presented.get("smallest_transfer_probe") or ""
+        )
         presented["fact_links"] = list(presented.get("fact_links") or [])
         presented["tensions"] = list(presented.get("tensions") or [])
         presented["kill_tests"] = list(presented.get("kill_tests") or [])

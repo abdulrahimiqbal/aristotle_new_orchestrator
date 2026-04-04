@@ -335,8 +335,15 @@
       {% for concept in supershadow_ranked_concepts %}
       <article class="rounded-2xl border border-zinc-800/80 bg-zinc-950/50 p-4">
         <div class="flex flex-wrap items-center gap-2 mb-2 text-[10px] font-mono">
+          <span class="rounded-full bg-cyan-950/60 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-700/40">{{ concept.family_kind or 'established' }}</span>
+          {% if concept.concept_family %}
+          <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-zinc-300 ring-1 ring-zinc-800/80">{{ concept.concept_family }}</span>
+          {% endif %}
           <span class="rounded-full bg-cyan-500/15 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-500/30">compression {{ concept.compression_power }}</span>
           <span class="rounded-full bg-sky-500/15 px-2 py-0.5 text-sky-100 ring-1 ring-sky-500/30">fit {{ concept.fit_to_known_facts }}</span>
+          <span class="rounded-full bg-teal-500/15 px-2 py-0.5 text-teal-100 ring-1 ring-teal-500/30">transfer {{ concept.transfer_value }}</span>
+          <span class="rounded-full bg-fuchsia-500/15 px-2 py-0.5 text-fuchsia-100 ring-1 ring-fuchsia-500/30">novelty {{ concept.family_novelty }}</span>
+          <span class="rounded-full bg-orange-500/15 px-2 py-0.5 text-orange-100 ring-1 ring-orange-500/30">saturation {{ concept.family_saturation_penalty }}</span>
           <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-100 ring-1 ring-emerald-500/30">bridge {{ concept.bridgeability }}</span>
           <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-100 ring-1 ring-amber-500/30">falsify {{ concept.falsifiability }}</span>
           <span class="rounded-full bg-violet-500/15 px-2 py-0.5 text-violet-100 ring-1 ring-violet-500/30">delta {{ concept.ontological_delta }}</span>
@@ -349,6 +356,28 @@
         <h3 class="text-sm font-medium text-zinc-100">{{ concept.title }}</h3>
         {% if concept.worldview_summary %}
         <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ concept.worldview_summary }}</p>
+        {% endif %}
+
+        {% if concept.parent_family or concept.why_not_same_as_existing_family or concept.smallest_transfer_probe %}
+        <div class="mt-3 grid gap-3 lg:grid-cols-2">
+          {% if concept.parent_family or concept.why_not_same_as_existing_family %}
+          <div class="rounded-xl border border-zinc-800/80 bg-black/25 p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Family relation</p>
+            {% if concept.parent_family %}
+            <p class="mt-2 text-xs text-zinc-400"><span class="text-zinc-500">Parent family:</span> {{ concept.parent_family }}</p>
+            {% endif %}
+            {% if concept.why_not_same_as_existing_family %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-300">{{ concept.why_not_same_as_existing_family }}</p>
+            {% endif %}
+          </div>
+          {% endif %}
+          {% if concept.smallest_transfer_probe %}
+          <div class="rounded-xl border border-teal-900/40 bg-teal-950/20 p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-teal-300/90">Smallest transfer probe</p>
+            <p class="mt-2 text-sm leading-relaxed text-teal-100/90">{{ concept.smallest_transfer_probe }}</p>
+          </div>
+          {% endif %}
+        </div>
         {% endif %}
 
         {% if concept.concepts %}

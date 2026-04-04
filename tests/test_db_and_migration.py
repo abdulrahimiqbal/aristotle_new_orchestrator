@@ -72,8 +72,14 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         assert "bridgeability" in sh_cols
         assert "grounding_cost" in sh_cols
         assert "speculative_risk" in sh_cols
+        assert "concept_family" in sh_cols
+        assert "family_kind" in sh_cols
+        assert "smallest_transfer_probe" in sh_cols
+        assert "family_novelty" in sh_cols
+        assert "transfer_value" in sh_cols
+        assert "family_saturation_penalty" in sh_cols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 12
+        assert int(uv) >= 13
     finally:
         conn.close()
 

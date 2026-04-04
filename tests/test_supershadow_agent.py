@@ -145,7 +145,9 @@ def test_normalize_supershadow_response_filters_invalid_concepts_and_caps_handof
         ],
     }
 
-    normalized, warnings = _normalize_supershadow_response(raw, fact_basis, max_handoffs=1)
+    normalized, warnings = _normalize_supershadow_response(
+        raw, fact_basis, [], max_handoffs=1
+    )
 
     assert normalized["worldview_summary"] == "Try a new odd-state language."
     assert len(normalized["concepts"]) == 1
@@ -156,6 +158,174 @@ def test_normalize_supershadow_response_filters_invalid_concepts_and_caps_handof
     assert "objective" not in concept["shadow_handoffs"][0]
     assert "concept_missing_explained_facts" in warnings
     assert "handoff_cap_applied" in warnings
+
+
+def test_normalize_supershadow_response_prefers_new_family_and_synthesizes_probe_handoff() -> None:
+    fact_basis = [
+        {
+            "fact_key": "builtin:modular_descent_mod_8",
+            "label": "Mod 8 descent is grounded.",
+            "detail": "detail",
+            "kind": "modular",
+            "provenance": "builtin_seed",
+        },
+        {
+            "fact_key": "builtin:collatz_2_adic_extension",
+            "label": "The 2-adic Collatz extension has been formalized.",
+            "detail": "detail",
+            "kind": "formalized_extension",
+            "provenance": "builtin_seed",
+        },
+    ]
+    family_memory = [
+        {
+            "concept_family": "odd_state_quotient",
+            "family_kind": "established",
+            "concept_count": 6,
+            "active_incubations": 0,
+            "grounded_count": 0,
+            "stalled": True,
+        }
+    ]
+    raw = {
+        "worldview_summary": "Push on adjacent and new families, not just the exhausted one.",
+        "run_summary": "Family-diverse pass.",
+        "concepts": [
+            {
+                "title": "Odd-state quotient reprise",
+                "concept_family": "odd_state_quotient",
+                "family_kind": "established",
+                "worldview_summary": "This is the stale family.",
+                "concepts": ["Same lane again."],
+                "ontological_moves": ["Odd quotient"],
+                "explains_facts": [{"fact_key": "builtin:modular_descent_mod_8"}],
+                "tensions": [{"text": "Still unclear."}],
+                "kill_tests": [{"description": "Try the same thing."}],
+                "bridge_lemmas": ["Lemma stale"],
+                "smallest_transfer_probe": "Vague next step.",
+                "reduce_frontier_or_rename": "Maybe reduce it.",
+                "scores": {
+                    "compression_power": 5,
+                    "fit_to_known_facts": 5,
+                    "bridgeability": 4,
+                    "falsifiability": 4,
+                    "grounding_cost": 4,
+                    "speculative_risk": 3,
+                    "family_novelty": 1,
+                    "transfer_value": 2,
+                    "family_saturation_penalty": 5,
+                },
+            },
+            {
+                "title": "Residue sheaf on odd fibers",
+                "concept_family": "odd_fiber_residue_sheaf",
+                "family_kind": "new",
+                "worldview_summary": "A new family with a small probe.",
+                "concepts": ["Treat residue behavior as local sections on odd fibers."],
+                "ontological_moves": ["Odd-fiber sheaf", "Local residue gluing"],
+                "explains_facts": [
+                    {"fact_key": "builtin:modular_descent_mod_8"},
+                    {"fact_key": "builtin:collatz_2_adic_extension"},
+                ],
+                "tensions": [{"text": "Needs a compatibility interface."}],
+                "kill_tests": [
+                    {
+                        "description": "Check whether local sections glue across one odd residue obstruction.",
+                        "expected_failure_signal": "The local interface breaks on a single residue class.",
+                        "suggested_grounding_path": "Formalize the local interface only.",
+                    }
+                ],
+                "bridge_lemmas": ["Define one local section map and prove single-step compatibility."],
+                "smallest_transfer_probe": "Formalize a local compatibility interface on one odd residue class.",
+                "reduce_frontier_or_rename": "Reduces the frontier if the interface predicts one obstructing class.",
+            },
+        ],
+    }
+
+    normalized, warnings = _normalize_supershadow_response(
+        raw, fact_basis, family_memory, max_handoffs=2
+    )
+
+    assert len(normalized["concepts"]) == 1
+    best = normalized["concepts"][0]
+    assert best["concept_family"] == "odd_fiber_residue_sheaf"
+    assert best["family_kind"] == "new"
+    assert best["scores"]["transfer_value"] >= 4
+    assert len(best["shadow_handoffs"]) == 1
+    assert "handoff_synthesized_from_probe" in warnings
+    assert "stale_family_suppressed" in warnings
+
+
+def test_normalize_supershadow_response_blocks_stale_exact_title_repeats() -> None:
+    fact_basis = [
+        {
+            "fact_key": "builtin:modular_descent_mod_8",
+            "label": "Mod 8 descent is grounded.",
+            "detail": "detail",
+            "kind": "modular",
+            "provenance": "builtin_seed",
+        }
+    ]
+    family_memory = [
+        {
+            "concept_family": "graded_2_adic_module",
+            "family_kind": "established",
+            "concept_count": 12,
+            "active_incubations": 0,
+            "grounded_count": 0,
+            "stalled": True,
+            "recent_titles": ["Graded 2-adic module with descent filtration"],
+        }
+    ]
+    raw = {
+        "worldview_summary": "Avoid circling stale families.",
+        "run_summary": "One stale repeat, one adjacent escape hatch.",
+        "concepts": [
+            {
+                "title": "Graded 2-adic module with descent filtration",
+                "concept_family": "graded_2_adic_module",
+                "family_kind": "established",
+                "worldview_summary": "Same title, same family, no new transfer path.",
+                "concepts": ["Repeat the same filtration story."],
+                "ontological_moves": ["2-adic filtration"],
+                "explains_facts": [{"fact_key": "builtin:modular_descent_mod_8"}],
+                "kill_tests": [{"description": "Repeat the old filter."}],
+                "bridge_lemmas": ["Lemma stale"],
+                "smallest_transfer_probe": "Try it again.",
+            },
+            {
+                "title": "Filtered odd-fiber module",
+                "concept_family": "odd_fiber_filtered_module",
+                "family_kind": "adjacent",
+                "parent_family": "graded_2_adic_module",
+                "why_not_same_as_existing_family": "Moves the descent story onto odd fibers and adds a bounded compatibility probe.",
+                "worldview_summary": "Adjacent family with a cheaper probe.",
+                "concepts": ["Shift the filtration onto odd fibers only."],
+                "ontological_moves": ["Odd-fiber filtration"],
+                "explains_facts": [{"fact_key": "builtin:modular_descent_mod_8"}],
+                "tensions": [{"text": "Needs one compatibility bridge."}],
+                "kill_tests": [
+                    {
+                        "description": "Check compatibility on one odd residue class.",
+                        "expected_failure_signal": "Odd residue transport breaks immediately.",
+                        "suggested_grounding_path": "Formalize one bounded odd-fiber interface.",
+                    }
+                ],
+                "bridge_lemmas": ["Define the odd-fiber filtration interface."],
+                "smallest_transfer_probe": "Formalize a bounded odd-fiber compatibility interface on one residue class.",
+                "reduce_frontier_or_rename": "Reduces the frontier if the odd-fiber interface isolates one residue obstruction.",
+            },
+        ],
+    }
+
+    normalized, warnings = _normalize_supershadow_response(
+        raw, fact_basis, family_memory, max_handoffs=2
+    )
+
+    assert [concept["concept_family"] for concept in normalized["concepts"]] == [
+        "odd_fiber_filtered_module"
+    ]
+    assert "stale_family_suppressed" in warnings
 
 
 def test_run_supershadow_global_lab_can_think_without_emitting_handoffs(

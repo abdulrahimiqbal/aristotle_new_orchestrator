@@ -467,6 +467,22 @@ class Database:
                 """
             )
             _set_user_version(conn, 12)
+            v = 12
+        if v < 13:
+            for column_sql in (
+                "ALTER TABLE supershadow_concept ADD COLUMN concept_family TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN family_kind TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN parent_family TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN why_not_same_as_existing_family TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN smallest_transfer_probe TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE supershadow_concept ADD COLUMN family_novelty INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE supershadow_concept ADD COLUMN transfer_value INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE supershadow_concept ADD COLUMN family_saturation_penalty INTEGER NOT NULL DEFAULT 0",
+            ):
+                column_name = column_sql.split(" ADD COLUMN ", 1)[1].split(" ", 1)[0]
+                if not _column_exists(conn, "supershadow_concept", column_name):
+                    conn.execute(column_sql)
+            _set_user_version(conn, 13)
 
     def create_campaign(
         self,
@@ -3013,9 +3029,11 @@ class Database:
                         concepts_json, ontological_moves_json, bridge_lemmas_json,
                         reduce_frontier_or_rename, compression_power, fit_to_known_facts,
                         ontological_delta, falsifiability, bridgeability, grounding_cost,
-                        speculative_risk, created_at
+                        speculative_risk, concept_family, family_kind, parent_family,
+                        why_not_same_as_existing_family, smallest_transfer_probe,
+                        family_novelty, transfer_value, family_saturation_penalty, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cid,
@@ -3036,6 +3054,14 @@ class Database:
                         int(scores.get("bridgeability") or 0),
                         int(scores.get("grounding_cost") or 0),
                         int(scores.get("speculative_risk") or 0),
+                        str(concept.get("concept_family") or "")[:120],
+                        str(concept.get("family_kind") or "")[:32],
+                        str(concept.get("parent_family") or "")[:120],
+                        str(concept.get("why_not_same_as_existing_family") or "")[:2000],
+                        str(concept.get("smallest_transfer_probe") or "")[:2000],
+                        int(scores.get("family_novelty") or 0),
+                        int(scores.get("transfer_value") or 0),
+                        int(scores.get("family_saturation_penalty") or 0),
                         now,
                     ),
                 )

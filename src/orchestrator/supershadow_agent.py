@@ -33,6 +33,14 @@ _VALID_SCORE_KEYS = (
     "bridgeability",
     "grounding_cost",
     "speculative_risk",
+    "family_novelty",
+    "transfer_value",
+    "family_saturation_penalty",
+)
+_VALID_FAMILY_KINDS = frozenset({"established", "adjacent", "new"})
+_STALE_FAMILY_REPEAT_LIMIT = 3
+_REPEAT_FAMILY_EXPLANATION_PLACEHOLDER = (
+    "Repeated family must state what changed before it deserves transfer."
 )
 
 _BUILTIN_FACTS = [
@@ -253,6 +261,20 @@ def _merge_policy(old: dict[str, Any], delta: dict[str, Any] | None) -> dict[str
     return out
 
 
+def _family_slug(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    raw = _COUNTER_KEY_SANITIZE.sub("_", raw)
+    raw = raw.strip("._:-")
+    return raw[:120]
+
+
+def _normalize_family_kind(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in _VALID_FAMILY_KINDS:
+        return text
+    return "established"
+
+
 def _extract_tags(text: str) -> set[str]:
     lowered = text.lower()
     tags: set[str] = set()
@@ -446,6 +468,88 @@ def _build_pressure_map(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pressure_map[:10]
 
 
+def _build_family_memory(db: Database) -> list[dict[str, Any]]:
+    concepts = db.list_supershadow_concepts(SUPERSHADOW_GLOBAL_GOAL_ID, limit=160)
+    incubations = db.list_supershadow_incubations(SUPERSHADOW_GLOBAL_GOAL_ID, limit=160)
+
+    concept_by_id = {str(row.get("id") or ""): dict(row) for row in concepts}
+    families: dict[str, dict[str, Any]] = {}
+    for row in concepts:
+        title = str(row.get("title") or "")
+        family = _family_slug(row.get("concept_family") or title)
+        if not family:
+            continue
+        entry = families.setdefault(
+            family,
+            {
+                "concept_family": family,
+                "family_kind": _normalize_family_kind(row.get("family_kind")),
+                "parent_family": _family_slug(row.get("parent_family")),
+                "concept_count": 0,
+                "active_incubations": 0,
+                "grounded_count": 0,
+                "reviewed_handoffs": 0,
+                "recent_titles": [],
+            },
+        )
+        entry["concept_count"] += 1
+        if title and title not in entry["recent_titles"]:
+            entry["recent_titles"].append(title[:160])
+            entry["recent_titles"] = entry["recent_titles"][:4]
+        family_kind = _normalize_family_kind(row.get("family_kind"))
+        if family_kind == "new" or (
+            family_kind == "adjacent" and entry.get("family_kind") != "new"
+        ):
+            entry["family_kind"] = family_kind
+        parent_family = _family_slug(row.get("parent_family"))
+        if parent_family and not entry.get("parent_family"):
+            entry["parent_family"] = parent_family
+
+    for incubation in incubations:
+        concept_id = str(incubation.get("concept_id") or "")
+        concept = concept_by_id.get(concept_id, {})
+        family = _family_slug(concept.get("concept_family") or concept.get("title"))
+        if not family:
+            continue
+        entry = families.setdefault(
+            family,
+            {
+                "concept_family": family,
+                "family_kind": _normalize_family_kind(concept.get("family_kind")),
+                "parent_family": _family_slug(concept.get("parent_family")),
+                "concept_count": 0,
+                "active_incubations": 0,
+                "grounded_count": 0,
+                "reviewed_handoffs": 0,
+                "recent_titles": [],
+            },
+        )
+        entry["reviewed_handoffs"] += 1
+        status = str(incubation.get("status") or "").strip().lower()
+        if status in {"incubating", "operationalized"}:
+            entry["active_incubations"] += 1
+        if status == "grounded":
+            entry["grounded_count"] += 1
+
+    rows = list(families.values())
+    for row in rows:
+        row["stalled"] = (
+            int(row.get("concept_count") or 0) >= 3
+            and int(row.get("active_incubations") or 0) == 0
+            and int(row.get("grounded_count") or 0) == 0
+        )
+    rows.sort(
+        key=lambda row: (
+            int(row.get("grounded_count") or 0),
+            int(row.get("active_incubations") or 0),
+            int(row.get("concept_count") or 0),
+            str(row.get("concept_family") or ""),
+        ),
+        reverse=True,
+    )
+    return rows[:20]
+
+
 SUPERSHADOW_SYSTEM = """You are Supershadow Lab: an upstream conceptual invention engine for the Collatz project.
 
 You are not Shadow, and you are not Aristotle/live.
@@ -485,6 +589,10 @@ Your output is STRICT JSON with this shape:
   "concepts": [
     {
       "title": "short title",
+      "concept_family": "stable family slug like odd_state_quotient or graded_2_adic_module",
+      "family_kind": "established|adjacent|new",
+      "parent_family": "required when family_kind is adjacent, else empty string",
+      "why_not_same_as_existing_family": "why this is genuinely a new or adjacent family rather than a restatement",
       "worldview_summary": "why this language shift matters",
       "concepts": ["first conceptual claim", "second conceptual claim"],
       "ontological_moves": ["new ambient space", "new operator", "new quotient"],
@@ -509,6 +617,7 @@ Your output is STRICT JSON with this shape:
         }
       ],
       "bridge_lemmas": ["lemma family that would connect this back to formal work"],
+      "smallest_transfer_probe": "smallest Shadow-facing bridge or bounded diagnostic that would make this family actionable",
       "reduce_frontier_or_rename": "does this reduce the frontier or merely rename it?",
       "scores": {
         "compression_power": 0,
@@ -517,7 +626,10 @@ Your output is STRICT JSON with this shape:
         "falsifiability": 0,
         "bridgeability": 0,
         "grounding_cost": 0,
-        "speculative_risk": 0
+        "speculative_risk": 0,
+        "family_novelty": 0,
+        "transfer_value": 0,
+        "family_saturation_penalty": 0
       },
       "shadow_handoffs": [
         {
@@ -536,7 +648,14 @@ Your output is STRICT JSON with this shape:
 
 Rules:
 - 3 to 6 concepts.
+- If possible, include at least:
+  1 established-family exploit,
+  1 adjacent-family concept,
+  and 1 genuinely new family.
+- If a family is marked stalled or repeatedly appears without transfer, avoid emitting it again unless you can name a materially cheaper smallest_transfer_probe and a concrete reason this pass is different.
 - Every concept must explain grounded facts, include at least one kill test, and include bridge lemmas.
+- Every concept must declare a concept_family and the smallest_transfer_probe that would make it actionable for Shadow.
+- If you repeat an existing family, you must explain what changed and why this is not the same family again.
 - Supershadow should not be rewarded for novelty alone. High ontological delta without compression is weak.
 - A good concept explains multiple grounded facts at once and makes awkward facts feel natural.
 - A concept that merely renames the frontier should score poorly.
@@ -552,10 +671,37 @@ def _score_in_range(value: Any, default: int = 0) -> int:
     return max(0, min(5, score))
 
 
-def _infer_concept_scores(concept: dict[str, Any]) -> dict[str, int]:
+def _looks_low_cost_probe(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in (
+            "bounded",
+            "finite",
+            "small",
+            "local",
+            "first bridge",
+            "interface",
+            "compatibility",
+            "well-defined",
+            "residue",
+            "mod ",
+            "odd",
+            "single-step",
+        )
+    )
+
+
+def _infer_concept_scores(
+    concept: dict[str, Any], family_stats: dict[str, Any] | None = None
+) -> dict[str, int]:
     title_blob = " ".join(
         [
             str(concept.get("title") or ""),
+            str(concept.get("concept_family") or ""),
+            str(concept.get("family_kind") or ""),
+            str(concept.get("why_not_same_as_existing_family") or ""),
+            str(concept.get("smallest_transfer_probe") or ""),
             str(concept.get("worldview_summary") or ""),
             " ".join(str(item) for item in concept.get("concepts") or []),
             " ".join(str(item) for item in concept.get("ontological_moves") or []),
@@ -566,6 +712,13 @@ def _infer_concept_scores(concept: dict[str, Any]) -> dict[str, int]:
     kill_tests = concept.get("kill_tests") or []
     bridge_lemmas = concept.get("bridge_lemmas") or []
     tensions = concept.get("tensions") or []
+    family_kind = _normalize_family_kind(concept.get("family_kind"))
+    smallest_transfer_probe = _clip_text(
+        concept.get("smallest_transfer_probe"), 1200
+    ).strip()
+    why_not_same = _clip_text(
+        concept.get("why_not_same_as_existing_family"), 1200
+    ).strip()
 
     compression = min(5, max(1, explained_count))
     fit = min(5, max(1, explained_count + (1 if tensions else 0)))
@@ -582,7 +735,10 @@ def _infer_concept_scores(concept: dict[str, Any]) -> dict[str, int]:
             ),
         ),
     )
-    bridgeability = min(5, max(1, len(bridge_lemmas)))
+    bridgeability = max(1, len(bridge_lemmas))
+    if bridge_lemmas and smallest_transfer_probe:
+        bridgeability += 1
+    bridgeability = min(5, bridgeability)
     grounding_cost = 2
     speculative_risk = 2
     if any(token in title_blob for token in ("axiom", "foundational", "foundation shift")):
@@ -591,8 +747,43 @@ def _infer_concept_scores(concept: dict[str, Any]) -> dict[str, int]:
     elif any(token in title_blob for token in ("compactification", "completion", "spectral", "functorial", "category")):
         grounding_cost = 3
         speculative_risk = 3
+    if smallest_transfer_probe and _looks_low_cost_probe(smallest_transfer_probe):
+        grounding_cost = min(grounding_cost, 3)
     if "rename" in title_blob and "reduce" not in title_blob:
         compression = max(1, compression - 1)
+    family_novelty = 2
+    if family_kind == "new":
+        family_novelty = 5
+    elif family_kind == "adjacent":
+        family_novelty = 4
+    if why_not_same:
+        family_novelty = min(5, family_novelty + 1)
+
+    transfer_value = 1
+    if smallest_transfer_probe:
+        transfer_value += 2
+        if _looks_low_cost_probe(smallest_transfer_probe):
+            transfer_value += 1
+    if bridge_lemmas:
+        transfer_value += 1
+    if kill_tests:
+        transfer_value += 1
+    transfer_value = min(5, transfer_value)
+
+    family_saturation_penalty = 0
+    family_stats = family_stats or {}
+    prior_count = int(family_stats.get("concept_count") or 0)
+    active_incubations = int(family_stats.get("active_incubations") or 0)
+    grounded_count = int(family_stats.get("grounded_count") or 0)
+    stalled = bool(family_stats.get("stalled"))
+    if family_kind == "new":
+        family_saturation_penalty = 0 if prior_count == 0 else 1
+    elif active_incubations > 0 or grounded_count > 0:
+        family_saturation_penalty = 1
+    elif stalled:
+        family_saturation_penalty = min(5, 2 + prior_count // 2)
+    elif prior_count > 0:
+        family_saturation_penalty = min(4, 1 + prior_count // 3)
     return {
         "compression_power": compression,
         "fit_to_known_facts": fit,
@@ -601,16 +792,115 @@ def _infer_concept_scores(concept: dict[str, Any]) -> dict[str, int]:
         "bridgeability": bridgeability,
         "grounding_cost": grounding_cost,
         "speculative_risk": speculative_risk,
+        "family_novelty": family_novelty,
+        "transfer_value": transfer_value,
+        "family_saturation_penalty": family_saturation_penalty,
     }
 
 
-def _normalize_scores(raw_scores: Any, concept: dict[str, Any]) -> dict[str, int]:
-    inferred = _infer_concept_scores(concept)
+def _normalize_scores(
+    raw_scores: Any,
+    concept: dict[str, Any],
+    family_stats: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    inferred = _infer_concept_scores(concept, family_stats)
     normalized = dict(inferred)
     if isinstance(raw_scores, dict):
-        for key in _VALID_SCORE_KEYS:
+        for key in (
+            "compression_power",
+            "fit_to_known_facts",
+            "ontological_delta",
+            "falsifiability",
+            "bridgeability",
+            "grounding_cost",
+            "speculative_risk",
+        ):
             normalized[key] = _score_in_range(raw_scores.get(key), inferred[key])
+        for key in ("family_novelty", "transfer_value"):
+            normalized[key] = max(
+                inferred[key], _score_in_range(raw_scores.get(key), inferred[key])
+            )
+        normalized["family_saturation_penalty"] = max(
+            inferred["family_saturation_penalty"],
+            _score_in_range(
+                raw_scores.get("family_saturation_penalty"),
+                inferred["family_saturation_penalty"],
+            ),
+        )
+    probe = _clip_text(concept.get("smallest_transfer_probe"), 1200).strip()
+    if probe and _looks_low_cost_probe(probe):
+        normalized["grounding_cost"] = min(normalized["grounding_cost"], 3)
+        normalized["transfer_value"] = max(normalized["transfer_value"], 4)
+    if _normalize_family_kind(concept.get("family_kind")) == "new":
+        normalized["family_novelty"] = max(normalized["family_novelty"], 4)
     return normalized
+
+
+def _normalize_family_fields(
+    concept_raw: dict[str, Any], title: str, family_memory_lookup: dict[str, dict[str, Any]]
+) -> dict[str, str]:
+    concept_family = _family_slug(concept_raw.get("concept_family") or title)
+    family_kind = _normalize_family_kind(concept_raw.get("family_kind"))
+    parent_family = _family_slug(concept_raw.get("parent_family"))
+    if family_kind == "adjacent" and not parent_family:
+        parent_family = concept_family
+    why_not_same = _clip_text(
+        concept_raw.get("why_not_same_as_existing_family"), 1200
+    ).strip()
+    if concept_family in family_memory_lookup and not why_not_same:
+        why_not_same = _REPEAT_FAMILY_EXPLANATION_PLACEHOLDER
+    smallest_transfer_probe = _clip_text(
+        concept_raw.get("smallest_transfer_probe"), 1200
+    ).strip()
+    return {
+        "concept_family": concept_family,
+        "family_kind": family_kind,
+        "parent_family": parent_family,
+        "why_not_same_as_existing_family": why_not_same,
+        "smallest_transfer_probe": smallest_transfer_probe,
+    }
+
+
+def _family_materially_advances(
+    concept: dict[str, Any], family_stats: dict[str, Any] | None
+) -> bool:
+    if not family_stats:
+        return True
+    prior_count = int(family_stats.get("concept_count") or 0)
+    if prior_count < _STALE_FAMILY_REPEAT_LIMIT or not bool(family_stats.get("stalled")):
+        return True
+
+    family_kind = _normalize_family_kind(concept.get("family_kind"))
+    if family_kind == "new":
+        return True
+
+    title = str(concept.get("title") or "").strip()
+    recent_titles = {
+        str(item or "").strip() for item in family_stats.get("recent_titles") or []
+    }
+    if title and title in recent_titles:
+        return False
+
+    why_not_same = str(concept.get("why_not_same_as_existing_family") or "").strip()
+    if (
+        not why_not_same
+        or why_not_same == _REPEAT_FAMILY_EXPLANATION_PLACEHOLDER
+    ):
+        return False
+
+    probe = str(concept.get("smallest_transfer_probe") or "").strip()
+    if not probe or not _looks_low_cost_probe(probe):
+        return False
+
+    scores = concept.get("scores") or {}
+    if int(scores.get("transfer_value") or 0) < 4:
+        return False
+    if int(scores.get("bridgeability") or 0) < 2:
+        return False
+
+    if family_kind == "adjacent":
+        return int(scores.get("family_novelty") or 0) >= 4
+    return int(scores.get("transfer_value") or 0) >= 5
 
 
 def _normalize_fact_reference(
@@ -695,11 +985,13 @@ def _normalize_tensions(raw: Any) -> list[dict[str, Any]]:
 
 def _handoff_eligible(scores: dict[str, int]) -> bool:
     return (
-        scores["compression_power"] >= 4
-        and scores["fit_to_known_facts"] >= 4
-        and scores["falsifiability"] >= 3
-        and scores["bridgeability"] >= 3
-        and scores["grounding_cost"] <= 3
+        (scores["compression_power"] >= 4 or scores["family_novelty"] >= 4)
+        and scores["fit_to_known_facts"] >= 3
+        and scores["falsifiability"] >= 2
+        and scores["bridgeability"] >= 2
+        and scores["transfer_value"] >= 3
+        and scores["family_saturation_penalty"] <= 3
+        and (scores["grounding_cost"] <= 3 or scores["transfer_value"] >= 4)
         and scores["speculative_risk"] <= 4
     )
 
@@ -769,9 +1061,14 @@ def _normalize_shadow_handoffs(
     return out
 
 
-def _concept_sort_key(concept: dict[str, Any]) -> tuple[int, int, int, int, int, int, int]:
+def _concept_sort_key(
+    concept: dict[str, Any]
+) -> tuple[int, int, int, int, int, int, int, int, int, str]:
     scores = concept.get("scores") or {}
     return (
+        int(scores.get("transfer_value") or 0),
+        int(scores.get("family_novelty") or 0),
+        -int(scores.get("family_saturation_penalty") or 0),
         int(scores.get("compression_power") or 0),
         int(scores.get("fit_to_known_facts") or 0),
         int(scores.get("bridgeability") or 0),
@@ -779,18 +1076,79 @@ def _concept_sort_key(concept: dict[str, Any]) -> tuple[int, int, int, int, int,
         -int(scores.get("grounding_cost") or 0),
         -int(scores.get("speculative_risk") or 0),
         int(scores.get("ontological_delta") or 0),
+        str(concept.get("concept_family") or ""),
     )
+
+
+def _default_handoff_payload(concept: dict[str, Any]) -> list[dict[str, Any]]:
+    probe = _clip_text(concept.get("smallest_transfer_probe"), 1200).strip()
+    if not probe:
+        return []
+    return [
+        {
+            "title": f"Handoff: {concept['title']}",
+            "summary": _clip_text(concept.get("worldview_summary"), 1200).strip(),
+            "why_compressive": (
+                f"Preserves the concept family '{concept.get('concept_family')}' while testing a smaller actionable descendant."
+            ),
+            "bridge_lemmas": list(concept.get("bridge_lemmas") or []),
+            "shadow_task": probe,
+            "recommended_next_step": probe,
+            "grounding_notes": "Use the smallest_transfer_probe before escalating to heavier conceptual machinery.",
+        }
+    ]
+
+
+def _select_family_diverse_concepts(
+    concepts: list[dict[str, Any]], warnings: list[str]
+) -> list[dict[str, Any]]:
+    by_family: dict[str, list[dict[str, Any]]] = {}
+    for concept in concepts:
+        family = str(concept.get("concept_family") or "")
+        by_family.setdefault(family, []).append(concept)
+    unique: list[dict[str, Any]] = []
+    for family, rows in by_family.items():
+        rows.sort(key=_concept_sort_key, reverse=True)
+        unique.append(rows[0])
+        if len(rows) > 1:
+            _append_warning_once(warnings, "family_repeat_filtered")
+    unique.sort(key=_concept_sort_key, reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    picked_families: set[str] = set()
+    for family_kind in ("new", "adjacent", "established"):
+        for concept in unique:
+            family = str(concept.get("concept_family") or "")
+            if family in picked_families:
+                continue
+            if str(concept.get("family_kind") or "") == family_kind:
+                selected.append(concept)
+                picked_families.add(family)
+                break
+    for concept in unique:
+        family = str(concept.get("concept_family") or "")
+        if family in picked_families:
+            continue
+        selected.append(concept)
+        picked_families.add(family)
+        if len(selected) >= 6:
+            break
+    return selected[:6]
 
 
 def _normalize_supershadow_response(
     data: dict[str, Any],
     fact_basis: list[dict[str, Any]],
+    family_memory: list[dict[str, Any]],
     *,
     max_handoffs: int,
 ) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     fact_lookup = {str(fact["fact_key"]): fact for fact in fact_basis}
     fact_labels = {str(fact["label"]).lower(): fact for fact in fact_basis}
+    family_memory_lookup = {
+        str(row.get("concept_family") or ""): row for row in family_memory
+    }
 
     worldview_summary = _clip_text(data.get("worldview_summary"), 4000).strip()
     if not worldview_summary:
@@ -830,8 +1188,12 @@ def _normalize_supershadow_response(
             _append_warning_once(warnings, "concept_missing_kill_tests")
             continue
 
+        family_fields = _normalize_family_fields(
+            concept_raw, title, family_memory_lookup
+        )
         concept = {
             "title": title,
+            **family_fields,
             "worldview_summary": _clip_text(
                 concept_raw.get("worldview_summary"), 2000
             ).strip()
@@ -850,14 +1212,28 @@ def _normalize_supershadow_response(
                 concept_raw.get("reduce_frontier_or_rename"), 1200
             ).strip(),
         }
-        concept["scores"] = _normalize_scores(concept_raw.get("scores"), concept)
+        concept["scores"] = _normalize_scores(
+            concept_raw.get("scores"),
+            concept,
+            family_memory_lookup.get(concept["concept_family"]),
+        )
+        if not _family_materially_advances(
+            concept, family_memory_lookup.get(concept["concept_family"])
+        ):
+            _append_warning_once(warnings, "stale_family_suppressed")
+            continue
         if not _handoff_eligible(concept["scores"]):
             if concept_raw.get("shadow_handoffs"):
                 _append_warning_once(warnings, "handoff_below_threshold")
             concept["shadow_handoffs"] = []
         else:
+            handoff_source = concept_raw.get("shadow_handoffs")
+            if not handoff_source:
+                handoff_source = _default_handoff_payload(concept)
+                if handoff_source:
+                    _append_warning_once(warnings, "handoff_synthesized_from_probe")
             concept_handoffs = _normalize_shadow_handoffs(
-                concept_raw.get("shadow_handoffs"),
+                handoff_source,
                 concept=concept,
                 max_handoffs=handoff_budget,
                 warnings=warnings,
@@ -868,6 +1244,7 @@ def _normalize_supershadow_response(
 
     if not concepts_out:
         _append_warning_once(warnings, "no_valid_concepts")
+    concepts_out = _select_family_diverse_concepts(concepts_out, warnings)
     concepts_out.sort(key=_concept_sort_key, reverse=True)
     normalized = {
         "worldview_summary": worldview_summary,
@@ -882,6 +1259,7 @@ def _build_supershadow_user_message(
     goal_text: str,
     fact_basis: list[dict[str, Any]],
     pressure_map: list[dict[str, Any]],
+    family_memory: list[dict[str, Any]],
     *,
     handoff_budget: int | None = None,
     suppress_handoffs_reason: str | None = None,
@@ -912,6 +1290,12 @@ def _build_supershadow_user_message(
     lines.append(
         "A good concept explains grounded facts, names a kill-test, and provides bridge lemmas back to Shadow and Lean."
     )
+    lines.append(
+        "Each run should try to spend part of its budget on family discovery: if possible include one established family, one adjacent family, and one genuinely new family."
+    )
+    lines.append(
+        "If you revisit a family that is already saturated, you must lower the transfer cost with a sharper smallest_transfer_probe or explain exactly what changed."
+    )
     if suppress_handoffs_reason:
         lines.append(f"Shadow handoff budget this run: 0. {suppress_handoffs_reason}")
     elif handoff_budget is not None:
@@ -932,6 +1316,34 @@ def _build_supershadow_user_message(
         lines.append(
             f"- cluster={row.get('cluster')} | facts={facts}\n  pressure: {_clip_text(row.get('pressure'), 700)}"
         )
+    lines.append("")
+    lines.append("## Concept family memory")
+    if family_memory:
+        for row in family_memory[:12]:
+            recent_titles = " | ".join(row.get("recent_titles") or [])
+            lines.append(
+                f"- family={row.get('concept_family')} | kind={row.get('family_kind')} | parent={row.get('parent_family') or '—'} | "
+                f"concepts={row.get('concept_count')} | active_incubations={row.get('active_incubations')} | grounded={row.get('grounded_count')} | stalled={row.get('stalled')}"
+            )
+            if recent_titles:
+                lines.append(f"  recent_titles: {recent_titles[:700]}")
+    else:
+        lines.append("- none")
+    stalled_families = [
+        row
+        for row in family_memory
+        if bool(row.get("stalled"))
+        and int(row.get("concept_count") or 0) >= _STALE_FAMILY_REPEAT_LIMIT
+    ]
+    lines.append("")
+    lines.append("## Saturated families to avoid")
+    if stalled_families:
+        for row in stalled_families[:8]:
+            lines.append(
+                f"- avoid family={row.get('concept_family')} unless this run materially lowers transfer cost; prior_concepts={row.get('concept_count')}"
+            )
+    else:
+        lines.append("- none")
     lines.append("")
     lines.append("## Previous Supershadow worldview memory (JSON)")
     lines.append(json.dumps(worldview_obj, ensure_ascii=False, indent=2)[:18000])
@@ -961,11 +1373,13 @@ async def run_supershadow_global_lab(
             handoff_budget = int(app_config.SUPERSHADOW_MAX_HANDOFFS_PER_RUN)
         fact_basis = _build_grounded_fact_basis(db)
         pressure_map = _build_pressure_map(fact_basis)
+        family_memory = _build_family_memory(db)
         user = _build_supershadow_user_message(
             db,
             goal_text,
             fact_basis,
             pressure_map,
+            family_memory,
             handoff_budget=handoff_budget,
             suppress_handoffs_reason=suppress_handoffs_reason,
         )
@@ -1016,6 +1430,7 @@ async def run_supershadow_global_lab(
         normalized, validation_warnings = _normalize_supershadow_response(
             data,
             fact_basis,
+            family_memory,
             max_handoffs=handoff_budget,
         )
         ep = db.get_supershadow_state(SUPERSHADOW_GLOBAL_GOAL_ID)
@@ -1056,6 +1471,7 @@ async def run_supershadow_global_lab(
             "output": normalized,
             "fact_basis": fact_basis,
             "pressure_map": pressure_map,
+            "family_memory": family_memory,
             "meta": {
                 **request_meta,
                 "validation_warnings": validation_warnings,
@@ -1138,4 +1554,3 @@ async def supershadow_global_loop(db: Database) -> None:
         await asyncio.sleep(
             max(30, int(app_config.SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC))
         )
-
