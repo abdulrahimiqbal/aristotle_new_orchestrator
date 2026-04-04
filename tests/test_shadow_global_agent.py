@@ -167,6 +167,106 @@ def test_normalize_global_response_filters_duplicate_and_unjustified_promotions(
     assert "promotion_below_rubric" in warnings
 
 
+def test_normalize_global_response_preserves_valid_incubation_lineage(
+    tmp_path: Path,
+) -> None:
+    db = Database(str(tmp_path / "g.db"))
+    db.initialize()
+    cid = db.create_campaign("c", workspace_root=str(tmp_path / "ws"))
+    tid = db.add_targets(cid, ["t"])[0]
+    db.supershadow_commit_run(
+        "global_collatz_supershadow",
+        trigger_kind="manual",
+        worldview_summary="w",
+        run_summary="r",
+        fact_basis_json="[]",
+        pressure_map_json="[]",
+        response_obj={},
+        new_worldview_json="{}",
+        new_policy_json="{}",
+        concepts=[
+            {
+                "title": "Odd-state quotient",
+                "worldview_summary": "w",
+                "concepts": ["c"],
+                "ontological_moves": ["m"],
+                "explains_facts": [
+                    {
+                        "fact_key": "builtin:modular_descent_mod_8",
+                        "fact_label": "Mod 8 grounded",
+                        "role": "explains",
+                        "note": "n",
+                    }
+                ],
+                "tensions": [{"text": "t"}],
+                "kill_tests": [{"description": "k"}],
+                "bridge_lemmas": ["b"],
+                "reduce_frontier_or_rename": "reduce",
+                "scores": {
+                    "compression_power": 5,
+                    "fit_to_known_facts": 5,
+                    "ontological_delta": 4,
+                    "falsifiability": 4,
+                    "bridgeability": 4,
+                    "grounding_cost": 2,
+                    "speculative_risk": 2,
+                },
+                "shadow_handoffs": [
+                    {
+                        "title": "handoff",
+                        "summary": "s",
+                        "why_compressive": "c",
+                        "bridge_lemmas": ["b"],
+                        "shadow_task": "task",
+                        "recommended_next_step": "next",
+                    }
+                ],
+            }
+        ],
+        goal_text="goal",
+    )
+    handoff = db.list_supershadow_handoff_requests("global_collatz_supershadow", limit=10)[0]
+    ok, msg, extra = db.approve_supershadow_handoff(handoff["id"])
+    assert ok, msg
+    incubation_id = extra["incubation_id"]
+
+    raw = {
+        "run_summary": "s",
+        "solved_world": {"claim": "world"},
+        "hypotheses": [
+            {
+                "kind": "proof_program",
+                "title": "H1",
+                "body_md": "Use the supershadow seed.",
+                "source_incubation_ids": [incubation_id, "bad-id"],
+            }
+        ],
+        "promotion_requests": [
+            {
+                "kind": "new_experiment",
+                "campaign_id": cid,
+                "target_id": tid,
+                "objective": "o",
+                "source_incubation_ids": [incubation_id, "bad-id"],
+                "grounding_reason": "Ground the first bridge lemma.",
+                "expected_signal": "We learn whether the bridge lemma really lands.",
+                "novelty_reason": "This is the first live grounding request for that bridge.",
+                "rubric_scores": {
+                    "novel_math": 2,
+                    "proof_program_leverage": 3,
+                    "grounding_need": 3,
+                    "expected_signal": 3,
+                    "queue_fitness": 2,
+                },
+            }
+        ],
+    }
+
+    out, _warnings = _normalize_global_response(raw, db)
+    assert out["hypotheses"][0]["source_incubation_ids"] == [incubation_id]
+    assert out["promotion_requests"][0]["source_incubation_ids"] == [incubation_id]
+
+
 def test_safe_json_loads_accepts_wrapped_object() -> None:
     raw = """
     Here is the JSON payload you asked for:

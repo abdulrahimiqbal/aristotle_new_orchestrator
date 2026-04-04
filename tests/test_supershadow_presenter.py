@@ -54,15 +54,37 @@ def test_supershadow_presenter_prefers_compression_over_delta() -> None:
                 ),
             }
         ],
+        incubations=[
+            {
+                "id": "i1",
+                "status": "operationalized",
+                "title": "Odd-state quotient incubation",
+                "concept_packet_json": (
+                    '{"title":"Odd-state quotient incubation","summary":"Shadow is translating the concept.",'
+                    '"why_compressive":"Explains multiple facts at once.",'
+                    '"bridge_lemmas":["Lemma A"],'
+                    '"shadow_task":"Operationalize it."}'
+                ),
+                "grounded_promotion_ids_json": '[]',
+                "events": [
+                    {
+                        "event_kind": "shadow_operationalized",
+                        "event_summary": "Shadow operationalized it.",
+                    }
+                ],
+            }
+        ],
         runs=[{"id": "r1", "run_summary": "Conceptual sweep", "trigger_kind": "manual"}],
     )
     assert ctx["supershadow_best_concept"]["id"] == "c-high-compression"
     assert ctx["supershadow_pending_handoffs"][0]["preview"]["action_label"] == "Handoff to Shadow"
     assert ctx["supershadow_next_step"]["title"] == "Review the Shadow handoff queue"
+    assert ctx["supershadow_active_incubations"][0]["preview"]["status"] == "operationalized"
 
 
 def test_supershadow_presenter_handles_empty_state() -> None:
-    ctx = build_supershadow_ui_context(concepts=[], handoffs=[], runs=[])
+    ctx = build_supershadow_ui_context(concepts=[], handoffs=[], incubations=[], runs=[])
     assert ctx["supershadow_best_concept"] is None
     assert ctx["supershadow_pending_handoffs"] == []
+    assert ctx["supershadow_active_incubations"] == []
     assert ctx["supershadow_primary_cta"] == "Generate first sweep"

@@ -664,7 +664,8 @@ You OUTPUT STRICT JSON with this shape:
       "title": "short",
       "body_md": "markdown, may be long, include SPECULATIVE tags where needed",
       "lean_snippet": "optional Lean fragment or empty string",
-      "evidence": [ { "campaign_id": "optional", "experiment_id": "optional", "target_id": "optional", "note": "..." } ]
+      "evidence": [ { "campaign_id": "optional", "experiment_id": "optional", "target_id": "optional", "note": "..." } ],
+      "source_incubation_ids": ["optional Supershadow incubation ids from the user message"]
     }
   ],
   "promotion_requests": [
@@ -672,6 +673,7 @@ You OUTPUT STRICT JSON with this shape:
       "kind": "new_target",
       "campaign_id": "required",
       "description": "concrete target text",
+      "source_incubation_ids": ["optional Supershadow incubation ids from the user message"],
       "proof_program_role": "new_object|bridge_lemma|equivalence|kill_test|finite_check|scaffold",
       "grounding_reason": "why this deserves live grounding now",
       "expected_signal": "what success or failure teaches us",
@@ -689,6 +691,7 @@ You OUTPUT STRICT JSON with this shape:
       "campaign_id": "required",
       "target_id": "required",
       "objective": "...",
+      "source_incubation_ids": ["optional Supershadow incubation ids from the user message"],
       "move_kind": "explore|prove|refute|...",
       "move_note": "shadow:...",
       "proof_program_role": "new_object|bridge_lemma|equivalence|kill_test|finite_check|scaffold",
@@ -719,6 +722,7 @@ Rules:
 - hypotheses: 4-14 items; promotion_requests: 0-3 items.
 - Order promotion_requests from most strategically necessary to least.
 - Only emit promotions that pass the rubric: total score >= 10/15, proof_program_leverage >= 2, grounding_need >= 2, expected_signal >= 2.
+- If a hypothesis or promotion descends from a listed Supershadow incubation, include its incubation id in source_incubation_ids.
 - A promotion request must include campaign_id from the allowed list in the user message.
 - new_experiment.target_id must match a target under that campaign_id.
 - Optional defer_aristotle_submit on promotions: if true, skip immediate Aristotle submit on approve (manager will submit on its next tick if enabled).
@@ -795,21 +799,31 @@ def _build_shadow_global_user_message(
         lines.append("- none")
     lines.append("")
 
-    lines.append("## Approved Supershadow conceptual handoffs (read-only upstream input)")
-    approved_handoffs = db.list_supershadow_handoff_requests(
-        _SUPERSHADOW_GLOBAL_GOAL_ID, status="approved", limit=16
+    lines.append("## Supershadow concept incubations (preserve lineage; cite incubation ids when used)")
+    incubations = db.list_supershadow_incubations(
+        _SUPERSHADOW_GLOBAL_GOAL_ID, limit=20
     )
-    if approved_handoffs:
-        for row in approved_handoffs:
-            payload = _load_json_object(row.get("payload_json"))
-            title = _clip_text(payload.get("title"), 240)
+    incubation_events = db.list_supershadow_incubation_events(
+        [str(row["id"]) for row in incubations]
+    )
+    latest_event_by_incubation: dict[str, dict[str, Any]] = {}
+    for event in incubation_events:
+        incubation_id = str(event.get("incubation_id") or "")
+        if incubation_id and incubation_id not in latest_event_by_incubation:
+            latest_event_by_incubation[incubation_id] = event
+    if incubations:
+        for row in incubations:
+            payload = _load_json_object(row.get("concept_packet_json"))
+            title = _clip_text(row.get("title") or payload.get("title"), 240)
             summary = _clip_text(payload.get("summary"), 800)
             why_compressive = _clip_text(payload.get("why_compressive"), 800)
             shadow_task = _clip_text(payload.get("shadow_task"), 800)
             bridge_lemmas = _str_list(
                 payload.get("bridge_lemmas"), max_items=6, max_item_chars=300
             )
-            lines.append(f"- {title}")
+            lines.append(
+                f"- incubation_id {row['id']} | status {row.get('status') or 'incubating'} | {title}"
+            )
             if summary:
                 lines.append(f"  summary: {summary}")
             if why_compressive:
@@ -818,6 +832,11 @@ def _build_shadow_global_user_message(
                 lines.append(f"  shadow_task: {shadow_task}")
             if bridge_lemmas:
                 lines.append(f"  bridge_lemmas: {' | '.join(bridge_lemmas)}")
+            latest_event = latest_event_by_incubation.get(str(row["id"]))
+            if latest_event:
+                lines.append(
+                    f"  latest_lineage: {latest_event.get('event_kind')} · {(_clip_text(latest_event.get('event_summary'), 600))}"
+                )
     else:
         lines.append("- none")
     lines.append("")
@@ -932,7 +951,27 @@ def _score_hypothesis(h: dict[str, Any]) -> tuple[int, dict[str, int], str]:
     return score, breakdown, tier
 
 
-def _normalize_global_hypotheses(data: dict[str, Any]) -> list[dict[str, Any]]:
+def _normalize_source_incubation_ids(
+    raw: Any, valid_ids: set[str], *, max_items: int = 4
+) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw[: max_items * 2]:
+        incubation_id = _clip_text(item, 80).strip()
+        if not incubation_id or incubation_id in seen or incubation_id not in valid_ids:
+            continue
+        seen.add(incubation_id)
+        out.append(incubation_id)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _normalize_global_hypotheses(
+    data: dict[str, Any], *, valid_incubation_ids: set[str]
+) -> list[dict[str, Any]]:
     hs_raw = data.get("hypotheses")
     hs: list[dict[str, Any]] = []
     if not isinstance(hs_raw, list):
@@ -963,6 +1002,9 @@ def _normalize_global_hypotheses(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "body_md": body,
                 "lean_snippet": _clip_text(h.get("lean_snippet"), 12000),
                 "evidence": ev_out,
+                "source_incubation_ids": _normalize_source_incubation_ids(
+                    h.get("source_incubation_ids"), valid_incubation_ids
+                ),
                 "score_0_100": score,
                 "score_breakdown": breakdown,
                 "groundability_tier": tier,
@@ -980,6 +1022,7 @@ def _normalize_global_promotions(
     *,
     max_promotions: int,
     max_experiments: int,
+    valid_incubation_ids: set[str],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     raw = data.get("promotion_requests")
     if not isinstance(raw, list):
@@ -1030,6 +1073,9 @@ def _normalize_global_promotions(
                 "kind": kind,
                 "campaign_id": cid,
                 "description": desc,
+                "source_incubation_ids": _normalize_source_incubation_ids(
+                    p.get("source_incubation_ids"), valid_incubation_ids
+                ),
                 "proof_program_role": _infer_proof_program_role(kind, p),
                 "grounding_reason": grounding_reason,
                 "expected_signal": expected_signal,
@@ -1065,6 +1111,9 @@ def _normalize_global_promotions(
                 "campaign_id": cid,
                 "target_id": tid,
                 "objective": objective,
+                "source_incubation_ids": _normalize_source_incubation_ids(
+                    p.get("source_incubation_ids"), valid_incubation_ids
+                ),
                 "move_kind": _clip_text(p.get("move_kind") or "explore", 64),
                 "move_note": _clip_text(p.get("move_note") or "shadow:global", 2000),
                 "proof_program_role": _infer_proof_program_role(kind, p),
@@ -1116,7 +1165,16 @@ def _normalize_global_response(
     solved_world = _normalize_solved_world(data)
     if not solved_world.get("claim"):
         warnings.append("missing_solved_world_claim")
-    hypotheses = _normalize_global_hypotheses(data)
+    valid_incubation_ids = {
+        str(row.get("id") or "")
+        for row in db.list_supershadow_incubations(
+            _SUPERSHADOW_GLOBAL_GOAL_ID, limit=80
+        )
+        if str(row.get("id") or "")
+    }
+    hypotheses = _normalize_global_hypotheses(
+        data, valid_incubation_ids=valid_incubation_ids
+    )
     if not hypotheses:
         warnings.append("no_hypotheses")
     promotions, promotion_warnings = _normalize_global_promotions(
@@ -1124,6 +1182,7 @@ def _normalize_global_response(
         db,
         max_promotions=max_promotions,
         max_experiments=max_experiments,
+        valid_incubation_ids=valid_incubation_ids,
     )
     warnings.extend(promotion_warnings)
     run_summary = _clip_text(data.get("run_summary"), 4000)

@@ -263,10 +263,19 @@ def _supershadow_global_panel_context(
         concept["tensions"] = tensions_by_concept.get(cid, [])
         concept["kill_tests"] = kills_by_concept.get(cid, [])
     handoffs = db.list_supershadow_handoff_requests(goal_id, limit=80)
+    incubations = db.list_supershadow_incubations(goal_id, limit=80)
+    incubation_ids = [str(row["id"]) for row in incubations]
+    incubation_events = db.list_supershadow_incubation_events(incubation_ids)
+    events_by_incubation: dict[str, list[dict[str, Any]]] = {}
+    for row in incubation_events:
+        events_by_incubation.setdefault(str(row["incubation_id"]), []).append(dict(row))
+    for incubation in incubations:
+        incubation["events"] = events_by_incubation.get(str(incubation["id"]), [])
     runs = db.list_supershadow_runs(goal_id, limit=20)
     ui_ctx = build_supershadow_ui_context(
         concepts=concepts,
         handoffs=handoffs,
+        incubations=incubations,
         runs=runs,
     )
     return {
@@ -278,6 +287,7 @@ def _supershadow_global_panel_context(
         "supershadow_policy_pretty": policy_pretty,
         "supershadow_concepts": concepts,
         "supershadow_handoffs": handoffs,
+        "supershadow_incubations": incubations,
         "supershadow_runs": runs,
         "supershadow_flash": supershadow_flash,
         "operator": _operator_runtime_context(),
@@ -808,8 +818,13 @@ async def supershadow_handoff_approve(request: Request, handoff_id: str):
     row = db.get_supershadow_handoff_request(handoff_id)
     if not row:
         return HTMLResponse("Unknown handoff", status_code=404)
-    ok, msg, _extra = db.approve_supershadow_handoff(handoff_id)
-    flash: dict[str, Any] = {"ok": ok, "error": None if ok else msg, "handoff": "approved"}
+    ok, msg, extra = db.approve_supershadow_handoff(handoff_id)
+    flash: dict[str, Any] = {
+        "ok": ok,
+        "error": None if ok else msg,
+        "handoff": "approved",
+        "incubation_id": extra.get("incubation_id") if ok else None,
+    }
     return templates.TemplateResponse(
         request,
         "supershadow_panel.html",

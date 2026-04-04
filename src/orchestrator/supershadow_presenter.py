@@ -62,10 +62,33 @@ def _present_handoff(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _present_incubation(row: dict[str, Any]) -> dict[str, Any]:
+    payload = _load_json_object(row.get("concept_packet_json"))
+    grounded_ids = _load_json_list(row.get("grounded_promotion_ids_json"))
+    events = list(row.get("events") or [])
+    latest_event = dict(events[0]) if events else None
+    return {
+        "title": str(row.get("title") or payload.get("title") or "Supershadow incubation"),
+        "status": str(row.get("status") or "incubating"),
+        "summary": str(payload.get("summary") or ""),
+        "why_compressive": str(payload.get("why_compressive") or ""),
+        "shadow_task": str(payload.get("shadow_task") or ""),
+        "recommended_next_step": str(payload.get("recommended_next_step") or ""),
+        "bridge_lemmas": payload.get("bridge_lemmas") or [],
+        "grounding_notes": str(payload.get("grounding_notes") or ""),
+        "shadow_last_run_id": str(row.get("shadow_last_run_id") or ""),
+        "shadow_last_summary": str(row.get("shadow_last_summary") or ""),
+        "grounded_promotion_ids": grounded_ids,
+        "latest_event": latest_event,
+        "concept_title": str(payload.get("concept_title") or ""),
+    }
+
+
 def _build_next_step(
     *,
     run_count: int,
     pending_handoffs: int,
+    active_incubations: int,
     best_concept: dict[str, Any] | None,
     concept_count: int,
 ) -> dict[str, str]:
@@ -75,6 +98,13 @@ def _build_next_step(
             "body": (
                 f"{pending_handoffs} concept handoff(s) are waiting. Approve only the concepts "
                 "that actually compress the grounded frontier."
+            ),
+        }
+    if active_incubations > 0:
+        return {
+            "title": "Track concept transfer into Shadow",
+            "body": (
+                f"{active_incubations} incubation(s) are active. Check whether Shadow has operationalized them into bridge lemmas or grounding requests."
             ),
         }
     if run_count == 0:
@@ -108,6 +138,7 @@ def build_supershadow_ui_context(
     *,
     concepts: list[dict[str, Any]],
     handoffs: list[dict[str, Any]],
+    incubations: list[dict[str, Any]],
     runs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     presented_concepts: list[dict[str, Any]] = []
@@ -148,9 +179,21 @@ def build_supershadow_ui_context(
         else:
             reviewed_handoffs.append(presented)
 
+    active_incubations: list[dict[str, Any]] = []
+    archived_incubations: list[dict[str, Any]] = []
+    for row in incubations:
+        presented = dict(row)
+        presented["preview"] = _present_incubation(presented)
+        status = str(row.get("status") or "").lower()
+        if status in {"incubating", "operationalized"}:
+            active_incubations.append(presented)
+        else:
+            archived_incubations.append(presented)
+
     next_step = _build_next_step(
         run_count=len(runs),
         pending_handoffs=len(pending_handoffs),
+        active_incubations=len(active_incubations),
         best_concept=best_concept,
         concept_count=len(ranked_concepts),
     )
@@ -160,6 +203,8 @@ def build_supershadow_ui_context(
         "supershadow_best_concept": best_concept,
         "supershadow_pending_handoffs": pending_handoffs,
         "supershadow_reviewed_handoffs": reviewed_handoffs,
+        "supershadow_active_incubations": active_incubations,
+        "supershadow_archived_incubations": archived_incubations,
         "supershadow_latest_run": latest_run,
         "supershadow_next_step": next_step,
         "supershadow_primary_cta": "Generate first sweep"
@@ -168,6 +213,7 @@ def build_supershadow_ui_context(
         "supershadow_metrics": {
             "pending_handoffs": len(pending_handoffs),
             "reviewed_handoffs": len(reviewed_handoffs),
+            "active_incubations": len(active_incubations),
             "concept_count": len(ranked_concepts),
             "run_count": len(runs),
         },

@@ -118,10 +118,14 @@ def test_supershadow_dashboard_run_and_handoff_routes(
         )[0]
         approve_resp = client.post(f"/api/supershadow/handoff/{handoff['id']}/approve")
         assert approve_resp.status_code == 200
+        assert "preserved incubation packet" in approve_resp.text
 
     approved = tmp_db.get_supershadow_handoff_request(handoff["id"])
     assert approved is not None
     assert approved["status"] == "approved"
+    incubations = tmp_db.list_supershadow_incubations("global_collatz_supershadow", limit=10)
+    assert len(incubations) == 1
+    assert incubations[0]["status"] == "incubating"
 
     conn = sqlite3.connect(str(tmp_path / "app.db"))
     try:

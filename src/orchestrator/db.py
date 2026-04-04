@@ -429,6 +429,44 @@ class Database:
                 """
             )
             _set_user_version(conn, 11)
+            v = 11
+        if v < 12:
+            if not _column_exists(conn, "shadow_global_hypothesis", "source_incubation_ids_json"):
+                conn.execute(
+                    "ALTER TABLE shadow_global_hypothesis ADD COLUMN source_incubation_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS supershadow_incubation (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    source_handoff_id TEXT UNIQUE REFERENCES supershadow_handoff_request(id) ON DELETE SET NULL,
+                    concept_id TEXT REFERENCES supershadow_concept(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'incubating',
+                    title TEXT NOT NULL DEFAULT '',
+                    concept_packet_json TEXT NOT NULL DEFAULT '{}',
+                    shadow_last_run_id TEXT,
+                    shadow_last_summary TEXT NOT NULL DEFAULT '',
+                    grounded_promotion_ids_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_incubation_goal ON supershadow_incubation(goal_id);
+                CREATE INDEX IF NOT EXISTS idx_supershadow_incubation_status ON supershadow_incubation(status);
+                CREATE INDEX IF NOT EXISTS idx_supershadow_incubation_concept ON supershadow_incubation(concept_id);
+                CREATE TABLE IF NOT EXISTS supershadow_incubation_event (
+                    id TEXT PRIMARY KEY,
+                    incubation_id TEXT NOT NULL REFERENCES supershadow_incubation(id) ON DELETE CASCADE,
+                    event_kind TEXT NOT NULL DEFAULT '',
+                    event_summary TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_incubation_event_incubation
+                    ON supershadow_incubation_event(incubation_id);
+                """
+            )
+            _set_user_version(conn, 12)
 
     def create_campaign(
         self,
@@ -2129,13 +2167,17 @@ class Database:
             )
             for h in hypotheses:
                 hid = _new_id()
+                source_incubation_ids = h.get("source_incubation_ids")
+                if not isinstance(source_incubation_ids, list):
+                    source_incubation_ids = []
                 conn.execute(
                     """
                     INSERT INTO shadow_global_hypothesis (
                         id, goal_id, kind, title, body_md, lean_snippet,
-                        status, parent_hypothesis_id, score_0_100, groundability_tier, kill_test, created_at
+                        status, parent_hypothesis_id, score_0_100, groundability_tier,
+                        kill_test, source_incubation_ids_json, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         hid,
@@ -2149,6 +2191,7 @@ class Database:
                         int(h.get("score_0_100") or 0),
                         str(h.get("groundability_tier") or "")[:16],
                         str(h.get("kill_test") or "")[:2000],
+                        json.dumps(source_incubation_ids, ensure_ascii=False),
                         now,
                     ),
                 )
@@ -2186,6 +2229,41 @@ class Database:
                     (pid, goal_id, json.dumps(p, ensure_ascii=False), now),
                 )
             conn.commit()
+            referenced_incubations: set[str] = set()
+            for h in hypotheses:
+                raw_ids = h.get("source_incubation_ids")
+                if isinstance(raw_ids, list):
+                    referenced_incubations.update(
+                        str(value or "").strip()
+                        for value in raw_ids
+                        if str(value or "").strip()
+                    )
+            for p in promotions:
+                if not isinstance(p, dict):
+                    continue
+                raw_ids = p.get("source_incubation_ids")
+                if isinstance(raw_ids, list):
+                    referenced_incubations.update(
+                        str(value or "").strip()
+                        for value in raw_ids
+                        if str(value or "").strip()
+                    )
+            if referenced_incubations:
+                self.mark_supershadow_incubations_operationalized(
+                    sorted(referenced_incubations),
+                    shadow_run_id=run_id,
+                    shadow_summary=summary,
+                    payload={
+                        "hypothesis_titles": [
+                            str(h.get("title") or "")[:240] for h in hypotheses[:8]
+                        ],
+                        "promotion_titles": [
+                            str(p.get("description") or p.get("objective") or "")[:240]
+                            for p in promotions[:8]
+                            if isinstance(p, dict)
+                        ],
+                    },
+                )
             return run_id
         finally:
             conn.close()
@@ -2235,6 +2313,16 @@ class Database:
 
         kind = str(payload.get("kind") or "").strip().lower()
         cid = str(payload.get("campaign_id") or "").strip()
+        raw_source_incubation_ids = payload.get("source_incubation_ids")
+        source_incubation_ids = (
+            [
+                str(value or "").strip()
+                for value in raw_source_incubation_ids
+                if str(value or "").strip()
+            ]
+            if isinstance(raw_source_incubation_ids, list)
+            else []
+        )
         extra: dict[str, Any] = {}
         if kind == "new_target":
             desc = str(payload.get("description") or "").strip()
@@ -2245,6 +2333,16 @@ class Database:
             ids = self.add_targets(cid, [desc])
             extra["target_ids"] = ids
             self.set_shadow_global_promotion_status(promotion_id, "approved")
+            if source_incubation_ids:
+                self.mark_supershadow_incubations_grounded(
+                    source_incubation_ids,
+                    promotion_id=promotion_id,
+                    payload={
+                        "kind": kind,
+                        "campaign_id": cid,
+                        "description": desc[:600],
+                    },
+                )
             return True, "target created", extra
 
         if kind == "new_experiment":
@@ -2267,6 +2365,18 @@ class Database:
             eid = self.create_experiment(cid, tid, objective, move_kind=mk, move_note=mn)
             extra["experiment_id"] = eid
             self.set_shadow_global_promotion_status(promotion_id, "approved")
+            if source_incubation_ids:
+                self.mark_supershadow_incubations_grounded(
+                    source_incubation_ids,
+                    promotion_id=promotion_id,
+                    payload={
+                        "kind": kind,
+                        "campaign_id": cid,
+                        "target_id": tid,
+                        "objective": objective[:600],
+                        "experiment_id": eid,
+                    },
+                )
             return True, "experiment created", extra
 
         return False, f"unknown kind {kind!r}", {}
@@ -2446,6 +2556,82 @@ class Database:
         finally:
             conn.close()
 
+    def list_supershadow_incubations(
+        self, goal_id: str, *, status: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            lim = min(limit, 200)
+            if status:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM supershadow_incubation
+                    WHERE goal_id = ? AND status = ?
+                    ORDER BY updated_at DESC, created_at DESC
+                    LIMIT ?
+                    """,
+                    (goal_id, status, lim),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM supershadow_incubation
+                    WHERE goal_id = ?
+                    ORDER BY updated_at DESC, created_at DESC
+                    LIMIT ?
+                    """,
+                    (goal_id, lim),
+                )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def get_supershadow_incubation(self, incubation_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM supershadow_incubation WHERE id = ?",
+                (incubation_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_supershadow_incubation_for_handoff(
+        self, handoff_id: str
+    ) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM supershadow_incubation WHERE source_handoff_id = ?",
+                (handoff_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_supershadow_incubation_events(
+        self, incubation_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        if not incubation_ids:
+            return []
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" * len(incubation_ids))
+            cur = conn.execute(
+                f"""
+                SELECT * FROM supershadow_incubation_event
+                WHERE incubation_id IN ({placeholders})
+                ORDER BY created_at DESC
+                """,
+                incubation_ids,
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
     def get_supershadow_handoff_request(self, handoff_id: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:
@@ -2476,6 +2662,94 @@ class Database:
         finally:
             conn.close()
 
+    def _insert_supershadow_incubation_event(
+        self,
+        conn: sqlite3.Connection,
+        incubation_id: str,
+        *,
+        event_kind: str,
+        event_summary: str,
+        payload: dict[str, Any] | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        now = created_at or datetime.utcnow().isoformat()
+        conn.execute(
+            """
+            INSERT INTO supershadow_incubation_event (
+                id, incubation_id, event_kind, event_summary, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _new_id(),
+                incubation_id,
+                event_kind[:64],
+                (event_summary or "")[:2000],
+                json.dumps(payload or {}, ensure_ascii=False),
+                now,
+            ),
+        )
+
+    def _ensure_supershadow_incubation_locked(
+        self,
+        conn: sqlite3.Connection,
+        handoff_row: dict[str, Any],
+        *,
+        now: str | None = None,
+    ) -> str:
+        now = now or datetime.utcnow().isoformat()
+        existing = conn.execute(
+            "SELECT id FROM supershadow_incubation WHERE source_handoff_id = ?",
+            (handoff_row["id"],),
+        ).fetchone()
+        if existing:
+            return str(existing["id"])
+
+        payload_raw = str(handoff_row.get("payload_json") or "{}")
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        incubation_id = _new_id()
+        title = str(payload.get("title") or payload.get("concept_title") or "Supershadow incubation")[:500]
+        packet = dict(payload)
+        packet.setdefault("handoff_id", handoff_row["id"])
+        packet.setdefault("concept_id", handoff_row.get("concept_id"))
+        conn.execute(
+            """
+            INSERT INTO supershadow_incubation (
+                id, goal_id, source_handoff_id, concept_id, status, title,
+                concept_packet_json, shadow_last_run_id, shadow_last_summary,
+                grounded_promotion_ids_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'incubating', ?, ?, NULL, '', '[]', ?, ?)
+            """,
+            (
+                incubation_id,
+                str(handoff_row.get("goal_id") or "")[:120],
+                handoff_row["id"],
+                handoff_row.get("concept_id"),
+                title,
+                json.dumps(packet, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        self._insert_supershadow_incubation_event(
+            conn,
+            incubation_id,
+            event_kind="approved_from_handoff",
+            event_summary=f"Approved Supershadow handoff '{title}' for Shadow incubation.",
+            payload={
+                "handoff_id": handoff_row["id"],
+                "concept_id": handoff_row.get("concept_id"),
+            },
+            created_at=now,
+        )
+        return incubation_id
+
     def approve_supershadow_handoff(
         self, handoff_id: str
     ) -> tuple[bool, str, dict[str, Any]]:
@@ -2484,11 +2758,133 @@ class Database:
             return False, "unknown handoff", {}
         if row["status"] != "pending":
             return False, "not pending", {}
-        self.set_supershadow_handoff_status(handoff_id, "approved")
-        return True, "handoff approved", {"handoff_id": handoff_id}
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE supershadow_handoff_request
+                SET status = 'approved', reviewed_at = ?
+                WHERE id = ?
+                """,
+                (now, handoff_id),
+            )
+            incubation_id = self._ensure_supershadow_incubation_locked(conn, row, now=now)
+            conn.commit()
+        finally:
+            conn.close()
+        return True, "handoff approved", {"handoff_id": handoff_id, "incubation_id": incubation_id}
 
     def reject_supershadow_handoff(self, handoff_id: str) -> None:
         self.set_supershadow_handoff_status(handoff_id, "rejected")
+
+    def mark_supershadow_incubations_operationalized(
+        self,
+        incubation_ids: list[str],
+        *,
+        shadow_run_id: str,
+        shadow_summary: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        ids = [str(value or "").strip() for value in incubation_ids if str(value or "").strip()]
+        if not ids:
+            return
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            for incubation_id in ids:
+                row = conn.execute(
+                    "SELECT status FROM supershadow_incubation WHERE id = ?",
+                    (incubation_id,),
+                ).fetchone()
+                if not row:
+                    continue
+                status = str(row["status"] or "")
+                next_status = "operationalized" if status != "grounded" else "grounded"
+                conn.execute(
+                    """
+                    UPDATE supershadow_incubation
+                    SET status = ?, shadow_last_run_id = ?, shadow_last_summary = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        next_status,
+                        shadow_run_id,
+                        (shadow_summary or "")[:4000],
+                        now,
+                        incubation_id,
+                    ),
+                )
+                self._insert_supershadow_incubation_event(
+                    conn,
+                    incubation_id,
+                    event_kind="shadow_operationalized",
+                    event_summary="Shadow operationalized this concept into a tracked proof-program move.",
+                    payload={
+                        "shadow_run_id": shadow_run_id,
+                        "shadow_summary": (shadow_summary or "")[:1200],
+                        **(payload or {}),
+                    },
+                    created_at=now,
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def mark_supershadow_incubations_grounded(
+        self,
+        incubation_ids: list[str],
+        *,
+        promotion_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        ids = [str(value or "").strip() for value in incubation_ids if str(value or "").strip()]
+        if not ids:
+            return
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            for incubation_id in ids:
+                row = conn.execute(
+                    """
+                    SELECT grounded_promotion_ids_json
+                    FROM supershadow_incubation
+                    WHERE id = ?
+                    """,
+                    (incubation_id,),
+                ).fetchone()
+                if not row:
+                    continue
+                try:
+                    grounded_ids = json.loads(row["grounded_promotion_ids_json"] or "[]")
+                except json.JSONDecodeError:
+                    grounded_ids = []
+                if not isinstance(grounded_ids, list):
+                    grounded_ids = []
+                if promotion_id not in grounded_ids:
+                    grounded_ids.append(promotion_id)
+                conn.execute(
+                    """
+                    UPDATE supershadow_incubation
+                    SET status = 'grounded', grounded_promotion_ids_json = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(grounded_ids, ensure_ascii=False), now, incubation_id),
+                )
+                self._insert_supershadow_incubation_event(
+                    conn,
+                    incubation_id,
+                    event_kind="live_grounding_requested",
+                    event_summary="A Shadow promotion carrying this concept was approved into live grounding.",
+                    payload={
+                        "promotion_id": promotion_id,
+                        **(payload or {}),
+                    },
+                    created_at=now,
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
     def get_supershadow_ops_snapshot(self, goal_id: str) -> dict[str, Any]:
         conn = self._connect()
@@ -2509,6 +2905,14 @@ class Database:
                 "SELECT COUNT(*) FROM supershadow_run WHERE goal_id = ?",
                 (goal_id,),
             ).fetchone()
+            c5 = conn.execute(
+                "SELECT COUNT(*) FROM supershadow_incubation WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            c6 = conn.execute(
+                "SELECT COUNT(*) FROM supershadow_incubation WHERE goal_id = ? AND status IN ('incubating', 'operationalized')",
+                (goal_id,),
+            ).fetchone()
             latest = self.get_supershadow_latest_run(goal_id)
             latest_meta: dict[str, Any] = {}
             if latest and latest.get("response_json"):
@@ -2525,6 +2929,8 @@ class Database:
                 "total_handoffs": int(c2[0]) if c2 else 0,
                 "total_concepts": int(c3[0]) if c3 else 0,
                 "total_runs": int(c4[0]) if c4 else 0,
+                "total_incubations": int(c5[0]) if c5 else 0,
+                "active_incubations": int(c6[0]) if c6 else 0,
                 "latest_run": {
                     "id": latest.get("id"),
                     "trigger_kind": latest.get("trigger_kind"),

@@ -50,12 +50,17 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         assert "score_0_100" in gh_cols
         assert "groundability_tier" in gh_cols
         assert "kill_test" in gh_cols
+        assert "source_incubation_ids_json" in gh_cols
         cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='supershadow_state'"
         )
         assert cur.fetchone() is not None
         cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='supershadow_concept'"
+        )
+        assert cur.fetchone() is not None
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='supershadow_incubation'"
         )
         assert cur.fetchone() is not None
         cur = conn.execute("PRAGMA table_info(supershadow_concept)")
@@ -68,7 +73,7 @@ def test_initialize_creates_ledger_and_parsed_columns(tmp_path: Path) -> None:
         assert "grounding_cost" in sh_cols
         assert "speculative_risk" in sh_cols
         uv = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert int(uv) >= 11
+        assert int(uv) >= 12
     finally:
         conn.close()
 
@@ -224,6 +229,12 @@ def test_supershadow_tables_commit_and_approve_without_live_authority(
     approved = db.get_supershadow_handoff_request(handoffs[0]["id"])
     assert approved is not None
     assert approved["status"] == "approved"
+    incubations = db.list_supershadow_incubations("global_collatz_supershadow", limit=10)
+    assert len(incubations) == 1
+    incubation_id = incubations[0]["id"]
+    assert incubations[0]["status"] == "incubating"
+    events = db.list_supershadow_incubation_events([incubation_id])
+    assert events[0]["event_kind"] == "approved_from_handoff"
 
     conn = sqlite3.connect(str(path))
     try:
@@ -233,6 +244,51 @@ def test_supershadow_tables_commit_and_approve_without_live_authority(
         assert int(experiment_count) == 0
     finally:
         conn.close()
+
+    cid = db.create_campaign("bridge campaign", workspace_root=str(tmp_path / "ws"))
+    tid = db.add_targets(cid, ["first bridge target"])[0]
+    run_id = db.shadow_global_commit_run(
+        "global_collatz",
+        trigger_kind="manual",
+        summary="Shadow operationalized the incubation.",
+        response_obj={},
+        new_stance_json="{}",
+        new_policy_json="{}",
+        hypotheses=[
+            {
+                "kind": "proof_program",
+                "title": "Derived odd-state operator",
+                "body_md": "Bridge lemma from the supershadow concept.",
+                "source_incubation_ids": [incubation_id],
+            }
+        ],
+        promotions=[
+            {
+                "kind": "new_experiment",
+                "campaign_id": cid,
+                "target_id": tid,
+                "objective": "Ground the first odd-state bridge lemma.",
+                "grounding_reason": "Need the bridge lemma now.",
+                "expected_signal": "Success grounds the operator; failure shows the obstruction.",
+                "novelty_reason": "First grounded descendant of the concept.",
+                "source_incubation_ids": [incubation_id],
+            }
+        ],
+        goal_text="goal",
+    )
+    assert run_id
+    incubation = db.get_supershadow_incubation(incubation_id)
+    assert incubation is not None
+    assert incubation["status"] == "operationalized"
+    assert incubation["shadow_last_run_id"] == run_id
+
+    promo = db.list_shadow_global_promotion_requests("global_collatz", limit=10)[0]
+    ok, msg, extra = db.apply_shadow_global_promotion(promo["id"])
+    assert ok, msg
+    assert extra["experiment_id"]
+    grounded = db.get_supershadow_incubation(incubation_id)
+    assert grounded is not None
+    assert grounded["status"] == "grounded"
 
 
 def test_create_campaign_per_workspace_dir(tmp_path: Path) -> None:

@@ -51,7 +51,10 @@
               <p class="mt-2 text-xs text-amber-200/90">Validation warnings: {{ supershadow_flash.validation_warnings|join(', ') }}</p>
               {% endif %}
             {% elif supershadow_flash.get('handoff') == 'approved' %}
-              Handoff approved. Shadow can now inspect this concept as upstream input.
+              Handoff approved. Shadow now has a preserved incubation packet for this concept.
+              {% if supershadow_flash.get('incubation_id') %}
+              <p class="mt-2 text-xs text-emerald-200/90">incubation_id · <span class="font-mono">{{ supershadow_flash.get('incubation_id') }}</span></p>
+              {% endif %}
             {% elif supershadow_flash.get('handoff') == 'rejected' %}
               Handoff rejected. The concept remains in Supershadow for further pressure-testing.
             {% else %}
@@ -90,6 +93,11 @@
             <p class="mt-1 text-xs text-zinc-500">concepts waiting for Shadow review</p>
           </div>
           <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Active incubations</p>
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ supershadow_metrics.active_incubations }}</p>
+            <p class="mt-1 text-xs text-zinc-500">conceptual leaps being carried into Shadow</p>
+          </div>
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
             <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Concepts on board</p>
             <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ supershadow_metrics.concept_count }}</p>
             <p class="mt-1 text-xs text-zinc-500">ranked by compression, fit, and bridgeability</p>
@@ -123,7 +131,7 @@
         <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Pending Shadow handoffs</h2>
         <p class="mt-1 text-xs text-zinc-500">These are requests for disciplined proof-program review, not live experiments.</p>
       </div>
-      <p class="text-xs text-zinc-500">Approving a handoff only exposes it to Shadow. It never creates live work directly.</p>
+      <p class="text-xs text-zinc-500">Approving a handoff creates a tracked Shadow incubation. It never creates live work directly.</p>
     </div>
 
     <div class="space-y-3">
@@ -222,6 +230,89 @@
           </div>
           <p class="mt-2 text-sm text-zinc-200">{{ h.preview.title }}</p>
           <p class="mt-1 text-xs text-zinc-500">{{ h.preview.summary }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </section>
+
+  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
+      <div>
+        <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Concept incubations</h2>
+        <p class="mt-1 text-xs text-zinc-500">Approved handoffs become tracked concept seeds so Shadow can operationalize them without dissolving the underlying leap.</p>
+      </div>
+      <p class="text-xs text-zinc-500">Watch for the lineage: incubating -> operationalized -> grounded.</p>
+    </div>
+
+    <div class="space-y-3">
+      {% for incubation in supershadow_active_incubations %}
+      <article class="rounded-2xl border border-sky-500/20 bg-zinc-950/50 p-4">
+        <div class="flex flex-wrap items-center gap-2 mb-2 text-[10px] font-mono">
+          <span class="rounded-full bg-sky-500/15 px-2 py-0.5 text-sky-100 ring-1 ring-sky-500/30">{{ incubation.preview.status }}</span>
+          <span class="text-zinc-600">{{ incubation.id }}</span>
+          {% if incubation.preview.shadow_last_run_id %}
+          <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-zinc-400 ring-1 ring-zinc-800/80">shadow_run {{ incubation.preview.shadow_last_run_id }}</span>
+          {% endif %}
+        </div>
+        <h3 class="text-sm font-medium text-zinc-100">{{ incubation.preview.title }}</h3>
+        {% if incubation.preview.summary %}
+        <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ incubation.preview.summary }}</p>
+        {% endif %}
+        {% if incubation.preview.why_compressive %}
+        <p class="mt-2 text-xs leading-relaxed text-zinc-400"><span class="text-zinc-500">Why compressive:</span> {{ incubation.preview.why_compressive }}</p>
+        {% endif %}
+        {% if incubation.preview.shadow_task %}
+        <p class="mt-2 text-xs leading-relaxed text-zinc-400"><span class="text-zinc-500">Shadow task:</span> {{ incubation.preview.shadow_task }}</p>
+        {% endif %}
+        {% if incubation.preview.shadow_last_summary %}
+        <p class="mt-2 text-xs leading-relaxed text-sky-100/80"><span class="text-sky-300/80">Last Shadow summary:</span> {{ incubation.preview.shadow_last_summary }}</p>
+        {% endif %}
+        {% if incubation.preview.bridge_lemmas %}
+        <div class="mt-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bridge lemmas</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-xs text-zinc-400">
+            {% for lemma in incubation.preview.bridge_lemmas %}
+            <li>{{ lemma }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% if incubation.preview.latest_event %}
+        <p class="mt-3 text-xs leading-relaxed text-zinc-500">
+          <span class="text-zinc-400">Latest lineage:</span>
+          {{ incubation.preview.latest_event.event_kind }} · {{ incubation.preview.latest_event.event_summary }}
+        </p>
+        {% endif %}
+        {% if incubation.preview.grounded_promotion_ids %}
+        <p class="mt-2 text-xs leading-relaxed text-zinc-500">
+          <span class="text-zinc-400">Grounded via promotions:</span>
+          {{ incubation.preview.grounded_promotion_ids|join(', ') }}
+        </p>
+        {% endif %}
+      </article>
+      {% else %}
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">
+        No active incubations yet. Approve a high-value handoff to preserve a conceptual leap as a tracked Shadow seed.
+      </p>
+      {% endfor %}
+    </div>
+
+    {% if supershadow_archived_incubations %}
+    <details class="mt-4 rounded-2xl border border-zinc-800/80 bg-zinc-950/30 p-4">
+      <summary class="cursor-pointer list-none text-sm font-medium text-zinc-300">Archived incubations ({{ supershadow_archived_incubations|length }})</summary>
+      <div class="mt-4 space-y-3">
+        {% for incubation in supershadow_archived_incubations %}
+        <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+          <div class="flex flex-wrap items-center gap-2 text-[10px] font-mono">
+            <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-zinc-300 ring-1 ring-zinc-700/70">{{ incubation.preview.status }}</span>
+            <span class="text-zinc-600">{{ incubation.id }}</span>
+          </div>
+          <p class="mt-2 text-sm text-zinc-200">{{ incubation.preview.title }}</p>
+          {% if incubation.preview.latest_event %}
+          <p class="mt-1 text-xs text-zinc-500">{{ incubation.preview.latest_event.event_kind }} · {{ incubation.preview.latest_event.event_summary }}</p>
+          {% endif %}
         </div>
         {% endfor %}
       </div>

@@ -60,6 +60,7 @@ These pieces support **serious open-problem** campaigns (cartography, mixed tact
 | **Verdict ↔ summary reconciliation** | After LLM summarization, if structured verdict is still `inconclusive` but the summary strongly indicates success *and* there are proved lemmas (or similar), promote to **`proved`** and append `verdict_reconciled:summary_heuristic` to **`parse_warnings`**. Disable with env. | `verdict_reconcile.py`, `manager.py` (after `summarize_result`), `config.py` (`VERDICT_RECONCILE_FROM_SUMMARY`) |
 | **Map node obligations** | Cartographer may attach **`obligations`** strings per node; coerced and shown under each node on the dashboard. | `problem_map_util.py` (`coerce_obligations`), `llm.py` (`update_problem_map` prompt), `campaign_panel.html` |
 | **Literature anchors** | Prompt instructs: do not invent `literature_anchor` nodes without **`problem_refs`**. | `llm.py` |
+| **Research packet injection** | Campaign-scoped operator packet stores frontier state, attack families, anti-goals, finite checks, and references; the manager sees only that campaign’s packet and the dashboard exposes an in-place JSON editor. | `research_packets.py`, `db.py` (`research_packet_json`), `llm.py`, `app.py`, `campaign_panel.html` |
 | **Move-kind diversity** | If every new experiment in a batch is `prove` and **`MANAGER_MIN_NON_PROVE_MOVES_PER_BATCH` ≥ 1**, append one **`explore`** experiment (policy note in `move_note`). | `manager_policy.py` (`ensure_move_kind_diversity`), `manager.py`, `config.py` |
 | **Skeptic pass** | Optional **second** LLM call adds up to **`SKEPTIC_PASS_MAX_EXPERIMENTS`** extra jobs with `refute` / `explore` to stress-test the primary plan. | `llm.py` (`reason_skeptic`), `manager.py`, `config.py` |
 | **Proved gate on map** | Nodes whose **`kind`** is in **`MAP_PROVED_GATE_KINDS`** cannot remain **`proved`** in stored JSON until **`POST /admin/map-node-ack`** records an ack (otherwise coerced to **`active`** after each map refresh). | `manager_policy.py` (`apply_map_proved_gate`), `db.py` (`campaign_map_node_acks`, `list_map_node_acks`, `add_map_node_ack`), `admin_routes.py` |
@@ -73,9 +74,12 @@ The dashboard now includes a dedicated **Shadow manager** workspace (`/shadow`) 
 
 - **Mission-first mode**: one global objective (`SHADOW_GLOBAL_GOAL`, default Collatz) with cross-campaign memory.
 - **Aggressive ideation, grounded promotion**: shadow can propose speculative frameworks, but only approved promotions create live targets/experiments.
+- **Invention-first discipline**: shadow is for inventing new mathematics and proof-program structure; live promotions are scarce grounding requests, not the main product.
+- **Promotion rubric**: shadow scores every grounding request on novelty, proof-program leverage, grounding need, expected signal, and queue fit before it can enter the live queue.
+- **Supershadow lineage intake**: approved Supershadow concepts enter Shadow as tracked incubations, and Shadow can preserve lineage by citing `source_incubation_ids` on descendant hypotheses and promotions.
 - **Structured backward-chaining output**: global runs normalize and store `solved_world`, assumptions, bridge lemmas, and Lean landing hints.
 - **Hypothesis ranking**: each global hypothesis stores `score_0_100`, `groundability_tier`, and a `kill_test` to prioritize falsifiable routes.
-- **Autonomous loop**: optional background auto-runs with queue safety cap.
+- **Autonomous loop**: optional background auto-runs keep refining the proof program; when the live queue is too full, new promotions are suppressed instead of stopping ideation.
 - **Reproducibility metadata**: each global run stores prompt/model hash metadata in `shadow_global_run.response_json`.
 
 Endpoints:
@@ -88,6 +92,38 @@ Endpoints:
 | POST | `/api/shadow/promote/{id}/approve` | Approve global promotion (optionally immediate Aristotle submit) |
 | POST | `/api/shadow/promote/{id}/reject` | Reject global promotion |
 | GET | `/api/shadow/ops` | Queue depth, latest run meta/warnings, auto-loop config snapshot |
+
+## Global Supershadow Lab (concept incubation)
+
+The dashboard also includes a dedicated **Supershadow Lab** (`/supershadow`) for ontology-expanding conceptual search.
+
+- **Zero live authority**: Supershadow cannot create targets, experiments, or direct Aristotle work.
+- **Compression over novelty**: concepts are judged by whether they make several grounded facts feel structural at once, not by how exotic they sound.
+- **Conceptual handoffs, not queue spam**: Supershadow emits Shadow-facing handoffs with kill-tests, bridge lemmas, and grounding notes.
+- **Incubation layer**: approving a handoff creates a tracked incubation packet rather than a live task. This preserves the conceptual leap as a first-class object instead of dissolving it into generic Shadow context.
+- **Lineage tracking**: Shadow can operationalize an incubation by citing its `source_incubation_ids`; approved live promotions can then mark that incubation as grounded contact with reality.
+- **Lifecycle visibility**: incubations move through states such as `incubating`, `operationalized`, and `grounded`, with event history shown in the Supershadow UI.
+
+Concept transfer flow:
+
+```
+Supershadow concept
+  -> Supershadow handoff
+  -> approved incubation packet
+  -> Shadow hypothesis / bridge lemma / promotion (cites source_incubation_ids)
+  -> optional live grounding via Aristotle
+```
+
+Endpoints:
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/supershadow` | Dedicated global Supershadow dashboard tab |
+| GET | `/api/supershadow/panel` | HTMX fragment for the Supershadow panel |
+| POST | `/api/supershadow/run` | Manual Supershadow conceptual sweep |
+| POST | `/api/supershadow/handoff/{id}/approve` | Approve a conceptual handoff into a tracked Shadow incubation |
+| POST | `/api/supershadow/handoff/{id}/reject` | Reject a conceptual handoff |
+| GET | `/api/supershadow/ops` | Handoff counts, incubation counts, and latest run metadata |
 
 ## Workspaces and Mathlib
 
@@ -149,7 +185,16 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE` | If `1` (default), approving a `new_experiment` promotion can call Aristotle immediately |
 | `SHADOW_GLOBAL_AUTO_ENABLED` | Enable autonomous global shadow loop (default: on) |
 | `SHADOW_GLOBAL_TICK_INTERVAL_SEC` | Interval for auto global shadow runs (default: `180`) |
-| `SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS` | Safety cap; auto-run skips while pending promotions exceed this (default: `200`) |
+| `SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS` | Soft cap for pending live promotions; above this, auto-runs still think but emit no new promotions (default: `24`) |
+| `SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN` | Cap on total global promotions kept from a run after normalization (default: `3`) |
+| `SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN` | Cap on `new_experiment` promotions kept from a run after normalization (default: `2`) |
+| `SUPERSHADOW_LLM_MODEL` | Optional model override for Supershadow runs (`None` falls back to `SHADOW_LLM_MODEL` then `LLM_MODEL`) |
+| `SUPERSHADOW_LLM_TEMPERATURE` | Supershadow run temperature (default: `0.95`) |
+| `SUPERSHADOW_GLOBAL_GOAL` | Global conceptual-search mission text shown in `/supershadow` |
+| `SUPERSHADOW_GLOBAL_AUTO_ENABLED` | Enable autonomous global Supershadow loop (default: on) |
+| `SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC` | Interval for auto Supershadow sweeps (default: `900`) |
+| `SUPERSHADOW_MAX_HANDOFFS_PER_RUN` | Cap on Shadow-facing conceptual handoffs emitted from one Supershadow run (default: `2`) |
+| `SUPERSHADOW_MAX_PENDING_HANDOFFS` | Soft cap for pending Supershadow handoffs; above this, auto-runs keep ideating but emit no new handoffs (default: `18`) |
 
 ## HTTP API (selected)
 
@@ -158,6 +203,7 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | POST | `/api/campaign` | Form: `prompt`, optional `use_mathlib=1` (Mathlib Lake), `use_mathlib_knowledge=1` (LeanSearch hints); optional legacy `workspace_template` if checkboxes omitted |
 | POST | `/api/campaign/start` | JSON: `{"prompt":"...","workspace_template":"minimal"}` or `"use_mathlib": true`; optional `"use_mathlib_knowledge": true` (LeanSearch hints, needs `MATHLIB_KNOWLEDGE_MODE=leansearch`) → `201` with `campaign_id`, `workspace_dir`, `mathlib_knowledge` |
 | GET | `/api/campaign/{id}/ledger` | Read-only ledger JSON (`limit` query, capped) |
+| POST | `/api/campaign/{id}/research-packet` | Update the campaign-scoped research packet. Accepts form `research_packet_json` for dashboard edits or JSON `{ "research_packet": {...} }`. |
 | GET | `/admin/metrics` | With `ADMIN_TOKEN`: aggregates for methodology monitoring (verdicts, move kinds, reconciliation count) |
 | POST | `/admin/map-node-ack` | With `ADMIN_TOKEN`: JSON `campaign_id` + `node_id` for **proved**-gate ack (see `MAP_PROVED_GATE_KINDS`) |
 
