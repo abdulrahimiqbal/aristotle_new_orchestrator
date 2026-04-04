@@ -54,6 +54,38 @@ def test_build_grounded_fact_basis_includes_builtin_and_live_facts(tmp_path: Pat
     assert f"live:{cid}:experiment:{eid}" in fact_keys
 
 
+def test_build_grounded_fact_basis_excludes_non_collatz_campaigns(tmp_path: Path) -> None:
+    db = Database(str(tmp_path / "facts-filter.db"))
+    db.initialize()
+    collatz_id = db.create_campaign(
+        "collatz campaign",
+        workspace_root=str(tmp_path / "ws"),
+        workspace_template="minimal",
+        research_packet_json=json.dumps(
+            {
+                "known_true": ["Collatz mod 8 descent is behaving well."],
+            }
+        ),
+    )
+    other_id = db.create_campaign(
+        "erdos-straus campaign",
+        workspace_root=str(tmp_path / "ws"),
+        workspace_template="minimal",
+        research_packet_json=json.dumps(
+            {
+                "known_true": ["Egyptian fraction decomposition survives prime reduction."],
+            }
+        ),
+    )
+    db.add_targets(collatz_id, ["Prove a Collatz parity lemma."])
+    db.add_targets(other_id, ["Prove an Erdos-Straus denominator lemma."])
+
+    facts = _build_grounded_fact_basis(db)
+    fact_keys = {fact["fact_key"] for fact in facts}
+    assert f"live:{collatz_id}:packet:known_true:0" in fact_keys
+    assert f"live:{other_id}:packet:known_true:0" not in fact_keys
+
+
 def test_normalize_supershadow_response_filters_invalid_concepts_and_caps_handoffs() -> None:
     fact_basis = [
         {
@@ -307,6 +339,56 @@ def test_normalize_supershadow_response_keeps_discovery_concept_without_bridge_l
     assert normalized["concepts"][0]["title"] == "Odd-state split without bridge"
     assert normalized["concepts"][0]["bridge_lemmas"] == []
     assert "concept_missing_bridge_lemmas" in warnings
+
+
+def test_normalize_supershadow_response_blocks_family_on_cooldown() -> None:
+    fact_basis = [
+        {
+            "fact_key": "builtin:modular_descent_mod_8",
+            "label": "Mod 8 descent is grounded.",
+            "detail": "detail",
+            "kind": "modular",
+            "provenance": "builtin_seed",
+        }
+    ]
+    family_memory = [
+        {
+            "concept_family": "graded_2_adic_module",
+            "family_kind": "established",
+            "concept_count": 8,
+            "active_incubations": 0,
+            "grounded_count": 0,
+            "stalled": True,
+            "cooldown_runs_remaining": 2,
+            "recent_titles": ["Graded 2-adic module with descent filtration"],
+        }
+    ]
+    raw = {
+        "worldview_summary": "Do not allow the stale family back immediately.",
+        "run_summary": "Cooldown should block the family.",
+        "concepts": [
+            {
+                "title": "Graded 2-adic module with better wording",
+                "concept_family": "graded_2_adic_module",
+                "family_kind": "established",
+                "worldview_summary": "Same family during cooldown.",
+                "concepts": ["Restate the filtration idea."],
+                "ontological_moves": ["2-adic filtration"],
+                "explains_facts": [{"fact_key": "builtin:modular_descent_mod_8"}],
+                "kill_tests": [{"description": "Try the same family again."}],
+                "bridge_lemmas": ["Lemma stale"],
+                "smallest_transfer_probe": "Another bounded filtration probe.",
+            }
+        ],
+    }
+
+    normalized, warnings = _normalize_supershadow_response(
+        raw, fact_basis, family_memory, max_handoffs=0
+    )
+
+    assert normalized["concepts"] == []
+    assert "family_cooldown_active" in warnings
+    assert "stale_family_suppressed" in warnings
 
 
 def test_normalize_supershadow_response_blocks_stale_exact_title_repeats() -> None:

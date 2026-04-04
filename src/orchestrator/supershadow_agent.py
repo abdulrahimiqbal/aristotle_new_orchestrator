@@ -39,8 +39,34 @@ _VALID_SCORE_KEYS = (
 )
 _VALID_FAMILY_KINDS = frozenset({"established", "adjacent", "new"})
 _STALE_FAMILY_REPEAT_LIMIT = 3
+_STALE_FAMILY_COOLDOWN_RUNS = 3
 _REPEAT_FAMILY_EXPLANATION_PLACEHOLDER = (
     "Repeated family must state what changed before it deserves transfer."
+)
+_COLLATZ_STRONG_MARKERS = (
+    "collatz",
+    "3n+1",
+    "3n + 1",
+    "3*n+1",
+    "3*n + 1",
+    "3 * n + 1",
+    "hailstone",
+)
+_COLLATZ_CONTEXT_MARKERS = (
+    "parity-vector",
+    "parity vector",
+    "parity-state",
+    "parity state",
+    "odd-input",
+    "odd input",
+    "odd subsystem",
+    "2-adic collatz",
+    "mod 8 descent",
+    "mod 16 descent",
+    "naive height",
+    "lyapunov on odd subsystem",
+    "define col",
+    "collatz induces",
 )
 
 _BUILTIN_FACTS = [
@@ -261,6 +287,37 @@ def _merge_policy(old: dict[str, Any], delta: dict[str, Any] | None) -> dict[str
     return out
 
 
+def _normalize_family_cooldowns(raw: Any) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in raw.items():
+        family = _family_slug(key)
+        if not family:
+            continue
+        try:
+            runs = int(value)
+        except (TypeError, ValueError):
+            runs = 0
+        if runs > 0:
+            out[family] = min(12, runs)
+    return out
+
+
+def _advance_family_cooldowns(
+    current: dict[str, int], suppressed_families: list[str]
+) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for family, runs in _normalize_family_cooldowns(current).items():
+        if runs > 1:
+            out[family] = runs - 1
+    for family in suppressed_families:
+        slug = _family_slug(family)
+        if slug:
+            out[slug] = max(out.get(slug, 0), _STALE_FAMILY_COOLDOWN_RUNS)
+    return out
+
+
 def _family_slug(value: Any) -> str:
     raw = str(value or "").strip().lower()
     raw = _COUNTER_KEY_SANITIZE.sub("_", raw)
@@ -299,6 +356,26 @@ def _fact_signature(fact: dict[str, Any]) -> str:
             str(fact.get("kind") or ""),
         ]
     )
+
+
+def _looks_like_collatz_text(text: str) -> bool:
+    lowered = text.lower()
+    if any(marker in lowered for marker in _COLLATZ_STRONG_MARKERS):
+        return True
+    hits = sum(1 for marker in _COLLATZ_CONTEXT_MARKERS if marker in lowered)
+    return hits >= 2
+
+
+def _campaign_matches_collatz_mission(db: Database, campaign: dict[str, Any]) -> bool:
+    campaign_id = str(campaign.get("id") or "")
+    blobs = [
+        str(campaign.get("prompt") or ""),
+        str(campaign.get("research_packet_json") or ""),
+    ]
+    if campaign_id:
+        blobs.extend(db.get_target_descriptions(campaign_id)[:24])
+    combined = "\n".join(blob for blob in blobs if blob.strip())
+    return _looks_like_collatz_text(combined)
 
 
 def _research_packet_facts(packet: dict[str, Any], campaign_id: str) -> list[dict[str, Any]]:
@@ -394,7 +471,12 @@ def _dedupe_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _build_grounded_fact_basis(db: Database) -> list[dict[str, Any]]:
     facts = [dict(fact) for fact in _BUILTIN_FACTS]
-    for campaign in db.get_all_campaigns()[:20]:
+    collatz_campaigns = [
+        campaign
+        for campaign in db.get_all_campaigns()
+        if _campaign_matches_collatz_mission(db, campaign)
+    ][:20]
+    for campaign in collatz_campaigns:
         campaign_id = str(campaign["id"])
         try:
             state = db.get_campaign_state(campaign_id)
@@ -468,9 +550,12 @@ def _build_pressure_map(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pressure_map[:10]
 
 
-def _build_family_memory(db: Database) -> list[dict[str, Any]]:
+def _build_family_memory(
+    db: Database, *, cooldowns: dict[str, int] | None = None
+) -> list[dict[str, Any]]:
     concepts = db.list_supershadow_concepts(SUPERSHADOW_GLOBAL_GOAL_ID, limit=160)
     incubations = db.list_supershadow_incubations(SUPERSHADOW_GLOBAL_GOAL_ID, limit=160)
+    cooldowns = _normalize_family_cooldowns(cooldowns)
 
     concept_by_id = {str(row.get("id") or ""): dict(row) for row in concepts}
     families: dict[str, dict[str, Any]] = {}
@@ -490,7 +575,12 @@ def _build_family_memory(db: Database) -> list[dict[str, Any]]:
                 "grounded_count": 0,
                 "reviewed_handoffs": 0,
                 "recent_titles": [],
+                "cooldown_runs_remaining": int(cooldowns.get(family) or 0),
             },
+        )
+        entry["cooldown_runs_remaining"] = max(
+            int(entry.get("cooldown_runs_remaining") or 0),
+            int(cooldowns.get(family) or 0),
         )
         entry["concept_count"] += 1
         if title and title not in entry["recent_titles"]:
@@ -522,7 +612,12 @@ def _build_family_memory(db: Database) -> list[dict[str, Any]]:
                 "grounded_count": 0,
                 "reviewed_handoffs": 0,
                 "recent_titles": [],
+                "cooldown_runs_remaining": int(cooldowns.get(family) or 0),
             },
+        )
+        entry["cooldown_runs_remaining"] = max(
+            int(entry.get("cooldown_runs_remaining") or 0),
+            int(cooldowns.get(family) or 0),
         )
         entry["reviewed_handoffs"] += 1
         status = str(incubation.get("status") or "").strip().lower()
@@ -531,8 +626,34 @@ def _build_family_memory(db: Database) -> list[dict[str, Any]]:
         if status == "grounded":
             entry["grounded_count"] += 1
 
+    for family, runs in cooldowns.items():
+        entry = families.setdefault(
+            family,
+            {
+                "concept_family": family,
+                "family_kind": "established",
+                "parent_family": "",
+                "concept_count": 0,
+                "active_incubations": 0,
+                "grounded_count": 0,
+                "reviewed_handoffs": 0,
+                "recent_titles": [],
+                "cooldown_runs_remaining": 0,
+            },
+        )
+        entry["cooldown_runs_remaining"] = max(
+            int(entry.get("cooldown_runs_remaining") or 0),
+            int(runs or 0),
+        )
+
     rows = list(families.values())
     for row in rows:
+        row["cooldown_runs_remaining"] = int(
+            row.get("cooldown_runs_remaining") or cooldowns.get(
+                str(row.get("concept_family") or ""), 0
+            )
+            or 0
+        )
         row["stalled"] = (
             int(row.get("concept_count") or 0) >= 3
             and int(row.get("active_incubations") or 0) == 0
@@ -887,6 +1008,8 @@ def _family_materially_advances(
 ) -> bool:
     if not family_stats:
         return True
+    if int(family_stats.get("cooldown_runs_remaining") or 0) > 0:
+        return False
     prior_count = int(family_stats.get("concept_count") or 0)
     if prior_count < _STALE_FAMILY_REPEAT_LIMIT or not bool(family_stats.get("stalled")):
         return True
@@ -1153,6 +1276,7 @@ def _normalize_supershadow_response(
     selection_limit: int = 3,
 ) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
+    suppressed_families: set[str] = set()
     fact_lookup = {str(fact["fact_key"]): fact for fact in fact_basis}
     fact_labels = {str(fact["label"]).lower(): fact for fact in fact_basis}
     family_memory_lookup = {
@@ -1225,10 +1349,12 @@ def _normalize_supershadow_response(
             concept,
             family_memory_lookup.get(concept["concept_family"]),
         )
-        if not _family_materially_advances(
-            concept, family_memory_lookup.get(concept["concept_family"])
-        ):
+        family_stats = family_memory_lookup.get(concept["concept_family"])
+        if not _family_materially_advances(concept, family_stats):
+            if int((family_stats or {}).get("cooldown_runs_remaining") or 0) > 0:
+                _append_warning_once(warnings, "family_cooldown_active")
             _append_warning_once(warnings, "stale_family_suppressed")
+            suppressed_families.add(concept["concept_family"])
             continue
         if not _handoff_eligible(concept["scores"]):
             if concept_raw.get("shadow_handoffs"):
@@ -1260,6 +1386,9 @@ def _normalize_supershadow_response(
         "worldview_summary": worldview_summary,
         "run_summary": run_summary,
         "concepts": concepts_out[:selection_limit],
+        "_meta": {
+            "suppressed_families": sorted(suppressed_families),
+        },
     }
     return normalized, warnings
 
@@ -1358,6 +1487,20 @@ def _build_supershadow_user_message(
     else:
         lines.append("- none")
     lines.append("")
+    cooldown_families = [
+        row
+        for row in family_memory
+        if int(row.get("cooldown_runs_remaining") or 0) > 0
+    ]
+    lines.append("## Families on cooldown")
+    if cooldown_families:
+        for row in cooldown_families[:8]:
+            lines.append(
+                f"- avoid family={row.get('concept_family')} for {int(row.get('cooldown_runs_remaining') or 0)} more run(s); last repeats did not materially advance"
+            )
+    else:
+        lines.append("- none")
+    lines.append("")
     lines.append("## Previous Supershadow worldview memory (JSON)")
     lines.append(json.dumps(worldview_obj, ensure_ascii=False, indent=2)[:18000])
     lines.append("")
@@ -1428,9 +1571,19 @@ async def run_supershadow_global_lab(
     try:
         if handoff_budget is None:
             handoff_budget = int(app_config.SUPERSHADOW_MAX_HANDOFFS_PER_RUN)
+        ep = db.get_supershadow_state(SUPERSHADOW_GLOBAL_GOAL_ID)
+        try:
+            old_policy = json.loads(ep.get("policy_json") or "{}")
+        except json.JSONDecodeError:
+            old_policy = {}
+        if not isinstance(old_policy, dict):
+            old_policy = {}
+        family_cooldowns = _normalize_family_cooldowns(
+            old_policy.get("_supershadow_family_cooldowns")
+        )
         fact_basis = _build_grounded_fact_basis(db)
         pressure_map = _build_pressure_map(fact_basis)
-        family_memory = _build_family_memory(db)
+        family_memory = _build_family_memory(db, cooldowns=family_cooldowns)
         user = _build_supershadow_user_message(
             db,
             goal_text,
@@ -1544,6 +1697,10 @@ async def run_supershadow_global_lab(
                     ]
                     concepts = [distilled_best] + remaining[:2]
         validation_warnings.extend(distillation_warnings)
+        suppressed_families = list(discovery_normalized.get("_meta", {}).get("suppressed_families") or [])
+        suppressed_families.extend(
+            list((distillation_normalized or {}).get("_meta", {}).get("suppressed_families") or [])
+        )
         normalized = {
             "worldview_summary": (
                 (distillation_normalized or {}).get("worldview_summary")
@@ -1557,13 +1714,6 @@ async def run_supershadow_global_lab(
             ),
             "concepts": concepts,
         }
-        ep = db.get_supershadow_state(SUPERSHADOW_GLOBAL_GOAL_ID)
-        try:
-            old_policy = json.loads(ep.get("policy_json") or "{}")
-        except json.JSONDecodeError:
-            old_policy = {}
-        if not isinstance(old_policy, dict):
-            old_policy = {}
 
         worldview_payload = {
             "summary": normalized.get("worldview_summary") or "",
@@ -1584,6 +1734,10 @@ async def run_supershadow_global_lab(
                 "notes": normalized.get("run_summary") or "",
             },
         )
+        next_family_cooldowns = _advance_family_cooldowns(
+            family_cooldowns, suppressed_families
+        )
+        merged_policy["_supershadow_family_cooldowns"] = next_family_cooldowns
         if validation_warnings:
             merged_policy["_supershadow_validation_warnings_tail"] = (
                 list(merged_policy.get("_supershadow_validation_warnings_tail", []))
