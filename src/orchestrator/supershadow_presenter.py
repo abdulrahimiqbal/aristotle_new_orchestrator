@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def _load_json_list(raw: Any) -> list[Any]:
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _load_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _concept_sort_key(concept: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, str]:
+    return (
+        int(concept.get("compression_power") or 0),
+        int(concept.get("fit_to_known_facts") or 0),
+        int(concept.get("bridgeability") or 0),
+        int(concept.get("falsifiability") or 0),
+        -int(concept.get("grounding_cost") or 0),
+        -int(concept.get("speculative_risk") or 0),
+        int(concept.get("ontological_delta") or 0),
+        str(concept.get("created_at") or ""),
+    )
+
+
+def _present_handoff(row: dict[str, Any]) -> dict[str, Any]:
+    payload = _load_json_object(row.get("payload_json"))
+    pretty = str(row.get("payload_json") or "{}")
+    if payload:
+        pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+    return {
+        "action_label": "Handoff to Shadow",
+        "title": str(payload.get("title") or "Shadow handoff"),
+        "summary": str(payload.get("summary") or ""),
+        "why_compressive": str(payload.get("why_compressive") or ""),
+        "bridge_lemmas": payload.get("bridge_lemmas") or [],
+        "shadow_task": str(payload.get("shadow_task") or ""),
+        "recommended_next_step": str(payload.get("recommended_next_step") or ""),
+        "grounding_notes": str(payload.get("grounding_notes") or ""),
+        "concept_id": str(payload.get("concept_id") or row.get("concept_id") or ""),
+        "concept_title": str(payload.get("concept_title") or ""),
+        "concept_scores": payload.get("concept_scores") or {},
+        "payload_json_pretty": pretty,
+    }
+
+
+def _build_next_step(
+    *,
+    run_count: int,
+    pending_handoffs: int,
+    best_concept: dict[str, Any] | None,
+    concept_count: int,
+) -> dict[str, str]:
+    if pending_handoffs > 0:
+        return {
+            "title": "Review the Shadow handoff queue",
+            "body": (
+                f"{pending_handoffs} concept handoff(s) are waiting. Approve only the concepts "
+                "that actually compress the grounded frontier."
+            ),
+        }
+    if run_count == 0:
+        return {
+            "title": "Generate the first conceptual sweep",
+            "body": (
+                "Run Supershadow to search for language shifts, ambient spaces, and bridgeable concepts."
+            ),
+        }
+    if best_concept and int(best_concept.get("compression_power") or 0) >= 4:
+        return {
+            "title": "Interrogate the strongest concept",
+            "body": (
+                "Start with the highest-compression concept below and decide whether its kill-test and bridge lemmas are sharp enough for Shadow."
+            ),
+        }
+    if concept_count > 0:
+        return {
+            "title": "Broaden the conceptual search",
+            "body": (
+                "There are concepts on the board, but nothing is clearly ready for Shadow yet. Generate another pass after more evidence lands."
+            ),
+        }
+    return {
+        "title": "Keep inventing",
+        "body": "Supershadow should keep searching for a more compressive language.",
+    }
+
+
+def build_supershadow_ui_context(
+    *,
+    concepts: list[dict[str, Any]],
+    handoffs: list[dict[str, Any]],
+    runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    presented_concepts: list[dict[str, Any]] = []
+    for concept in concepts:
+        presented = dict(concept)
+        presented["concepts"] = _load_json_list(presented.get("concepts_json"))
+        presented["ontological_moves"] = _load_json_list(
+            presented.get("ontological_moves_json")
+        )
+        presented["bridge_lemmas"] = _load_json_list(
+            presented.get("bridge_lemmas_json")
+        )
+        for key in (
+            "compression_power",
+            "fit_to_known_facts",
+            "ontological_delta",
+            "falsifiability",
+            "bridgeability",
+            "grounding_cost",
+            "speculative_risk",
+        ):
+            presented[key] = int(presented.get(key) or 0)
+        presented["fact_links"] = list(presented.get("fact_links") or [])
+        presented["tensions"] = list(presented.get("tensions") or [])
+        presented["kill_tests"] = list(presented.get("kill_tests") or [])
+        presented_concepts.append(presented)
+
+    ranked_concepts = sorted(presented_concepts, key=_concept_sort_key, reverse=True)
+    best_concept = dict(ranked_concepts[0]) if ranked_concepts else None
+
+    pending_handoffs: list[dict[str, Any]] = []
+    reviewed_handoffs: list[dict[str, Any]] = []
+    for row in handoffs:
+        presented = dict(row)
+        presented["preview"] = _present_handoff(presented)
+        if str(row.get("status") or "").lower() == "pending":
+            pending_handoffs.append(presented)
+        else:
+            reviewed_handoffs.append(presented)
+
+    next_step = _build_next_step(
+        run_count=len(runs),
+        pending_handoffs=len(pending_handoffs),
+        best_concept=best_concept,
+        concept_count=len(ranked_concepts),
+    )
+    latest_run = dict(runs[0]) if runs else None
+    return {
+        "supershadow_ranked_concepts": ranked_concepts,
+        "supershadow_best_concept": best_concept,
+        "supershadow_pending_handoffs": pending_handoffs,
+        "supershadow_reviewed_handoffs": reviewed_handoffs,
+        "supershadow_latest_run": latest_run,
+        "supershadow_next_step": next_step,
+        "supershadow_primary_cta": "Generate first sweep"
+        if not runs
+        else "Generate another sweep",
+        "supershadow_metrics": {
+            "pending_handoffs": len(pending_handoffs),
+            "reviewed_handoffs": len(reviewed_handoffs),
+            "concept_count": len(ranked_concepts),
+            "run_count": len(runs),
+        },
+    }

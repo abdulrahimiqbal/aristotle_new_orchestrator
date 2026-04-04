@@ -344,6 +344,91 @@ class Database:
                     "ALTER TABLE campaigns ADD COLUMN research_packet_json TEXT NOT NULL DEFAULT '{}'"
                 )
             _set_user_version(conn, 10)
+            v = 10
+        if v < 11:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS supershadow_state (
+                    goal_id TEXT PRIMARY KEY,
+                    goal_text TEXT NOT NULL DEFAULT '',
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    worldview_json TEXT NOT NULL DEFAULT '{}',
+                    policy_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS supershadow_run (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    trigger_kind TEXT NOT NULL DEFAULT 'manual',
+                    worldview_summary TEXT NOT NULL DEFAULT '',
+                    run_summary TEXT NOT NULL DEFAULT '',
+                    fact_basis_json TEXT NOT NULL DEFAULT '[]',
+                    pressure_map_json TEXT NOT NULL DEFAULT '[]',
+                    response_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_run_goal ON supershadow_run(goal_id);
+                CREATE TABLE IF NOT EXISTS supershadow_concept (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL REFERENCES supershadow_run(id) ON DELETE CASCADE,
+                    goal_id TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    worldview_summary TEXT NOT NULL DEFAULT '',
+                    concepts_json TEXT NOT NULL DEFAULT '[]',
+                    ontological_moves_json TEXT NOT NULL DEFAULT '[]',
+                    bridge_lemmas_json TEXT NOT NULL DEFAULT '[]',
+                    reduce_frontier_or_rename TEXT NOT NULL DEFAULT '',
+                    compression_power INTEGER NOT NULL DEFAULT 0,
+                    fit_to_known_facts INTEGER NOT NULL DEFAULT 0,
+                    ontological_delta INTEGER NOT NULL DEFAULT 0,
+                    falsifiability INTEGER NOT NULL DEFAULT 0,
+                    bridgeability INTEGER NOT NULL DEFAULT 0,
+                    grounding_cost INTEGER NOT NULL DEFAULT 0,
+                    speculative_risk INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_concept_goal ON supershadow_concept(goal_id);
+                CREATE INDEX IF NOT EXISTS idx_supershadow_concept_run ON supershadow_concept(run_id);
+                CREATE TABLE IF NOT EXISTS supershadow_fact_link (
+                    id TEXT PRIMARY KEY,
+                    concept_id TEXT NOT NULL REFERENCES supershadow_concept(id) ON DELETE CASCADE,
+                    fact_key TEXT NOT NULL DEFAULT '',
+                    fact_label TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL DEFAULT 'explains',
+                    note TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_fact_concept ON supershadow_fact_link(concept_id);
+                CREATE TABLE IF NOT EXISTS supershadow_tension (
+                    id TEXT PRIMARY KEY,
+                    concept_id TEXT NOT NULL REFERENCES supershadow_concept(id) ON DELETE CASCADE,
+                    tension_text TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_tension_concept ON supershadow_tension(concept_id);
+                CREATE TABLE IF NOT EXISTS supershadow_kill_test (
+                    id TEXT PRIMARY KEY,
+                    concept_id TEXT NOT NULL REFERENCES supershadow_concept(id) ON DELETE CASCADE,
+                    description TEXT NOT NULL DEFAULT '',
+                    expected_failure_signal TEXT NOT NULL DEFAULT '',
+                    suggested_grounding_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_kill_concept ON supershadow_kill_test(concept_id);
+                CREATE TABLE IF NOT EXISTS supershadow_handoff_request (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT NOT NULL,
+                    concept_id TEXT REFERENCES supershadow_concept(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_supershadow_handoff_goal ON supershadow_handoff_request(goal_id);
+                CREATE INDEX IF NOT EXISTS idx_supershadow_handoff_status ON supershadow_handoff_request(status);
+                CREATE INDEX IF NOT EXISTS idx_supershadow_handoff_concept ON supershadow_handoff_request(concept_id);
+                """
+            )
+            _set_user_version(conn, 11)
 
     def create_campaign(
         self,
@@ -2188,3 +2273,459 @@ class Database:
 
     def reject_shadow_global_promotion(self, promotion_id: str) -> None:
         self.set_shadow_global_promotion_status(promotion_id, "rejected")
+
+    def ensure_supershadow_state_row(self, goal_id: str, *, goal_text: str = "") -> None:
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT goal_id FROM supershadow_state WHERE goal_id = ?",
+                (goal_id,),
+            )
+            if cur.fetchone() is None:
+                conn.execute(
+                    """
+                    INSERT INTO supershadow_state (
+                        goal_id, goal_text, revision, worldview_json, policy_json, updated_at
+                    )
+                    VALUES (?, ?, 0, '{}', '{}', ?)
+                    """,
+                    (goal_id, (goal_text or "")[:4000], now),
+                )
+            elif goal_text:
+                conn.execute(
+                    "UPDATE supershadow_state SET goal_text = ? WHERE goal_id = ?",
+                    ((goal_text or "")[:4000], goal_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_supershadow_state(self, goal_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM supershadow_state WHERE goal_id = ?",
+                (goal_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def list_supershadow_runs(self, goal_id: str, limit: int = 15) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, goal_id, trigger_kind, worldview_summary, run_summary, created_at
+                FROM supershadow_run
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (goal_id, min(limit, 100)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def get_supershadow_latest_run(self, goal_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT * FROM supershadow_run
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (goal_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_supershadow_concepts(self, goal_id: str, limit: int = 80) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT * FROM supershadow_concept
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (goal_id, min(limit, 500)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_supershadow_fact_links(self, concept_ids: list[str]) -> list[dict[str, Any]]:
+        if not concept_ids:
+            return []
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" * len(concept_ids))
+            cur = conn.execute(
+                f"""
+                SELECT * FROM supershadow_fact_link
+                WHERE concept_id IN ({placeholders})
+                """,
+                concept_ids,
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_supershadow_tensions(self, concept_ids: list[str]) -> list[dict[str, Any]]:
+        if not concept_ids:
+            return []
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" * len(concept_ids))
+            cur = conn.execute(
+                f"""
+                SELECT * FROM supershadow_tension
+                WHERE concept_id IN ({placeholders})
+                ORDER BY created_at DESC
+                """,
+                concept_ids,
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_supershadow_kill_tests(self, concept_ids: list[str]) -> list[dict[str, Any]]:
+        if not concept_ids:
+            return []
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" * len(concept_ids))
+            cur = conn.execute(
+                f"""
+                SELECT * FROM supershadow_kill_test
+                WHERE concept_id IN ({placeholders})
+                ORDER BY created_at DESC
+                """,
+                concept_ids,
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_supershadow_handoff_requests(
+        self, goal_id: str, *, status: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            lim = min(limit, 200)
+            if status:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM supershadow_handoff_request
+                    WHERE goal_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (goal_id, status, lim),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM supershadow_handoff_request
+                    WHERE goal_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (goal_id, lim),
+                )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def get_supershadow_handoff_request(self, handoff_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM supershadow_handoff_request WHERE id = ?",
+                (handoff_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def set_supershadow_handoff_status(
+        self, handoff_id: str, status: str, reviewed_at: str | None = None
+    ) -> None:
+        now = reviewed_at or datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE supershadow_handoff_request
+                SET status = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (status[:32], now, handoff_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def approve_supershadow_handoff(
+        self, handoff_id: str
+    ) -> tuple[bool, str, dict[str, Any]]:
+        row = self.get_supershadow_handoff_request(handoff_id)
+        if not row:
+            return False, "unknown handoff", {}
+        if row["status"] != "pending":
+            return False, "not pending", {}
+        self.set_supershadow_handoff_status(handoff_id, "approved")
+        return True, "handoff approved", {"handoff_id": handoff_id}
+
+    def reject_supershadow_handoff(self, handoff_id: str) -> None:
+        self.set_supershadow_handoff_status(handoff_id, "rejected")
+
+    def get_supershadow_ops_snapshot(self, goal_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        try:
+            c1 = conn.execute(
+                "SELECT COUNT(*) FROM supershadow_handoff_request WHERE goal_id = ? AND status = 'pending'",
+                (goal_id,),
+            ).fetchone()
+            c2 = conn.execute(
+                "SELECT COUNT(*) FROM supershadow_handoff_request WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            c3 = conn.execute(
+                "SELECT COUNT(*) FROM supershadow_concept WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            c4 = conn.execute(
+                "SELECT COUNT(*) FROM supershadow_run WHERE goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            latest = self.get_supershadow_latest_run(goal_id)
+            latest_meta: dict[str, Any] = {}
+            if latest and latest.get("response_json"):
+                try:
+                    parsed = json.loads(str(latest.get("response_json") or "{}"))
+                    if isinstance(parsed, dict):
+                        meta = parsed.get("meta")
+                        if isinstance(meta, dict):
+                            latest_meta = meta
+                except json.JSONDecodeError:
+                    latest_meta = {}
+            return {
+                "pending_handoffs": int(c1[0]) if c1 else 0,
+                "total_handoffs": int(c2[0]) if c2 else 0,
+                "total_concepts": int(c3[0]) if c3 else 0,
+                "total_runs": int(c4[0]) if c4 else 0,
+                "latest_run": {
+                    "id": latest.get("id"),
+                    "trigger_kind": latest.get("trigger_kind"),
+                    "worldview_summary": latest.get("worldview_summary"),
+                    "run_summary": latest.get("run_summary"),
+                    "created_at": latest.get("created_at"),
+                    "validation_warnings": latest_meta.get("validation_warnings") or [],
+                    "model": latest_meta.get("model") or "",
+                }
+                if latest
+                else None,
+            }
+        finally:
+            conn.close()
+
+    def supershadow_commit_run(
+        self,
+        goal_id: str,
+        *,
+        trigger_kind: str,
+        worldview_summary: str,
+        run_summary: str,
+        fact_basis_json: str,
+        pressure_map_json: str,
+        response_obj: dict[str, Any],
+        new_worldview_json: str,
+        new_policy_json: str,
+        concepts: list[dict[str, Any]],
+        goal_text: str = "",
+    ) -> str:
+        run_id = _new_id()
+        now = datetime.utcnow().isoformat()
+        conn = self._connect()
+        try:
+            self.ensure_supershadow_state_row(goal_id, goal_text=goal_text)
+            cur = conn.execute(
+                "SELECT revision FROM supershadow_state WHERE goal_id = ?",
+                (goal_id,),
+            )
+            row = cur.fetchone()
+            rev = int(row["revision"]) + 1 if row else 1
+            conn.execute(
+                """
+                UPDATE supershadow_state
+                SET revision = ?, worldview_json = ?, policy_json = ?, updated_at = ?
+                WHERE goal_id = ?
+                """,
+                (rev, new_worldview_json, new_policy_json, now, goal_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO supershadow_run (
+                    id, goal_id, trigger_kind, worldview_summary, run_summary,
+                    fact_basis_json, pressure_map_json, response_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    goal_id,
+                    trigger_kind[:64],
+                    (worldview_summary or "")[:8000],
+                    (run_summary or "")[:8000],
+                    fact_basis_json or "[]",
+                    pressure_map_json or "[]",
+                    json.dumps(response_obj, ensure_ascii=False),
+                    now,
+                ),
+            )
+            for concept in concepts:
+                cid = _new_id()
+                scores = concept.get("scores")
+                if not isinstance(scores, dict):
+                    scores = {}
+                title = str(concept.get("title") or "")[:500]
+                conn.execute(
+                    """
+                    INSERT INTO supershadow_concept (
+                        id, run_id, goal_id, title, worldview_summary,
+                        concepts_json, ontological_moves_json, bridge_lemmas_json,
+                        reduce_frontier_or_rename, compression_power, fit_to_known_facts,
+                        ontological_delta, falsifiability, bridgeability, grounding_cost,
+                        speculative_risk, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cid,
+                        run_id,
+                        goal_id,
+                        title,
+                        str(concept.get("worldview_summary") or "")[:4000],
+                        json.dumps(concept.get("concepts") or [], ensure_ascii=False),
+                        json.dumps(
+                            concept.get("ontological_moves") or [], ensure_ascii=False
+                        ),
+                        json.dumps(concept.get("bridge_lemmas") or [], ensure_ascii=False),
+                        str(concept.get("reduce_frontier_or_rename") or "")[:2000],
+                        int(scores.get("compression_power") or 0),
+                        int(scores.get("fit_to_known_facts") or 0),
+                        int(scores.get("ontological_delta") or 0),
+                        int(scores.get("falsifiability") or 0),
+                        int(scores.get("bridgeability") or 0),
+                        int(scores.get("grounding_cost") or 0),
+                        int(scores.get("speculative_risk") or 0),
+                        now,
+                    ),
+                )
+                for fact_link in concept.get("explains_facts") or []:
+                    if isinstance(fact_link, dict):
+                        fact_key = str(fact_link.get("fact_key") or "")[:120]
+                        fact_label = str(fact_link.get("fact_label") or "")[:500]
+                        role = str(fact_link.get("role") or "explains")[:32]
+                        note = str(fact_link.get("note") or "")[:2000]
+                    else:
+                        fact_key = ""
+                        fact_label = str(fact_link or "")[:500]
+                        role = "explains"
+                        note = ""
+                    if not (fact_key or fact_label):
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO supershadow_fact_link (
+                            id, concept_id, fact_key, fact_label, role, note
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (_new_id(), cid, fact_key, fact_label, role, note),
+                    )
+                for tension in concept.get("tensions") or []:
+                    if isinstance(tension, dict):
+                        text = str(tension.get("text") or "")[:2000]
+                    else:
+                        text = str(tension or "")[:2000]
+                    if not text:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO supershadow_tension (
+                            id, concept_id, tension_text, created_at
+                        )
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (_new_id(), cid, text, now),
+                    )
+                for kill_test in concept.get("kill_tests") or []:
+                    if isinstance(kill_test, dict):
+                        description = str(kill_test.get("description") or "")[:2000]
+                        expected_failure_signal = str(
+                            kill_test.get("expected_failure_signal") or ""
+                        )[:2000]
+                        suggested_grounding_path = str(
+                            kill_test.get("suggested_grounding_path") or ""
+                        )[:2000]
+                    else:
+                        description = str(kill_test or "")[:2000]
+                        expected_failure_signal = ""
+                        suggested_grounding_path = ""
+                    if not description:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO supershadow_kill_test (
+                            id, concept_id, description, expected_failure_signal,
+                            suggested_grounding_path, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            _new_id(),
+                            cid,
+                            description,
+                            expected_failure_signal,
+                            suggested_grounding_path,
+                            now,
+                        ),
+                    )
+                for handoff in concept.get("shadow_handoffs") or []:
+                    if not isinstance(handoff, dict):
+                        continue
+                    payload = dict(handoff)
+                    payload.setdefault("concept_id", cid)
+                    payload.setdefault("concept_title", title)
+                    payload.setdefault("concept_scores", scores)
+                    conn.execute(
+                        """
+                        INSERT INTO supershadow_handoff_request (
+                            id, goal_id, concept_id, status, payload_json, created_at
+                        )
+                        VALUES (?, ?, ?, 'pending', ?, ?)
+                        """,
+                        (
+                            _new_id(),
+                            goal_id,
+                            cid,
+                            json.dumps(payload, ensure_ascii=False),
+                            now,
+                        ),
+                    )
+            conn.commit()
+            return run_id
+        finally:
+            conn.close()

@@ -38,6 +38,12 @@ from orchestrator.shadow_agent import (
     shadow_global_loop,
 )
 from orchestrator.shadow_presenter import build_shadow_ui_context
+from orchestrator.supershadow_agent import (
+    SUPERSHADOW_GLOBAL_GOAL_ID,
+    run_supershadow_global_lab,
+    supershadow_global_loop,
+)
+from orchestrator.supershadow_presenter import build_supershadow_ui_context
 
 logging.basicConfig(level=logging.INFO)
 
@@ -69,6 +75,23 @@ def _operator_runtime_context() -> dict:
         "shadow_global_auto_enabled": bool(app_config.SHADOW_GLOBAL_AUTO_ENABLED),
         "shadow_global_tick_interval_sec": int(app_config.SHADOW_GLOBAL_TICK_INTERVAL_SEC),
         "shadow_global_pending_cap": int(app_config.SHADOW_GLOBAL_MAX_PENDING_PROMOTIONS),
+        "supershadow_llm_model": (
+            app_config.SUPERSHADOW_LLM_MODEL
+            or app_config.SHADOW_LLM_MODEL
+            or app_config.LLM_MODEL
+        ),
+        "supershadow_llm_temperature": app_config.SUPERSHADOW_LLM_TEMPERATURE,
+        "supershadow_global_goal": app_config.SUPERSHADOW_GLOBAL_GOAL,
+        "supershadow_global_auto_enabled": bool(app_config.SUPERSHADOW_GLOBAL_AUTO_ENABLED),
+        "supershadow_global_tick_interval_sec": int(
+            app_config.SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC
+        ),
+        "supershadow_max_handoffs_per_run": int(
+            app_config.SUPERSHADOW_MAX_HANDOFFS_PER_RUN
+        ),
+        "supershadow_max_pending_handoffs": int(
+            app_config.SUPERSHADOW_MAX_PENDING_HANDOFFS
+        ),
     }
 
 
@@ -201,6 +224,71 @@ def _shadow_global_panel_context(*, shadow_flash: dict | None = None) -> dict:
     }
 
 
+def _supershadow_global_panel_context(
+    *, supershadow_flash: dict | None = None
+) -> dict:
+    goal_id = SUPERSHADOW_GLOBAL_GOAL_ID
+    goal_text = app_config.SUPERSHADOW_GLOBAL_GOAL
+    db.ensure_supershadow_state_row(goal_id, goal_text=goal_text)
+    ep = db.get_supershadow_state(goal_id)
+    worldview_raw = ep.get("worldview_json") or "{}"
+    try:
+        worldview_pretty = json.dumps(
+            json.loads(worldview_raw), indent=2, ensure_ascii=False
+        )
+    except json.JSONDecodeError:
+        worldview_pretty = worldview_raw
+    policy_raw = ep.get("policy_json") or "{}"
+    try:
+        policy_pretty = json.dumps(json.loads(policy_raw), indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        policy_pretty = policy_raw
+    concepts = db.list_supershadow_concepts(goal_id, limit=80)
+    concept_ids = [str(concept["id"]) for concept in concepts]
+    fact_rows = db.list_supershadow_fact_links(concept_ids)
+    tension_rows = db.list_supershadow_tensions(concept_ids)
+    kill_rows = db.list_supershadow_kill_tests(concept_ids)
+    facts_by_concept: dict[str, list[dict[str, Any]]] = {}
+    tensions_by_concept: dict[str, list[dict[str, Any]]] = {}
+    kills_by_concept: dict[str, list[dict[str, Any]]] = {}
+    for row in fact_rows:
+        facts_by_concept.setdefault(str(row["concept_id"]), []).append(dict(row))
+    for row in tension_rows:
+        tensions_by_concept.setdefault(str(row["concept_id"]), []).append(dict(row))
+    for row in kill_rows:
+        kills_by_concept.setdefault(str(row["concept_id"]), []).append(dict(row))
+    for concept in concepts:
+        cid = str(concept["id"])
+        concept["fact_links"] = facts_by_concept.get(cid, [])
+        concept["tensions"] = tensions_by_concept.get(cid, [])
+        concept["kill_tests"] = kills_by_concept.get(cid, [])
+    handoffs = db.list_supershadow_handoff_requests(goal_id, limit=80)
+    runs = db.list_supershadow_runs(goal_id, limit=20)
+    ui_ctx = build_supershadow_ui_context(
+        concepts=concepts,
+        handoffs=handoffs,
+        runs=runs,
+    )
+    return {
+        "selected": None,
+        "supershadow_goal_id": goal_id,
+        "supershadow_goal_text": ep.get("goal_text") or goal_text,
+        "supershadow_epistemic": ep,
+        "supershadow_worldview_pretty": worldview_pretty,
+        "supershadow_policy_pretty": policy_pretty,
+        "supershadow_concepts": concepts,
+        "supershadow_handoffs": handoffs,
+        "supershadow_runs": runs,
+        "supershadow_flash": supershadow_flash,
+        "operator": _operator_runtime_context(),
+        "public_view": False,
+        "shadow_view": False,
+        "supershadow_view": True,
+        "campaigns": db.get_all_campaigns(),
+        **ui_ctx,
+    }
+
+
 async def _maybe_submit_shadow_promoted_experiment(
     payload_json: str | None, extra: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -244,11 +332,17 @@ async def lifespan(app: FastAPI):
     )
     task = asyncio.create_task(manager_loop(db))
     shadow_task = asyncio.create_task(shadow_global_loop(db))
+    supershadow_task = asyncio.create_task(supershadow_global_loop(db))
     try:
         yield
     finally:
+        supershadow_task.cancel()
         shadow_task.cancel()
         task.cancel()
+        try:
+            await supershadow_task
+        except asyncio.CancelledError:
+            pass
         try:
             await shadow_task
         except asyncio.CancelledError:
@@ -302,6 +396,7 @@ async def dashboard(request: Request):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": False,
+            "supershadow_view": False,
             "campaign_shadow_view": False,
         },
     )
@@ -328,6 +423,7 @@ async def campaign_detail(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": False,
+            "supershadow_view": False,
             "campaign_shadow_view": False,
             **_cartography_context(state),
         },
@@ -352,6 +448,7 @@ async def campaign_shadow_detail(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": False,
+            "supershadow_view": False,
             "campaign_shadow_view": True,
             **ctx,
         },
@@ -382,6 +479,7 @@ async def public_campaign_detail(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": True,
             "shadow_view": False,
+            "supershadow_view": False,
             "campaign_shadow_view": False,
             **_cartography_context(state),
         },
@@ -403,6 +501,29 @@ async def shadow_dashboard(request: Request):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": True,
+            "supershadow_view": False,
+            "campaign_shadow_view": False,
+            **ctx,
+        },
+    )
+
+
+@app.get("/supershadow", response_class=HTMLResponse)
+async def supershadow_dashboard(request: Request):
+    ctx = _supershadow_global_panel_context()
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "campaigns": ctx["campaigns"],
+            "selected": None,
+            "state": None,
+            "ticks": [],
+            "progress": None,
+            "operator": _operator_runtime_context(),
+            "public_view": False,
+            "shadow_view": False,
+            "supershadow_view": True,
             "campaign_shadow_view": False,
             **ctx,
         },
@@ -585,6 +706,7 @@ async def campaign_state_fragment(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": False,
             "shadow_view": False,
+            "supershadow_view": False,
             **_cartography_context(state),
         },
     )
@@ -614,6 +736,7 @@ async def public_campaign_state_fragment(request: Request, campaign_id: str):
             "operator": _operator_runtime_context(),
             "public_view": True,
             "shadow_view": False,
+            "supershadow_view": False,
             **_cartography_context(state),
         },
     )
@@ -641,6 +764,71 @@ async def shadow_global_ops():
         "shadow_aristotle_immediate": bool(app_config.SHADOW_ARISTOTLE_IMMEDIATE_ON_APPROVE),
         **snap,
     }
+
+
+@app.get("/api/supershadow/panel", response_class=HTMLResponse)
+async def supershadow_global_panel_fragment(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "supershadow_panel.html",
+        _supershadow_global_panel_context(),
+    )
+
+
+@app.get("/api/supershadow/ops")
+async def supershadow_global_ops():
+    snap = db.get_supershadow_ops_snapshot(SUPERSHADOW_GLOBAL_GOAL_ID)
+    return {
+        "goal_id": SUPERSHADOW_GLOBAL_GOAL_ID,
+        "goal_text": app_config.SUPERSHADOW_GLOBAL_GOAL,
+        "auto_enabled": bool(app_config.SUPERSHADOW_GLOBAL_AUTO_ENABLED),
+        "auto_interval_sec": int(app_config.SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC),
+        "handoff_cap": int(app_config.SUPERSHADOW_MAX_HANDOFFS_PER_RUN),
+        "pending_cap": int(app_config.SUPERSHADOW_MAX_PENDING_HANDOFFS),
+        **snap,
+    }
+
+
+@app.post("/api/supershadow/run", response_class=HTMLResponse)
+async def supershadow_global_run_fragment(request: Request):
+    flash = await run_supershadow_global_lab(
+        db,
+        goal_text=app_config.SUPERSHADOW_GLOBAL_GOAL,
+        trigger_kind="manual",
+    )
+    return templates.TemplateResponse(
+        request,
+        "supershadow_panel.html",
+        _supershadow_global_panel_context(supershadow_flash=flash),
+    )
+
+
+@app.post("/api/supershadow/handoff/{handoff_id}/approve")
+async def supershadow_handoff_approve(request: Request, handoff_id: str):
+    row = db.get_supershadow_handoff_request(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown handoff", status_code=404)
+    ok, msg, _extra = db.approve_supershadow_handoff(handoff_id)
+    flash: dict[str, Any] = {"ok": ok, "error": None if ok else msg, "handoff": "approved"}
+    return templates.TemplateResponse(
+        request,
+        "supershadow_panel.html",
+        _supershadow_global_panel_context(supershadow_flash=flash),
+    )
+
+
+@app.post("/api/supershadow/handoff/{handoff_id}/reject")
+async def supershadow_handoff_reject(request: Request, handoff_id: str):
+    row = db.get_supershadow_handoff_request(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown handoff", status_code=404)
+    db.reject_supershadow_handoff(handoff_id)
+    flash = {"ok": True, "handoff": "rejected"}
+    return templates.TemplateResponse(
+        request,
+        "supershadow_panel.html",
+        _supershadow_global_panel_context(supershadow_flash=flash),
+    )
 
 
 @app.post("/api/shadow/run", response_class=HTMLResponse)

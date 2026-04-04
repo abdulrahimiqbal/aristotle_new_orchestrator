@@ -624,6 +624,7 @@ Rules:
 - Keep JSON valid. No markdown fences."""
 
 SHADOW_GLOBAL_GOAL_ID = "global_collatz"
+_SUPERSHADOW_GLOBAL_GOAL_ID = "global_collatz_supershadow"
 
 SHADOW_GLOBAL_SYSTEM = """You are the global Shadow Research Manager with one mission:
 produce a mathematically correct proof program for the Collatz conjecture that can eventually be grounded in Lean 4.
@@ -790,6 +791,33 @@ def _build_shadow_global_user_message(
             if tid:
                 lane += f" · target {tid}"
             lines.append(f"- pending {lane} · {headline}")
+    else:
+        lines.append("- none")
+    lines.append("")
+
+    lines.append("## Approved Supershadow conceptual handoffs (read-only upstream input)")
+    approved_handoffs = db.list_supershadow_handoff_requests(
+        _SUPERSHADOW_GLOBAL_GOAL_ID, status="approved", limit=16
+    )
+    if approved_handoffs:
+        for row in approved_handoffs:
+            payload = _load_json_object(row.get("payload_json"))
+            title = _clip_text(payload.get("title"), 240)
+            summary = _clip_text(payload.get("summary"), 800)
+            why_compressive = _clip_text(payload.get("why_compressive"), 800)
+            shadow_task = _clip_text(payload.get("shadow_task"), 800)
+            bridge_lemmas = _str_list(
+                payload.get("bridge_lemmas"), max_items=6, max_item_chars=300
+            )
+            lines.append(f"- {title}")
+            if summary:
+                lines.append(f"  summary: {summary}")
+            if why_compressive:
+                lines.append(f"  why_compressive: {why_compressive}")
+            if shadow_task:
+                lines.append(f"  shadow_task: {shadow_task}")
+            if bridge_lemmas:
+                lines.append(f"  bridge_lemmas: {' | '.join(bridge_lemmas)}")
     else:
         lines.append("- none")
     lines.append("")

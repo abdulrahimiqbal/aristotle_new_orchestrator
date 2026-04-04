@@ -22,6 +22,7 @@ def test_update_research_packet_json_endpoint(
     monkeypatch.setattr(app_config, "WORKSPACE_ROOT", str(tmp_path / "ws"))
     monkeypatch.setattr(app_mod, "manager_loop", _noop_loop)
     monkeypatch.setattr(app_mod, "shadow_global_loop", _noop_loop)
+    monkeypatch.setattr(app_mod, "supershadow_global_loop", _noop_loop)
 
     cid = tmp_db.create_campaign(
         "hello",

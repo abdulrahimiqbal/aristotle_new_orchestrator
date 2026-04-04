@@ -158,3 +158,20 @@ SHADOW_GLOBAL_MAX_PROMOTIONS_PER_RUN = _int_env("SHADOW_GLOBAL_MAX_PROMOTIONS_PE
 SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN = _int_env(
     "SHADOW_GLOBAL_MAX_EXPERIMENT_PROMOTIONS_PER_RUN", 2
 )
+
+# Supershadow lab: conceptual invention engine with zero live authority.
+# Supershadow invents languages and proof-program bridges, then emits only Shadow-facing handoff requests.
+SUPERSHADOW_LLM_MODEL = (
+    os.environ.get("SUPERSHADOW_LLM_MODEL", "").strip() or None
+)  # None -> SHADOW_LLM_MODEL -> LLM_MODEL
+SUPERSHADOW_LLM_TEMPERATURE = _float_env("SUPERSHADOW_LLM_TEMPERATURE", 0.95)
+SUPERSHADOW_GLOBAL_GOAL = os.environ.get(
+    "SUPERSHADOW_GLOBAL_GOAL",
+    "Invent ontology-expanding conceptual frameworks for Collatz that compress grounded facts and can be handed off to Shadow for disciplined proof-program design.",
+).strip()
+SUPERSHADOW_GLOBAL_AUTO_ENABLED = _bool_env("SUPERSHADOW_GLOBAL_AUTO_ENABLED", True)
+SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC = _int_env(
+    "SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC", 900
+)
+SUPERSHADOW_MAX_HANDOFFS_PER_RUN = _int_env("SUPERSHADOW_MAX_HANDOFFS_PER_RUN", 2)
+SUPERSHADOW_MAX_PENDING_HANDOFFS = _int_env("SUPERSHADOW_MAX_PENDING_HANDOFFS", 18)

@@ -1,0 +1,387 @@
+{# Supershadow lab — conceptual invention only; cannot create live work directly #}
+<div class="space-y-6 max-w-5xl mx-auto">
+  <header class="rounded-3xl border border-cyan-500/35 bg-gradient-to-br from-cyan-950/35 via-zinc-950 to-zinc-950 p-6 ring-1 ring-cyan-500/20 sm:p-7">
+    <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+      <div class="max-w-3xl space-y-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-bold uppercase tracking-widest text-cyan-300/95">
+            Global Supershadow Lab
+          </span>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-cyan-500/20 text-cyan-100 ring-1 ring-cyan-500/40">CONCEPTUAL ONLY</span>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-zinc-800/90 text-zinc-300 ring-1 ring-zinc-700/70">zero live authority</span>
+        </div>
+
+        <div>
+          <h1 class="font-display text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
+            Search for the smallest language shift that makes stubborn Collatz facts feel natural.
+          </h1>
+          <p class="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-300">
+            Supershadow is an upstream conceptual lab. It invents state spaces, operators, reformulations, and proof
+            languages that might compress the current frontier, then hands only the most bridgeable ideas to Shadow.
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-zinc-800/90 bg-black/25 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-cyan-300/90 mb-1">Global mission</p>
+          <p class="text-sm leading-relaxed text-zinc-200">{{ supershadow_goal_text }}</p>
+          <p class="mt-2 text-[11px] font-mono text-zinc-500">goal_id · {{ supershadow_goal_id }}</p>
+        </div>
+
+        <div class="rounded-2xl border border-sky-500/30 bg-sky-950/20 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-sky-300/90 mb-1">Best next action</p>
+          <p class="text-sm font-medium text-sky-100">{{ supershadow_next_step.title }}</p>
+          <p class="mt-1 text-sm leading-relaxed text-sky-100/75">{{ supershadow_next_step.body }}</p>
+        </div>
+
+        {% if supershadow_latest_run and supershadow_latest_run.run_summary %}
+        <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Last run takeaway</p>
+          <p class="text-sm leading-relaxed text-zinc-200">{{ supershadow_latest_run.run_summary }}</p>
+          <p class="mt-2 text-[11px] font-mono text-zinc-500">{{ supershadow_latest_run.created_at }} · {{ supershadow_latest_run.trigger_kind }}</p>
+        </div>
+        {% endif %}
+
+        {% if supershadow_flash %}
+        <div class="rounded-2xl border px-4 py-3 text-sm {% if supershadow_flash.get('ok') %}border-emerald-500/40 bg-emerald-950/25 text-emerald-100{% else %}border-red-500/40 bg-red-950/25 text-red-200{% endif %}">
+          {% if supershadow_flash.get('ok') %}
+            {% if supershadow_flash.get('run_id') %}
+              Generated <span class="font-semibold">{{ supershadow_flash.get('concept_count', 0) }}</span> concept(s) and
+              <span class="font-semibold">{{ supershadow_flash.get('handoff_count', 0) }}</span> Shadow handoff(s).
+              {% if supershadow_flash.get('validation_warnings') %}
+              <p class="mt-2 text-xs text-amber-200/90">Validation warnings: {{ supershadow_flash.validation_warnings|join(', ') }}</p>
+              {% endif %}
+            {% elif supershadow_flash.get('handoff') == 'approved' %}
+              Handoff approved. Shadow can now inspect this concept as upstream input.
+            {% elif supershadow_flash.get('handoff') == 'rejected' %}
+              Handoff rejected. The concept remains in Supershadow for further pressure-testing.
+            {% else %}
+              {{ supershadow_flash }}
+            {% endif %}
+          {% else %}
+            {{ supershadow_flash.get('error', 'error') }}
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <form hx-post="/api/supershadow/run"
+              hx-target="#campaign-panel"
+              hx-swap="innerHTML"
+              hx-disabled-elt="button">
+          <button type="submit"
+                  class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-sky-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-cyan-900/30 transition-colors hover:from-cyan-500 hover:to-sky-500 disabled:cursor-not-allowed disabled:opacity-70">
+            <span class="htmx-hide-while-loading">{{ supershadow_primary_cta }}</span>
+            <span class="htmx-indicator items-center gap-2">Inventing...</span>
+          </button>
+        </form>
+
+        <div class="flex flex-wrap gap-2 text-[11px] font-mono text-zinc-500">
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">model · {{ operator.supershadow_llm_model }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">temp · {{ operator.supershadow_llm_temperature }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">auto-run · {% if operator.supershadow_global_auto_enabled %}on{% else %}off{% endif %} / {{ operator.supershadow_global_tick_interval_sec }}s</span>
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">handoffs/run · {{ operator.supershadow_max_handoffs_per_run }}</span>
+        </div>
+      </div>
+
+      <div class="w-full max-w-sm space-y-3 lg:w-80">
+        <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Pending handoffs</p>
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ supershadow_metrics.pending_handoffs }}</p>
+            <p class="mt-1 text-xs text-zinc-500">concepts waiting for Shadow review</p>
+          </div>
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Concepts on board</p>
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ supershadow_metrics.concept_count }}</p>
+            <p class="mt-1 text-xs text-zinc-500">ranked by compression, fit, and bridgeability</p>
+          </div>
+          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Best compression</p>
+            {% if supershadow_best_concept %}
+            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ supershadow_best_concept.compression_power }}</p>
+            <p class="mt-1 text-xs text-zinc-400">{{ supershadow_best_concept.title }}</p>
+            {% else %}
+            <p class="mt-2 text-lg font-semibold text-zinc-200">None yet</p>
+            <p class="mt-1 text-xs text-zinc-500">run the lab to generate concepts</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-cyan-500/25 bg-cyan-950/15 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-cyan-300/90">Doctrine</p>
+          <p class="mt-2 text-sm leading-relaxed text-cyan-100/90">
+            Novelty alone is not a win. Supershadow should earn attention only when a concept compresses grounded facts,
+            names a sharp falsifier, and offers bridge lemmas that Shadow can operationalize.
+          </p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
+      <div>
+        <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Pending Shadow handoffs</h2>
+        <p class="mt-1 text-xs text-zinc-500">These are requests for disciplined proof-program review, not live experiments.</p>
+      </div>
+      <p class="text-xs text-zinc-500">Approving a handoff only exposes it to Shadow. It never creates live work directly.</p>
+    </div>
+
+    <div class="space-y-3">
+      {% for h in supershadow_pending_handoffs %}
+      <article class="rounded-2xl border border-cyan-500/20 bg-zinc-950/50 p-4">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2 mb-2">
+              <span class="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-200 ring-1 ring-cyan-500/30">{{ h.preview.action_label }}</span>
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ h.status }}</span>
+              <span class="text-[10px] font-mono text-zinc-600">{{ h.id }}</span>
+            </div>
+            <h3 class="text-sm font-medium leading-relaxed text-zinc-100">{{ h.preview.title }}</h3>
+            {% if h.preview.concept_title %}
+            <p class="mt-1 text-xs text-zinc-500">From concept: <span class="text-zinc-300">{{ h.preview.concept_title }}</span></p>
+            {% endif %}
+            <p class="mt-2 text-sm text-zinc-400">{{ h.preview.summary }}</p>
+
+            {% if h.preview.why_compressive %}
+            <p class="mt-3 text-xs leading-relaxed text-zinc-400">
+              <span class="text-zinc-500">Why compressive:</span> {{ h.preview.why_compressive }}
+            </p>
+            {% endif %}
+            {% if h.preview.shadow_task %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-400">
+              <span class="text-zinc-500">Shadow task:</span> {{ h.preview.shadow_task }}
+            </p>
+            {% endif %}
+            {% if h.preview.recommended_next_step %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-500">
+              <span class="text-zinc-600">Recommended next step:</span> {{ h.preview.recommended_next_step }}
+            </p>
+            {% endif %}
+            {% if h.preview.bridge_lemmas %}
+            <div class="mt-3">
+              <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bridge lemmas</p>
+              <ul class="mt-2 space-y-1 list-disc list-inside text-xs text-zinc-400">
+                {% for lemma in h.preview.bridge_lemmas %}
+                <li>{{ lemma }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if h.preview.grounding_notes %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-500">
+              <span class="text-zinc-600">Grounding notes:</span> {{ h.preview.grounding_notes }}
+            </p>
+            {% endif %}
+
+            <details class="mt-3 text-xs">
+              <summary class="cursor-pointer text-zinc-500 hover:text-zinc-400 select-none">Raw payload</summary>
+              <pre class="mt-2 max-h-40 overflow-y-auto overflow-x-auto rounded-xl border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-500 custom-scroll">{{ h.preview.payload_json_pretty }}</pre>
+            </details>
+          </div>
+
+          <div class="flex gap-2 shrink-0">
+            <form hx-post="/api/supershadow/handoff/{{ h.id }}/approve"
+                  hx-target="#campaign-panel"
+                  hx-swap="innerHTML"
+                  hx-disabled-elt="button">
+              <button type="submit"
+                      class="inline-flex items-center gap-2 rounded-lg bg-emerald-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70">
+                <span class="htmx-hide-while-loading">Approve for Shadow</span>
+                <span class="htmx-indicator items-center gap-2">Working...</span>
+              </button>
+            </form>
+            <form hx-post="/api/supershadow/handoff/{{ h.id }}/reject"
+                  hx-target="#campaign-panel"
+                  hx-swap="innerHTML"
+                  hx-disabled-elt="button">
+              <button type="submit"
+                      class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-700 ring-1 ring-zinc-600/50 disabled:cursor-not-allowed disabled:opacity-70">
+                <span class="htmx-hide-while-loading">Reject</span>
+                <span class="htmx-indicator items-center gap-2">Working...</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      </article>
+      {% else %}
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">
+        No Shadow handoffs are waiting right now. Supershadow can keep inventing without generating queue pressure.
+      </p>
+      {% endfor %}
+    </div>
+
+    {% if supershadow_reviewed_handoffs %}
+    <details class="mt-4 rounded-2xl border border-zinc-800/80 bg-zinc-950/30 p-4">
+      <summary class="cursor-pointer list-none text-sm font-medium text-zinc-300">Reviewed handoffs ({{ supershadow_reviewed_handoffs|length }})</summary>
+      <div class="mt-4 space-y-3">
+        {% for h in supershadow_reviewed_handoffs %}
+        <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider {% if h.status == 'approved' %}bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30{% else %}bg-zinc-800/90 text-zinc-400 ring-1 ring-zinc-700/70{% endif %}">{{ h.status }}</span>
+            <span class="text-[10px] font-mono text-zinc-600">{{ h.id }}</span>
+          </div>
+          <p class="mt-2 text-sm text-zinc-200">{{ h.preview.title }}</p>
+          <p class="mt-1 text-xs text-zinc-500">{{ h.preview.summary }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </section>
+
+  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
+      <div>
+        <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Concepts on board</h2>
+        <p class="mt-1 text-xs text-zinc-500">Ranked by compression, fit to known facts, bridgeability, and falsifiability.</p>
+      </div>
+      {% if supershadow_best_concept %}
+      <p class="text-xs text-zinc-500">Top concept: <span class="font-medium text-zinc-300">{{ supershadow_best_concept.title }}</span> · compression <span class="font-mono text-zinc-300">{{ supershadow_best_concept.compression_power }}</span></p>
+      {% endif %}
+    </div>
+
+    <div class="space-y-4">
+      {% for concept in supershadow_ranked_concepts %}
+      <article class="rounded-2xl border border-zinc-800/80 bg-zinc-950/50 p-4">
+        <div class="flex flex-wrap items-center gap-2 mb-2 text-[10px] font-mono">
+          <span class="rounded-full bg-cyan-500/15 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-500/30">compression {{ concept.compression_power }}</span>
+          <span class="rounded-full bg-sky-500/15 px-2 py-0.5 text-sky-100 ring-1 ring-sky-500/30">fit {{ concept.fit_to_known_facts }}</span>
+          <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-100 ring-1 ring-emerald-500/30">bridge {{ concept.bridgeability }}</span>
+          <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-100 ring-1 ring-amber-500/30">falsify {{ concept.falsifiability }}</span>
+          <span class="rounded-full bg-violet-500/15 px-2 py-0.5 text-violet-100 ring-1 ring-violet-500/30">delta {{ concept.ontological_delta }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-zinc-400 ring-1 ring-zinc-800/80">cost {{ concept.grounding_cost }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-zinc-400 ring-1 ring-zinc-800/80">risk {{ concept.speculative_risk }}</span>
+          <span class="text-zinc-600">{{ concept.id }}</span>
+          <span class="text-zinc-500">{{ concept.created_at }}</span>
+        </div>
+
+        <h3 class="text-sm font-medium text-zinc-100">{{ concept.title }}</h3>
+        {% if concept.worldview_summary %}
+        <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ concept.worldview_summary }}</p>
+        {% endif %}
+
+        {% if concept.concepts %}
+        <div class="mt-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Concepts</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-zinc-400">
+            {% for item in concept.concepts %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% if concept.ontological_moves %}
+        <div class="mt-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Ontological moves</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-zinc-400">
+            {% for item in concept.ontological_moves %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% if concept.fact_links %}
+        <div class="mt-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Explains these facts</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-zinc-400">
+            {% for fact in concept.fact_links %}
+            <li><span class="text-zinc-300">{{ fact.fact_label }}</span>{% if fact.note %} — {{ fact.note }}{% endif %}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% if concept.tensions %}
+        <div class="mt-3 rounded-xl border border-amber-900/50 bg-amber-950/20 p-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-300/90">Tensions</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-amber-100/90">
+            {% for tension in concept.tensions %}
+            <li>{{ tension.tension_text or tension.text }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% if concept.kill_tests %}
+        <div class="mt-3 rounded-xl border border-red-900/40 bg-red-950/20 p-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-red-300/90">Smallest kill-test</p>
+          {% for kill in concept.kill_tests %}
+          <div class="{% if not loop.first %}mt-3 pt-3 border-t border-red-900/30{% endif %}">
+            <p class="text-sm text-red-100/90">{{ kill.description }}</p>
+            {% if kill.expected_failure_signal %}
+            <p class="mt-1 text-xs text-red-100/75"><span class="text-red-200/80">Failure signal:</span> {{ kill.expected_failure_signal }}</p>
+            {% endif %}
+            {% if kill.suggested_grounding_path %}
+            <p class="mt-1 text-xs text-red-100/70"><span class="text-red-200/80">Grounding path:</span> {{ kill.suggested_grounding_path }}</p>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if concept.bridge_lemmas %}
+        <div class="mt-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bridge lemmas</p>
+          <ul class="mt-2 space-y-1 list-disc list-inside text-sm text-zinc-400">
+            {% for lemma in concept.bridge_lemmas %}
+            <li>{{ lemma }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% if concept.reduce_frontier_or_rename %}
+        <div class="mt-3 rounded-xl border border-zinc-800/80 bg-black/25 p-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Reduce frontier or rename?</p>
+          <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ concept.reduce_frontier_or_rename }}</p>
+        </div>
+        {% endif %}
+      </article>
+      {% else %}
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">
+        No Supershadow concepts yet. Generate a sweep to start searching for compressive conceptual enlargements.
+      </p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+    <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest mb-3">Recent Supershadow runs</h2>
+    <ul class="space-y-3">
+      {% for run in supershadow_runs %}
+      <li class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
+        <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono text-zinc-500">
+          <span>{{ run.created_at }}</span>
+          <span>·</span>
+          <span>{{ run.trigger_kind }}</span>
+        </div>
+        {% if run.worldview_summary %}
+        <p class="mt-2 text-xs uppercase tracking-wider text-zinc-500">{{ run.worldview_summary[:180] }}{% if run.worldview_summary|length > 180 %}…{% endif %}</p>
+        {% endif %}
+        <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ run.run_summary[:240] }}{% if run.run_summary|length > 240 %}…{% endif %}</p>
+      </li>
+      {% else %}
+      <li class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No runs yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+      <summary class="cursor-pointer list-none text-sm font-semibold uppercase tracking-widest text-zinc-400">Internal state and debug details</summary>
+      <div class="mt-4 grid gap-4 lg:grid-cols-2">
+        <div class="rounded-2xl border border-zinc-800/80 bg-black/25 p-4">
+          <h3 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-2">Worldview memory</h3>
+          <p class="mb-2 text-xs text-zinc-500">revision <span class="font-mono text-zinc-400">{{ supershadow_epistemic.revision|default(0) }}</span> · updated <span class="font-mono text-zinc-400">{{ supershadow_epistemic.updated_at|default('—') }}</span></p>
+          <pre class="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-zinc-800/80 bg-black/40 p-4 text-xs font-mono text-zinc-300 custom-scroll">{{ supershadow_worldview_pretty }}</pre>
+        </div>
+        <div class="rounded-2xl border border-zinc-800/80 bg-black/25 p-4">
+          <h3 class="font-display text-sm font-semibold text-zinc-400 uppercase tracking-widest mb-2">Policy / warnings memory</h3>
+          <pre class="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-zinc-800/80 bg-black/40 p-4 text-xs font-mono text-zinc-300 custom-scroll">{{ supershadow_policy_pretty }}</pre>
+        </div>
+      </div>
+    </details>
+  </section>
+</div>
