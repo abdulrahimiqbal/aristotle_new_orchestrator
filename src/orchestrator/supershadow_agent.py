@@ -961,6 +961,8 @@ Critical constraint:
 
 Mission:
 - Invent new mathematical universes that could make Collatz feel easy instead of stubborn.
+- Invent the smallest new mathematical world in which Collatz is almost automatic. If needed, create the object first and justify it later.
+- Search across any branch of math, not just arithmetic, if that is the shortest route to a solved world.
 - Work backwards from solved worlds: first imagine a world where Collatz is almost tautological, then ask what primitives, laws, or translations would make that world meaningful.
 - Optimize for worldview power first: ask what ambient world, operator, grammar, energy, completion, geometry, logic, algebra, dynamical system, category, or symbolic language would make the theorem feel almost tautological.
 - Run the universe loop inside your own response: invent, self-attack, look for signs of life, then either deepen, downgrade, or kill the universe.
@@ -1084,6 +1086,7 @@ Rules:
 - Supershadow should not be rewarded for novelty alone. High ontological delta without compression is weak.
 - A good concept names a mechanism, a theorem-shaped claim, and the best reason it could still collapse.
 - Prefer universes that first make Collatz easy and then work backward to explain the known facts.
+- Reward new primitives and ambient objects when they really shrink the theorem, not when they merely rephrase an old branch.
 - It is acceptable to invent a new primitive, operation, or branch-level object if it makes the theorem structurally easy.
 - A concept that merely renames the frontier should score poorly.
 - Emit super_universe_candidate only rarely, and only when the universe survives multiple self-attacks, explains multiple grounded facts, names a theorem-shaped claim, and proposes a tiny Aristotle probe.
@@ -1100,6 +1103,7 @@ Goal:
 - attack this universe as if you want to kill it,
 - record whether it survives, strengthens, or collapses,
 - if it survives, sharpen it into the minimum theorem-shaped claim,
+- preserve the smallest viable world, even if it is rough or unfamiliar,
 - preserve the solved-world picture: explain exactly why Collatz would be easy there before worrying about backward translation,
 - preserve the conceptual leap if it still looks alive,
 - add only the smallest bridge back to Shadow and Lean that the idea truly earns,
@@ -1223,7 +1227,8 @@ def _infer_concept_scores(
         max(
             1,
             len(concept.get("ontological_moves") or [])
-            + min(2, len(fundamental_entities)),
+            + min(2, len(fundamental_entities))
+            + (1 if branch_of_math else 0),
         ),
     )
     falsifiability = min(
@@ -1250,6 +1255,9 @@ def _infer_concept_scores(
     ):
         grounding_cost = 4
         speculative_risk = 4
+        if solved_world and why_easy and fundamental_entities:
+            grounding_cost = 3
+            speculative_risk = 3
     elif any(token in title_blob for token in ("compactification", "completion", "spectral", "functorial", "category")):
         grounding_cost = 3
         speculative_risk = 3

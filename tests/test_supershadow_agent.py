@@ -8,7 +8,9 @@ from orchestrator import config as app_config
 from orchestrator.db import Database
 from orchestrator.supershadow_agent import (
     SUPERSHADOW_GLOBAL_GOAL_ID,
+    SUPERSHADOW_SYSTEM,
     _build_grounded_fact_basis,
+    _build_supershadow_user_message,
     _normalize_supershadow_response,
     run_supershadow_global_lab,
 )
@@ -84,6 +86,38 @@ def test_build_grounded_fact_basis_excludes_non_collatz_campaigns(tmp_path: Path
     fact_keys = {fact["fact_key"] for fact in facts}
     assert f"live:{collatz_id}:packet:known_true:0" in fact_keys
     assert f"live:{other_id}:packet:known_true:0" not in fact_keys
+
+
+def test_build_supershadow_user_message_prioritizes_smallest_new_world(
+    tmp_path: Path,
+) -> None:
+    db = Database(str(tmp_path / "prompt.db"))
+    db.initialize()
+    db.ensure_supershadow_state_row(
+        SUPERSHADOW_GLOBAL_GOAL_ID,
+        goal_text="Invent the best Collatz universe.",
+    )
+
+    user = _build_supershadow_user_message(
+        db,
+        "Invent the best Collatz universe.",
+        [
+            {
+                "fact_key": "builtin:modular_descent_mod_8",
+                "label": "Mod 8 descent is grounded.",
+                "detail": "detail",
+                "kind": "modular",
+                "provenance": "builtin_seed",
+            }
+        ],
+        [{"cluster": "modular", "fact_keys": ["builtin:modular_descent_mod_8"]}],
+        [],
+        handoff_budget=1,
+    )
+
+    assert "Invent the smallest new mathematical world in which Collatz is almost automatic." in SUPERSHADOW_SYSTEM
+    assert "If needed, create the object first and justify it later." in SUPERSHADOW_SYSTEM
+    assert "Search across any branch of math" in SUPERSHADOW_SYSTEM
 
 
 def test_normalize_supershadow_response_filters_invalid_concepts_and_caps_handoffs() -> None:

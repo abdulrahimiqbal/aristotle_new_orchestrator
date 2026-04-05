@@ -99,6 +99,7 @@ The dashboard also includes a dedicated **Supershadow Lab** (`/supershadow`) for
 
 - **Zero live authority**: Supershadow cannot create targets, experiments, or direct Aristotle work.
 - **Solved-world-first search**: discovery runs now optimize for inventing mathematical universes in any branch of math where Collatz would already feel easy, then working backward toward the ordinary problem.
+- **Smallest-world doctrine**: the discovery prompt now asks for the smallest new mathematical world in which Collatz is almost automatic, even if the object or law must be invented first and justified later.
 - **Self-testing workflow**: Supershadow first hunts 1-3 candidate universes, then attacks only the best survivor itself before deciding whether it has signs of life.
 - **Compression over novelty**: concepts are judged by whether they make several grounded facts feel structural at once, not by how exotic they sound, even when the starting point is a very alien branch-level invention.
 - **Conceptual handoffs, not queue spam**: only the strongest surviving concept should emit a Shadow-facing handoff, and only after self-testing sharpens it.
