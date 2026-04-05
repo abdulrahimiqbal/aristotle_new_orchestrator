@@ -76,6 +76,46 @@ def _present_promotion(row: dict[str, Any]) -> dict[str, Any]:
     return preview
 
 
+def _promotion_triage_score(row: dict[str, Any]) -> tuple[int, int, int, str]:
+    preview = row.get("preview") if isinstance(row.get("preview"), dict) else {}
+    rubric_total = int(preview.get("rubric_total_0_15") or 0)
+    role = str(preview.get("proof_program_role") or "").strip().lower()
+    kind = str(preview.get("kind") or "").strip().lower()
+
+    if kind == "new_target" and rubric_total >= 13 and role in {"new_object", "bridge_lemma", "equivalence"}:
+        priority = 3
+    elif rubric_total >= 13 and role in {"new_object", "bridge_lemma", "equivalence", "kill_test"}:
+        priority = 3
+    elif rubric_total >= 10:
+        priority = 2
+    elif rubric_total >= 7:
+        priority = 1
+    else:
+        priority = 0
+
+    return (
+        priority,
+        rubric_total,
+        int(bool(preview.get("expected_signal"))),
+        str(row.get("created_at") or ""),
+    )
+
+
+def _promotion_triage_label(row: dict[str, Any]) -> str:
+    preview = row.get("preview") if isinstance(row.get("preview"), dict) else {}
+    rubric_total = int(preview.get("rubric_total_0_15") or 0)
+    role = str(preview.get("proof_program_role") or "").strip().lower()
+    action_label = str(preview.get("action_label") or "Review promotion")
+
+    if rubric_total >= 13 and role in {"new_object", "bridge_lemma", "equivalence", "kill_test"}:
+        return f"promote now: {action_label.lower()}"
+    if rubric_total >= 10:
+        return "merge or approve one"
+    if rubric_total >= 7:
+        return "park for one more look"
+    return "reject or merge"
+
+
 def _build_next_step(
     *,
     run_count: int,
@@ -87,8 +127,9 @@ def _build_next_step(
         return {
             "title": "Review the live promotion queue",
             "body": (
-                f"{pending_promotions} proposal(s) are waiting. Approve only the items "
-                "that deserve real targets or experiments."
+                f"{pending_promotions} proposal(s) are waiting. Start with the top 1-3, "
+                "merge near-duplicates, park vague restatements, and reject anything "
+                "that does not carry a concrete live test."
             ),
         }
     if run_count == 0:
@@ -142,10 +183,18 @@ def build_shadow_ui_context(
     for row in promotions:
         presented = dict(row)
         presented["preview"] = _present_promotion(presented)
+        presented["triage_label"] = _promotion_triage_label(presented)
         if str(row.get("status") or "").lower() == "pending":
             pending_promotions.append(presented)
         else:
             reviewed_promotions.append(presented)
+    pending_promotions = sorted(pending_promotions, key=_promotion_triage_score, reverse=True)
+    triage_counts = {
+        "promote_now": sum(1 for row in pending_promotions if str(row.get("triage_label") or "").startswith("promote now")),
+        "merge": sum(1 for row in pending_promotions if "merge" in str(row.get("triage_label") or "")),
+        "park": sum(1 for row in pending_promotions if "park" in str(row.get("triage_label") or "")),
+        "reject": sum(1 for row in pending_promotions if "reject" in str(row.get("triage_label") or "")),
+    }
     next_step = _build_next_step(
         run_count=len(runs),
         pending_promotions=len(pending_promotions),
@@ -166,5 +215,6 @@ def build_shadow_ui_context(
             "reviewed_promotions": len(reviewed_promotions),
             "hypothesis_count": len(ranked_hypotheses),
             "run_count": len(runs),
+            "triage_counts": triage_counts,
         },
     }

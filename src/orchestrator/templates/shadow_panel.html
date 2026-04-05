@@ -133,6 +133,21 @@
           </div>
         </div>
 
+        {% if shadow_metrics.triage_counts %}
+        <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Queue triage</p>
+          <div class="mt-2 flex flex-wrap gap-2 text-[11px] font-mono">
+            <span class="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-200 ring-1 ring-emerald-500/20">promote now {{ shadow_metrics.triage_counts.promote_now }}</span>
+            <span class="rounded-full bg-amber-500/10 px-2 py-1 text-amber-200 ring-1 ring-amber-500/20">merge {{ shadow_metrics.triage_counts.merge }}</span>
+            <span class="rounded-full bg-sky-500/10 px-2 py-1 text-sky-200 ring-1 ring-sky-500/20">park {{ shadow_metrics.triage_counts.park }}</span>
+            <span class="rounded-full bg-rose-500/10 px-2 py-1 text-rose-200 ring-1 ring-rose-500/20">reject {{ shadow_metrics.triage_counts.reject }}</span>
+          </div>
+          <p class="mt-2 text-xs leading-relaxed text-zinc-500">
+            Start with the highest-value promotion, merge near-duplicates, and park the vague restatements until they sharpen.
+          </p>
+        </div>
+        {% endif %}
+
         <div class="rounded-2xl border border-amber-500/25 bg-amber-950/15 p-4">
           <p class="text-[10px] font-semibold uppercase tracking-widest text-amber-300/90">Promotion rule</p>
           <p class="mt-2 text-sm leading-relaxed text-amber-100/90">
@@ -177,6 +192,9 @@
               {% endif %}
               {% if p.preview.rubric_total_0_15 %}
               <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-emerald-200/90 ring-1 ring-zinc-800/80">rubric {{ p.preview.rubric_total_0_15 }}/15</span>
+              {% endif %}
+              {% if p.triage_label %}
+              <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-sky-200/90 ring-1 ring-zinc-800/80">{{ p.triage_label }}</span>
               {% endif %}
               {% if p.preview.proof_program_role %}
               <span class="rounded-full bg-zinc-900/80 px-2 py-1 text-amber-200/90 ring-1 ring-zinc-800/80">{{ p.preview.proof_program_role }}</span>
