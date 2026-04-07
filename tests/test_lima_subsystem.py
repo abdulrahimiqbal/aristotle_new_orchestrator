@@ -249,7 +249,7 @@ def test_lima_run_persists_memory_without_live_main_queue(
     assert lima.list_fractures(problem["id"])
     obligations = lima.list_obligations(problem["id"])
     assert obligations
-    assert any(o["status"] == "checked" for o in obligations)
+    assert any(o["status"] == "verified_local" for o in obligations)
     assert lima.list_handoffs(problem["id"], status="pending")
 
     conn = sqlite3.connect(str(tmp_path / "main.db"))
@@ -298,6 +298,17 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         assert "Hold for obligations" in run_resp.text
 
         problem = app_mod.lima_db.get_problem("goldbach")
+        formal_obligations = [
+            o
+            for o in app_mod.lima_db.list_obligations(problem["id"])
+            if o["status"] == "queued_formal_review"
+        ]
+        assert formal_obligations
+        formal_resp = client.post(
+            f"/api/lima/obligation/{formal_obligations[0]['id']}/approve-formal"
+        )
+        assert formal_resp.status_code == 200
+        assert "No live Aristotle job was created" in formal_resp.text
         handoffs = app_mod.lima_db.list_handoffs(problem["id"], status="pending")
         assert handoffs
         hold_resp = client.post(f"/api/lima/handoff/{handoffs[0]['id']}/hold")

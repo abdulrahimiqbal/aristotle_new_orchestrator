@@ -18,7 +18,12 @@ from orchestrator.db import Database
 from orchestrator.lima_agent import lima_loop, run_lima
 from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_literature import refresh_literature
-from orchestrator.lima_obligations import run_queued_obligation_checks
+from orchestrator.lima_obligations import (
+    approve_formal_review,
+    queue_formal_review,
+    reject_formal_review,
+    run_queued_obligation_checks,
+)
 from orchestrator.lima_presenter import build_lima_ui_context
 from orchestrator.llm import decompose_prompt
 from orchestrator.manager import manager_loop
@@ -134,6 +139,10 @@ def _operator_runtime_context() -> dict:
         "lima_max_literature_results": int(app_config.LIMA_MAX_LITERATURE_RESULTS),
         "lima_auto_policy_updates": bool(app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES),
         "lima_literature_backends": app_config.LIMA_LITERATURE_BACKENDS,
+        "lima_literature_local_dir": app_config.LIMA_LITERATURE_LOCAL_DIR,
+        "lima_formal_backend": app_config.LIMA_FORMAL_BACKEND,
+        "lima_formal_auto_submit": bool(app_config.LIMA_FORMAL_AUTO_SUBMIT),
+        "lima_auto_local_obligation_checks": bool(app_config.LIMA_AUTO_LOCAL_OBLIGATION_CHECKS),
     }
 
 
@@ -1041,6 +1050,51 @@ async def lima_obligations_run_fragment(
     )
 
 
+@app.post("/api/lima/obligation/{obligation_id}/formal-review", response_class=HTMLResponse)
+async def lima_obligation_formal_review_fragment(
+    request: Request, obligation_id: str, _auth: OperatorWriteAuth
+):
+    result = queue_formal_review(lima_db, obligation_id=obligation_id)
+    row = lima_db.get_obligation(obligation_id)
+    problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    flash = {"ok": bool(result.get("ok")), "formal_review": result, "error": result.get("error")}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/obligation/{obligation_id}/approve-formal", response_class=HTMLResponse)
+async def lima_obligation_approve_formal_fragment(
+    request: Request, obligation_id: str, _auth: OperatorWriteAuth
+):
+    result = approve_formal_review(lima_db, obligation_id=obligation_id)
+    row = lima_db.get_obligation(obligation_id)
+    problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    flash = {"ok": bool(result.get("ok")), "formal_review": result, "error": result.get("error")}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/obligation/{obligation_id}/reject-formal", response_class=HTMLResponse)
+async def lima_obligation_reject_formal_fragment(
+    request: Request, obligation_id: str, _auth: OperatorWriteAuth
+):
+    result = reject_formal_review(lima_db, obligation_id=obligation_id)
+    row = lima_db.get_obligation(obligation_id)
+    problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    flash = {"ok": bool(result.get("ok")), "formal_review": result, "error": result.get("error")}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
 @app.post("/api/lima/handoff/{handoff_id}/approve", response_class=HTMLResponse)
 async def lima_handoff_approve(
     request: Request, handoff_id: str, _auth: OperatorWriteAuth
@@ -1059,6 +1113,40 @@ async def lima_handoff_approve(
         "error": None if ok else msg,
         "obligation_checks": obligation_result,
     }
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/handoff/{handoff_id}/approve-formal", response_class=HTMLResponse)
+async def lima_handoff_approve_formal(
+    request: Request, handoff_id: str, _auth: OperatorWriteAuth
+):
+    row = lima_db.get_handoff(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown Lima handoff", status_code=404)
+    ok, msg = lima_db.set_handoff_status(handoff_id, "approved_formal_review")
+    flash = {"ok": ok, "handoff": "approved_formal_review", "error": None if ok else msg}
+    problem_id = str(row.get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/handoff/{handoff_id}/approve-shadow", response_class=HTMLResponse)
+async def lima_handoff_approve_shadow(
+    request: Request, handoff_id: str, _auth: OperatorWriteAuth
+):
+    row = lima_db.get_handoff(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown Lima handoff", status_code=404)
+    ok, msg = lima_db.set_handoff_status(handoff_id, "approved_shadow_incubation")
+    flash = {"ok": ok, "handoff": "approved_shadow_incubation", "error": None if ok else msg}
+    problem_id = str(row.get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
     return templates.TemplateResponse(
         request,
         "lima_panel.html",

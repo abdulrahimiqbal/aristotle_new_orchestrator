@@ -8,6 +8,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 LimaMode = Literal["wild", "stress", "forge", "balanced"]
+LimaObligationStatus = Literal[
+    "queued",
+    "checked",
+    "falsified",
+    "queued_local",
+    "running_local",
+    "verified_local",
+    "refuted_local",
+    "queued_formal_review",
+    "approved_for_formal",
+    "submitted_formal",
+    "verified_formal",
+    "refuted_formal",
+    "inconclusive",
+]
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
@@ -108,8 +123,13 @@ class LimaObligationSpec(BaseModel):
     title: str = Field(default="")
     statement_md: str = Field(default="")
     lean_goal: str = Field(default="")
-    status: str = Field(default="queued")
+    status: str = Field(default="queued_local")
     priority: int = Field(default=3, ge=0, le=5)
+    why_exists_md: str = Field(default="")
+    prove_or_kill_md: str = Field(default="")
+    canonical_key: str = Field(default="")
+    review_status: str = Field(default="not_reviewed")
+    formal_backend: str = Field(default="")
 
     @field_validator("obligation_kind")
     @classmethod
@@ -122,9 +142,37 @@ class LimaObligationSpec(BaseModel):
             "consistency",
             "counterexample_search",
             "lean_goal",
+            "literature_crosscheck",
         }
         v = slugify(value, fallback="bridge_lemma")
         return v if v in allowed else "bridge_lemma"
+
+    @field_validator("status")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
+        allowed = {
+            "queued",
+            "checked",
+            "falsified",
+            "queued_local",
+            "running_local",
+            "verified_local",
+            "refuted_local",
+            "queued_formal_review",
+            "approved_for_formal",
+            "submitted_formal",
+            "verified_formal",
+            "refuted_formal",
+            "inconclusive",
+        }
+        v = slugify(value, fallback="queued_local")
+        if v == "queued":
+            return "queued_local"
+        if v == "checked":
+            return "verified_local"
+        if v == "falsified":
+            return "refuted_local"
+        return v if v in allowed else "queued_local"
 
 
 class LimaUniverseSpec(BaseModel):

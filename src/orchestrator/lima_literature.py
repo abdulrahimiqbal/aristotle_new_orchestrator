@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 import re
 from typing import Any, Protocol
 import xml.etree.ElementTree as ET
@@ -112,6 +114,36 @@ class LocalManualLiteratureBackend:
             ),
         ]
         return seeds[: max(0, limit)]
+
+
+class LocalFileLiteratureBackend:
+    source_name = "local_file"
+
+    def __init__(self, root: str | None = None) -> None:
+        self.root = Path(root or app_config.LIMA_LITERATURE_LOCAL_DIR)
+
+    def search(
+        self, *, problem: dict[str, Any], queries: list[str], limit: int
+    ) -> list[LiteratureRecord]:
+        if not self.root or not self.root.exists() or not self.root.is_dir():
+            return []
+        query_blob = " ".join([str(problem.get("slug") or ""), str(problem.get("title") or ""), *queries]).lower()
+        records: list[LiteratureRecord] = []
+        for path in sorted(self.root.rglob("*")):
+            if len(records) >= limit:
+                break
+            if path.suffix.lower() not in {".json", ".md", ".markdown", ".txt"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")[:20000]
+            except OSError:
+                continue
+            if query_blob and not _rough_match(query_blob, text.lower() + " " + path.name.lower()):
+                continue
+            record = _record_from_local_file(path, text)
+            if record:
+                records.append(record)
+        return records[:limit]
 
 
 class CompositeLiteratureBackend:
@@ -296,17 +328,22 @@ def make_literature_backend(selection: str | None = None) -> LiteratureBackend:
         raw = app_config.LIMA_LITERATURE_BACKENDS.strip().lower() or "local"
     names = [name.strip() for name in raw.split(",") if name.strip()]
     if "all" in names:
-        names = ["local", "arxiv", "semantic_scholar", "crossref"]
+        names = ["local", "local_file", "arxiv", "semantic_scholar", "crossref"]
     backends: list[LiteratureBackend] = []
     for name in names:
         if name == "local":
             backends.append(LocalManualLiteratureBackend())
         elif name == "arxiv":
-            backends.append(ArxivLiteratureBackend())
+            if app_config.LIMA_ENABLE_ARXIV_BACKEND:
+                backends.append(ArxivLiteratureBackend())
         elif name in {"semantic", "semantic_scholar", "semanticscholar"}:
-            backends.append(SemanticScholarLiteratureBackend())
+            if app_config.LIMA_ENABLE_SEMANTIC_SCHOLAR_BACKEND:
+                backends.append(SemanticScholarLiteratureBackend())
         elif name == "crossref":
-            backends.append(CrossrefLiteratureBackend())
+            if app_config.LIMA_ENABLE_CROSSREF_BACKEND:
+                backends.append(CrossrefLiteratureBackend())
+        elif name in {"local_file", "file", "files"}:
+            backends.append(LocalFileLiteratureBackend())
     return CompositeLiteratureBackend(backends or [LocalManualLiteratureBackend()])
 
 
@@ -317,6 +354,10 @@ def build_literature_queries(
 ) -> list[str]:
     queries: list[str] = []
     title = str(problem.get("title") or problem.get("slug") or "")
+    seed = _load_seed(problem)
+    routing = seed.get("routing_policy") if isinstance(seed.get("routing_policy"), dict) else {}
+    for keyword in routing.get("retrieval_keywords") or seed.get("retrieval_keywords") or []:
+        queries.append(str(keyword))
     if title:
         queries.append(title)
     tensions = pressure_map.get("tensions") if isinstance(pressure_map, dict) else []
@@ -400,6 +441,36 @@ def infer_literature_relation(universe: LimaUniverseSpec, source: dict[str, Any]
     return "terminology"
 
 
+def score_literature_novelty(universe: LimaUniverseSpec, source: dict[str, Any]) -> dict[str, Any]:
+    blob = " ".join(
+        [
+            universe.title,
+            universe.family_key,
+            universe.branch_of_math,
+            universe.solved_world,
+        ]
+    ).lower()
+    source_blob = " ".join(
+        [
+            str(source.get("title") or ""),
+            str(source.get("abstract_md") or ""),
+            str(source.get("venue") or ""),
+        ]
+    ).lower()
+    overlap_terms = [
+        term
+        for term in {"cycle", "quotient", "residue", "parity", "completion", "3x+1", "collatz"}
+        if term in blob and term in source_blob
+    ]
+    score = min(1.0, 0.25 + 0.15 * len(overlap_terms))
+    relation = "prior_art" if score >= 0.55 or "survey" in source_blob else infer_literature_relation(universe, source)
+    return {
+        "relation_kind": relation,
+        "prior_art_score": score if relation == "prior_art" else min(score, 0.5),
+        "overlap_terms": overlap_terms,
+    }
+
+
 def _user_agent() -> str:
     base = "aristotle-orchestrator-lima/0.1"
     if app_config.LIMA_CROSSREF_MAILTO:
@@ -426,6 +497,86 @@ def _method_extract(title: str, body: Any, source: str) -> dict[str, Any]:
         "formal_hint": "Use as literature grounding or prior-art pressure, not as a direct formal obligation.",
         "tags": [source, "literature"],
         "relevance_score": 0.5,
+    }
+
+
+def _load_seed(problem: dict[str, Any]) -> dict[str, Any]:
+    raw = problem.get("seed_packet_json")
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _rough_match(query_blob: str, haystack: str) -> bool:
+    terms = [term for term in re.split(r"[^a-z0-9+]+", query_blob.lower()) if len(term) >= 4]
+    if not terms:
+        return True
+    return any(term in haystack for term in terms[:20])
+
+
+def _record_from_local_file(path: Path, text: str) -> LiteratureRecord | None:
+    if path.suffix.lower() == ".json":
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        extracts = payload.get("extracts") if isinstance(payload.get("extracts"), list) else []
+        return LiteratureRecord(
+            source_type="local_file",
+            title=str(payload.get("title") or path.stem),
+            authors=[str(a) for a in payload.get("authors") or []],
+            year=_int_or_none(payload.get("year")),
+            venue=str(payload.get("venue") or "local notes"),
+            doi=str(payload.get("doi") or ""),
+            arxiv_id=str(payload.get("arxiv_id") or ""),
+            url=str(payload.get("url") or path.as_posix()),
+            abstract_md=str(payload.get("abstract_md") or payload.get("abstract") or ""),
+            bibtex={"path": path.as_posix(), "local_file": True},
+            extracts=extracts or [_extract_from_text(path.stem, str(payload.get("abstract_md") or ""), "local_file")],
+        )
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    title = lines[0].lstrip("# ").strip() if lines else path.stem
+    body = "\n".join(lines[1:])[:8000] if len(lines) > 1 else text[:8000]
+    return LiteratureRecord(
+        source_type="local_file",
+        title=title or path.stem,
+        venue="local notes",
+        url=path.as_posix(),
+        abstract_md=body,
+        bibtex={"path": path.as_posix(), "local_file": True},
+        extracts=[_extract_from_text(title or path.stem, body, "local_file")],
+    )
+
+
+def _extract_from_text(title: str, body: str, source: str) -> dict[str, Any]:
+    lowered = body.lower()
+    if "counterexample" in lowered or "cannot" in lowered:
+        kind = "negative_result"
+    elif "theorem" in lowered:
+        kind = "theorem"
+    elif "lemma" in lowered:
+        kind = "lemma"
+    elif "terminology" in lowered or "definition" in lowered:
+        kind = "terminology"
+    elif "open" in lowered:
+        kind = "open_problem"
+    else:
+        kind = "method"
+    return {
+        "extract_kind": kind,
+        "title": f"{source}: {title}"[:500],
+        "body_md": body[:4000],
+        "formal_hint": "Use this local note as grounding, prior-art pressure, or terminology.",
+        "tags": [source, kind],
+        "relevance_score": 0.55,
     }
 
 

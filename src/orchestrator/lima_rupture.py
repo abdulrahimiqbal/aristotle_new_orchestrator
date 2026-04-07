@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from fractions import Fraction
 from typing import Any
 
@@ -272,11 +273,21 @@ def _symbolic_attack(universe: LimaUniverseSpec) -> dict[str, Any]:
     n = _sympy.symbols("n", integer=True, positive=True)
     odd_step = _sympy.simplify(3 * n + 1)
     two_step = _sympy.simplify(odd_step / 2)
+    normal_forms = {
+        "odd_step": str(odd_step),
+        "odd_then_even": str(two_step),
+        "family_key": universe.family_key,
+    }
     return {
         "attack": "boundary_regime",
         "result": "survived",
         "sympy_used": True,
-        "normalized_odd_then_even": str(two_step),
+        "normalized_odd_then_even": normal_forms["odd_then_even"],
+        "artifact": {
+            "kind": "sympy_normal_forms",
+            "normal_forms": normal_forms,
+            "canonical_hash": hashlib.sha256(repr(sorted(normal_forms.items())).encode("utf-8")).hexdigest(),
+        },
         "confidence": 0.42,
     }
 

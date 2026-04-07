@@ -186,6 +186,13 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 |----------|-------------|
 | `DATABASE_PATH` | SQLite database file (default: `orchestrator.db` in the CWD) |
 | `LIMA_DATABASE_PATH` | Separate Lima SQLite database file (default: `lima.db` next to `DATABASE_PATH`; Docker/Railway: `/data/lima.db`) |
+| `LIMA_ENABLED` | Run Lima's background loop (`false` by default; manual runs still work) |
+| `LIMA_AUTO_LOCAL_OBLIGATION_CHECKS` | Run bounded local Lima checks automatically after a Lima pass (`true` by default) |
+| `LIMA_FORMAL_BACKEND` | Formal review adapter (`local_stub` by default; records review packets without live submission) |
+| `LIMA_FORMAL_AUTO_SUBMIT` | Reserved approval gate for future formal backends; default `false` keeps zero-live-authority |
+| `LIMA_LITERATURE_BACKENDS` | Comma-separated literature backends: `local`, `local_file`, `arxiv`, `semantic_scholar`, `crossref`; network backends require their enable flags |
+| `LIMA_LITERATURE_LOCAL_DIR` | Optional folder of local `.md`, `.txt`, or `.json` literature notes for the `local_file` backend |
+| `LIMA_ENABLE_ARXIV_BACKEND` / `LIMA_ENABLE_SEMANTIC_SCHOLAR_BACKEND` / `LIMA_ENABLE_CROSSREF_BACKEND` | Enable optional network literature backends; all default off |
 | `WORKSPACE_ROOT` | Parent directory for per-campaign workspaces (default: `./workspace_root` locally; Docker/Railway: `/data/workspaces`) |
 | `WORKSPACE_LEGACY_DIR` | Optional legacy shared workspace path to migrate from (default: falls back to `WORKSPACE_DIR` if set) |
 | `WORKSPACE_DIR` | **Legacy.** Used only as a default for `WORKSPACE_LEGACY_DIR` when the latter is unset |
@@ -341,6 +348,29 @@ The container listens on **`PORT`** (Railway sets this automatically). SQLite an
 | `LIMA_DATABASE_PATH` | `/data/lima.db` (default in Docker image) |
 | `WORKSPACE_ROOT` | `/data/workspaces` (default in Docker image) |
 | `WORKSPACE_LEGACY_DIR` | `/data/workspace` if upgrading from the old single-workspace layout |
+
+## Lima Lab
+
+Lima is the falsification-first upstream research engine. It is earlier and safer than Supershadow: Lima invents candidate mathematical universes from pressure, rupture attacks, literature signals, and family memory; Supershadow turns reviewed conceptual leaps into Shadow-facing incubation. Lima uses its own SQLite database and has zero live authority by default.
+
+The Lima loop is:
+
+1. Generate problem-aware universes, objects, claims, and obligations.
+2. Run deterministic rupture checks: vacuity, bridgeability, prior art, residue/counterexample scans, symbolic normalization where available, and graph consistency where available.
+3. Persist fractures, artifacts, literature links, policy revisions, and handoff packets.
+4. Run bounded local obligations (`finite_check`, `counterexample_search`, and cheap consistency checks) inside Lima.
+5. Queue formal obligations (`lean_goal`, `bridge_lemma`, `equivalence`, and novelty crosschecks) for human formal review.
+6. Only after review can a packet be marked approved for formal work or Shadow incubation. The default `local_stub` backend records a packet and never submits live Aristotle jobs.
+
+Literature backends are pluggable. `local` is deterministic and always available. `local_file` reads notes from `LIMA_LITERATURE_LOCAL_DIR`. arXiv, Semantic Scholar, and Crossref adapters are present but disabled unless explicitly enabled so runtime does not require internet access.
+
+Run locally:
+
+```bash
+DATABASE_PATH=./orchestrator.db LIMA_DATABASE_PATH=./lima.db ./.venv/bin/python -m uvicorn orchestrator.app:app --reload
+```
+
+Then open `/lima`, choose a problem/mode, and run Lima manually. Set `LIMA_ENABLED=1` only when you want the background Lima loop.
 
 ### Aristotle CLI and Lean workspace in the container
 

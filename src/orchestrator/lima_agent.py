@@ -16,7 +16,11 @@ from typing import Any
 from orchestrator import config as app_config
 from orchestrator.db import Database
 from orchestrator.lima_db import LimaDatabase
-from orchestrator.lima_literature import infer_literature_relation, refresh_literature
+from orchestrator.lima_literature import (
+    infer_literature_relation,
+    refresh_literature,
+    score_literature_novelty,
+)
 from orchestrator.lima_meta import analyze_and_update_policy
 from orchestrator.lima_models import (
     LimaClaimSpec,
@@ -29,7 +33,10 @@ from orchestrator.lima_models import (
     safe_json_loads,
     slugify,
 )
-from orchestrator.lima_obligations import run_queued_obligation_checks
+from orchestrator.lima_obligations import (
+    compile_obligations_for_universe,
+    run_queued_obligation_checks,
+)
 from orchestrator.lima_rupture import rupture_universes
 from orchestrator.llm import invoke_llm
 
@@ -185,13 +192,16 @@ def _mode(value: str | None) -> LimaMode:
 
 def _build_reference_points(main_db: Database, problem: dict[str, Any]) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
-    problem_blob = " ".join(
-        [
-            str(problem.get("slug") or ""),
-            str(problem.get("title") or ""),
-            str(problem.get("statement_md") or ""),
-        ]
-    ).lower()
+    seed = safe_json_loads(problem.get("seed_packet_json"), {})
+    routing = seed.get("routing_policy") if isinstance(seed.get("routing_policy"), dict) else {}
+    slug = slugify(problem.get("slug"), fallback="problem")
+    retrieval_terms = [
+        slug.replace("_", " "),
+        str(problem.get("title") or ""),
+        *[str(t) for t in routing.get("retrieval_keywords") or []],
+        *[str(t) for t in routing.get("campaign_tags") or []],
+    ]
+    retrieval_terms = [t.lower() for t in retrieval_terms if len(t.strip()) >= 4]
     try:
         campaigns = main_db.get_all_campaigns()
     except Exception:
@@ -199,7 +209,8 @@ def _build_reference_points(main_db: Database, problem: dict[str, Any]) -> list[
         campaigns = []
     for campaign in campaigns[:24]:
         prompt = str(getattr(campaign, "prompt", "") or "")
-        if "collatz" not in problem_blob and "collatz" not in prompt.lower():
+        campaign_blob = f"{prompt} {getattr(campaign, 'id', '')}".lower()
+        if retrieval_terms and not any(term in campaign_blob for term in retrieval_terms):
             continue
         refs.append(
             {
@@ -216,7 +227,8 @@ def _build_reference_points(main_db: Database, problem: dict[str, Any]) -> list[
             }
         )
     try:
-        shadow_rows = main_db.list_shadow_global_hypotheses("global_collatz", limit=12)
+        shadow_goal = str(routing.get("shadow_goal_id") or f"global_{slug}")
+        shadow_rows = main_db.list_shadow_global_hypotheses(shadow_goal, limit=12)
     except Exception:
         shadow_rows = []
     for row in shadow_rows:
@@ -230,8 +242,11 @@ def _build_reference_points(main_db: Database, problem: dict[str, Any]) -> list[
             }
         )
     try:
+        supershadow_goal = str(
+            routing.get("supershadow_goal_id") or f"global_{slug}_supershadow"
+        )
         supershadow_rows = main_db.list_supershadow_concepts(
-            "global_collatz_supershadow", limit=12
+            supershadow_goal, limit=12
         )
     except Exception:
         supershadow_rows = []
@@ -678,6 +693,17 @@ async def run_lima(
             problem_id, limit=int(app_config.LIMA_MAX_LITERATURE_RESULTS)
         )
         rupture_reports = rupture_universes(universes, literature_context=literature_context)
+        rupture_by_title = {str(r.get("universe_title") or ""): r for r in rupture_reports}
+        universes = [
+            universe.model_copy(
+                update={
+                    "formalization_targets": compile_obligations_for_universe(
+                        universe, rupture_by_title.get(universe.title)
+                    )
+                }
+            )
+            for universe in universes
+        ]
         policy_snapshot = {
             "mode": selected_mode,
             "zero_live_authority": True,
@@ -740,17 +766,20 @@ async def run_lima(
         sources = lima_db.list_literature_sources(problem_id, limit=6)
         for row, universe in zip(created_universes, universes):
             for source in sources[:2]:
+                lit_score = score_literature_novelty(universe, source)
                 lima_db.link_universe_literature(
                     universe_id=str(row["id"]),
                     source_id=str(source["id"]),
-                    relation_kind=infer_literature_relation(universe, source),
-                    note="Linked by Lima local literature routing.",
+                    relation_kind=str(lit_score.get("relation_kind") or infer_literature_relation(universe, source)),
+                    note=f"Linked by Lima literature routing. prior_art_score={lit_score.get('prior_art_score')}",
                 )
-        obligation_result = run_queued_obligation_checks(
-            lima_db,
-            problem_id=problem_id,
-            limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
-        )
+        obligation_result = None
+        if app_config.LIMA_AUTO_LOCAL_OBLIGATION_CHECKS:
+            obligation_result = run_queued_obligation_checks(
+                lima_db,
+                problem_id=problem_id,
+                limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
+            )
         meta_result = None
         if app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES:
             meta_result = analyze_and_update_policy(

@@ -144,14 +144,40 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
 
     fractures = [dict(f) for f in snapshot.get("fractures") or []]
     obligations = [dict(o) for o in snapshot.get("obligations") or []]
+    for obligation in obligations:
+        obligation["lineage"] = _load_json(obligation.get("lineage_json"), {})
+        obligation["formal_payload"] = _load_json(obligation.get("formal_payload_json"), {})
+        obligation["aristotle_ref"] = _load_json(obligation.get("aristotle_ref_json"), {})
     literature_extracts = [dict(e) for e in snapshot.get("literature_extracts") or []]
+    literature_links = [dict(e) for e in snapshot.get("literature_links") or []]
+    formal_reviews = [dict(r) for r in snapshot.get("formal_reviews") or []]
+    artifacts = [dict(a) for a in snapshot.get("artifacts") or []]
+    artifact_counts: dict[str, int] = {}
+    for artifact in artifacts:
+        kind = str(artifact.get("artifact_kind") or "artifact")
+        artifact_counts[kind] = artifact_counts.get(kind, 0) + 1
 
     promising = [u for u in universes if str(u.get("universe_status")) in {"promising", "formalized", "handed_off"}]
     latest_summary = ""
     if latest_run:
         latest_summary = str(latest_run.get("run_summary_md") or "")
     queued_obligations = [
-        o for o in obligations if str(o.get("status") or "") == "queued"
+        o for o in obligations if str(o.get("status") or "") in {"queued", "queued_local", "queued_formal_review"}
+    ]
+    local_obligations = [
+        o for o in obligations if str(o.get("status") or "") in {"queued", "queued_local", "running_local", "verified_local", "refuted_local"}
+    ]
+    formal_obligations = [
+        o
+        for o in obligations
+        if str(o.get("status") or "") in {
+            "queued_formal_review",
+            "approved_for_formal",
+            "submitted_formal",
+            "verified_formal",
+            "refuted_formal",
+            "inconclusive",
+        }
     ]
     decision_state = _decision_state(
         latest_run=latest_run,
@@ -181,8 +207,14 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_fractures": fractures,
         "lima_obligations": obligations,
         "lima_queued_obligations": queued_obligations,
+        "lima_local_obligations": local_obligations,
+        "lima_formal_obligations": formal_obligations,
         "lima_literature_sources": snapshot.get("literature_sources") or [],
         "lima_literature_extracts": literature_extracts,
+        "lima_literature_links": literature_links,
+        "lima_formal_reviews": formal_reviews,
+        "lima_artifacts": artifacts,
+        "lima_artifact_counts": artifact_counts,
         "lima_pending_handoffs": pending_handoffs,
         "lima_reviewed_handoffs": reviewed_handoffs,
         "lima_policy_revisions": snapshot.get("policy_revisions") or [],
@@ -218,7 +250,12 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
             "universe_count": len(universes),
             "fracture_count": len(fractures),
             "queued_obligations": len(queued_obligations),
+            "local_obligations": len(local_obligations),
+            "formal_obligations": len(formal_obligations),
             "pending_handoffs": len(pending_handoffs),
+            "reviewed_handoffs": len(reviewed_handoffs),
+            "formal_reviews": len(formal_reviews),
+            "artifacts": len(artifacts),
             "literature_sources": len(snapshot.get("literature_sources") or []),
         },
     }

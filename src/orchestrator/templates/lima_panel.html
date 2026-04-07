@@ -77,6 +77,10 @@
             {{ lima_flash.obligation_checks.skipped|length }} left for non-local review.
           </p>
           {% endif %}
+        {% elif lima_flash.get('handoff') == 'approved_formal_review' %}
+          Lima handoff approved for formal review. No live Aristotle job was created.
+        {% elif lima_flash.get('handoff') == 'approved_shadow_incubation' %}
+          Lima handoff approved for Shadow incubation. It remains lineage-preserving review state only.
         {% elif lima_flash.get('handoff') == 'held' %}
           Lima handoff held for obligation review. Inspect the queued checks before approving or rejecting it.
         {% elif lima_flash.get('handoff') == 'rejected' %}
@@ -87,6 +91,9 @@
           Lima checked <span class="font-semibold">{{ lima_flash.obligation_checks.checked|length }}</span> local obligation(s),
           falsified <span class="font-semibold">{{ lima_flash.obligation_checks.falsified|length }}</span>, and left
           <span class="font-semibold">{{ lima_flash.obligation_checks.skipped|length }}</span> for non-local review.
+        {% elif lima_flash.get('formal_review') %}
+          Formal review updated for obligation <span class="font-mono">{{ lima_flash.formal_review.obligation_id }}</span>.
+          No live Aristotle job was created.
         {% elif lima_flash.get('problem') %}
           Problem {{ lima_flash.problem }}: <span class="font-semibold">{{ lima_flash.problem_title }}</span>.
         {% else %}
@@ -153,8 +160,8 @@
         <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.fracture_count }}</p>
       </div>
       <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
-        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Obligations</p>
-        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.queued_obligations }}</p>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Local / formal</p>
+        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.local_obligations }} / {{ lima_metrics.formal_obligations }}</p>
       </div>
       <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
         <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Handoffs</p>
@@ -237,6 +244,12 @@
             <form hx-post="/api/lima/handoff/{{ handoff.id }}/approve" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
               <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-70">Approve reviewed</button>
             </form>
+            <form hx-post="/api/lima/handoff/{{ handoff.id }}/approve-formal" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-sky-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-70">Formal review</button>
+            </form>
+            <form hx-post="/api/lima/handoff/{{ handoff.id }}/approve-shadow" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Shadow incubation</button>
+            </form>
             <form hx-post="/api/lima/handoff/{{ handoff.id }}/reject" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
               <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Reject</button>
             </form>
@@ -247,6 +260,22 @@
       <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No handoffs need review right now.</p>
       {% endfor %}
     </div>
+    {% if lima_reviewed_handoffs %}
+    <details class="mt-4 rounded-2xl border border-zinc-800/80 bg-zinc-950/30 p-4">
+      <summary class="cursor-pointer select-none text-sm font-medium text-zinc-300">Reviewed handoffs ({{ lima_reviewed_handoffs|length }})</summary>
+      <div class="mt-3 space-y-2">
+        {% for handoff in lima_reviewed_handoffs %}
+        <div class="rounded-xl border border-zinc-800/80 bg-black/20 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ handoff.status }}</span>
+            <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-200 ring-1 ring-emerald-500/30">{{ handoff.preview.destination_kind }}</span>
+          </div>
+          <p class="mt-2 text-sm text-zinc-200">{{ handoff.preview.title }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
   </section>
 
   <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
@@ -329,6 +358,31 @@
           {% if obligation.result_summary_md %}
           <p class="mt-2 rounded-lg border border-sky-500/15 bg-sky-950/10 p-2 text-xs leading-relaxed text-sky-100/80">{{ obligation.result_summary_md }}</p>
           {% endif %}
+          {% if obligation.why_exists_md %}
+          <p class="mt-2 text-xs leading-relaxed text-zinc-500"><span class="text-zinc-400">Why:</span> {{ obligation.why_exists_md }}</p>
+          {% endif %}
+          {% if obligation.prove_or_kill_md %}
+          <p class="mt-1 text-xs leading-relaxed text-zinc-500"><span class="text-zinc-400">Prove or kill:</span> {{ obligation.prove_or_kill_md }}</p>
+          {% endif %}
+          {% if obligation.status in ['queued_formal_review', 'inconclusive'] or obligation.obligation_kind in ['lean_goal', 'bridge_lemma', 'equivalence', 'literature_crosscheck'] %}
+          <div class="mt-3 flex flex-wrap gap-2">
+            <form hx-post="/api/lima/obligation/{{ obligation.id }}/formal-review" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Queue formal review</button>
+            </form>
+            <form hx-post="/api/lima/obligation/{{ obligation.id }}/approve-formal" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="rounded-lg bg-emerald-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-70">Approve formal stub</button>
+            </form>
+            <form hx-post="/api/lima/obligation/{{ obligation.id }}/reject-formal" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="rounded-lg bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-400 ring-1 ring-zinc-700/70 hover:bg-zinc-800 disabled:opacity-70">Reject formal</button>
+            </form>
+          </div>
+          {% endif %}
+          {% if obligation.lineage %}
+          <details class="mt-3 text-xs">
+            <summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400">Lineage</summary>
+            <pre class="custom-scroll mt-2 max-h-40 overflow-y-auto overflow-x-auto rounded-lg border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-500">{{ obligation.lineage }}</pre>
+          </details>
+          {% endif %}
         </div>
         {% else %}
         <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No obligations exist yet.</p>
@@ -371,9 +425,46 @@
         <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No literature sources yet.</p>
         {% endfor %}
       </div>
+      {% if lima_literature_links %}
+      <details class="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+        <summary class="cursor-pointer select-none text-sm font-medium text-zinc-300">Universe literature links</summary>
+        <div class="mt-3 space-y-2">
+          {% for link in lima_literature_links[:8] %}
+          <div class="rounded-lg border {% if link.relation_kind == 'prior_art' %}border-amber-500/30 bg-amber-950/10{% else %}border-zinc-800/80 bg-black/20{% endif %} p-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ link.relation_kind }}</span>
+              <span class="text-xs text-zinc-200">{{ link.source_title }}</span>
+            </div>
+            <p class="mt-1 text-[11px] text-zinc-500">{{ link.universe_title }}</p>
+            {% if link.note %}
+            <p class="mt-1 text-[11px] leading-relaxed text-zinc-500">{{ link.note }}</p>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
     </div>
 
     <div class="space-y-4">
+      <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5" open>
+        <summary class="cursor-pointer select-none font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Formal review queue</summary>
+        <div class="mt-4 space-y-3">
+          {% for review in lima_formal_reviews %}
+          <div class="rounded-xl border border-sky-500/20 bg-zinc-950/40 p-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] text-sky-200 ring-1 ring-sky-500/30">{{ review.status }}</span>
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] text-zinc-400 ring-1 ring-zinc-700/70">{{ review.backend_kind }}</span>
+            </div>
+            <p class="mt-2 text-sm text-zinc-200">{{ review.obligation_title }}</p>
+            <p class="mt-1 text-[11px] text-zinc-500">decision {{ review.review_decision }} / {{ review.created_at }}</p>
+          </div>
+          {% else %}
+          <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No formal review packets yet.</p>
+          {% endfor %}
+        </div>
+      </details>
+
       <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
         <summary class="cursor-pointer select-none font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Family leaderboard</summary>
         <div class="mt-4 space-y-3">
@@ -451,6 +542,12 @@
           <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">universes/run: {{ operator.lima_max_universes_per_run }}</span>
           <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">obligations/run: {{ operator.lima_max_obligations_per_run }}</span>
           <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">literature: {{ operator.lima_literature_backends }}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">formal: {{ operator.lima_formal_backend }} / auto-submit {% if operator.lima_formal_auto_submit %}on{% else %}off{% endif %}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">local checks: {% if operator.lima_auto_local_obligation_checks %}auto{% else %}manual{% endif %}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">artifacts: {{ lima_metrics.artifacts }}</span>
+          {% for kind, count in lima_artifact_counts.items() %}
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">{{ kind }}: {{ count }}</span>
+          {% endfor %}
         </div>
       </details>
 

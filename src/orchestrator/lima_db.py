@@ -24,6 +24,19 @@ def _json(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False)
 
 
+def _canonical_hash(parts: list[Any]) -> str:
+    return hashlib.sha256(_json(parts).encode("utf-8")).hexdigest()
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    if column not in _column_names(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 class LimaDatabase:
     """Separate SQLite persistence for Lima.
 
@@ -56,6 +69,7 @@ class LimaDatabase:
                     status TEXT NOT NULL DEFAULT 'active',
                     default_goal_text TEXT NOT NULL DEFAULT '',
                     seed_packet_json TEXT NOT NULL DEFAULT '{}',
+                    routing_policy_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -190,8 +204,15 @@ class LimaDatabase:
                     title TEXT NOT NULL DEFAULT '',
                     statement_md TEXT NOT NULL DEFAULT '',
                     lean_goal TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'queued',
+                    status TEXT NOT NULL DEFAULT 'queued_local',
                     priority INTEGER NOT NULL DEFAULT 3,
+                    why_exists_md TEXT NOT NULL DEFAULT '',
+                    prove_or_kill_md TEXT NOT NULL DEFAULT '',
+                    lineage_json TEXT NOT NULL DEFAULT '{}',
+                    canonical_hash TEXT NOT NULL DEFAULT '',
+                    review_status TEXT NOT NULL DEFAULT 'not_reviewed',
+                    formal_backend TEXT NOT NULL DEFAULT '',
+                    formal_payload_json TEXT NOT NULL DEFAULT '{}',
                     aristotle_ref_json TEXT NOT NULL DEFAULT '{}',
                     result_summary_md TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -202,6 +223,24 @@ class LimaDatabase:
                 CREATE INDEX IF NOT EXISTS idx_lima_obligation_claim ON lima_obligation(claim_id);
                 CREATE INDEX IF NOT EXISTS idx_lima_obligation_status ON lima_obligation(status);
                 CREATE INDEX IF NOT EXISTS idx_lima_obligation_created ON lima_obligation(created_at);
+                CREATE TABLE IF NOT EXISTS lima_formal_review_queue (
+                    id TEXT PRIMARY KEY,
+                    problem_id TEXT NOT NULL,
+                    obligation_id TEXT NOT NULL,
+                    universe_id TEXT,
+                    claim_id TEXT,
+                    backend_kind TEXT NOT NULL DEFAULT 'local_stub',
+                    status TEXT NOT NULL DEFAULT 'queued_formal_review',
+                    review_decision TEXT NOT NULL DEFAULT 'pending',
+                    packet_json TEXT NOT NULL DEFAULT '{}',
+                    backend_result_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_lima_formal_problem ON lima_formal_review_queue(problem_id);
+                CREATE INDEX IF NOT EXISTS idx_lima_formal_obligation ON lima_formal_review_queue(obligation_id);
+                CREATE INDEX IF NOT EXISTS idx_lima_formal_status ON lima_formal_review_queue(status);
 
                 CREATE TABLE IF NOT EXISTS lima_rupture_run (
                     id TEXT PRIMARY KEY,
@@ -356,10 +395,24 @@ class LimaDatabase:
                 CREATE INDEX IF NOT EXISTS idx_lima_artifact_hash ON lima_artifact(content_hash);
                 """
             )
+            self._migrate_schema(conn)
             conn.commit()
         finally:
             conn.close()
         self.ensure_default_problem()
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        _ensure_column(conn, "lima_problem", "routing_policy_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_obligation", "why_exists_md", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "prove_or_kill_md", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "lineage_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_obligation", "canonical_hash", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "review_status", "TEXT NOT NULL DEFAULT 'not_reviewed'")
+        _ensure_column(conn, "lima_obligation", "formal_backend", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "formal_payload_json", "TEXT NOT NULL DEFAULT '{}'")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lima_obligation_canonical ON lima_obligation(problem_id, canonical_hash)"
+        )
 
     def ensure_default_problem(self) -> str:
         slug = slugify(app_config.LIMA_DEFAULT_PROBLEM, fallback="collatz")
@@ -841,36 +894,93 @@ class LimaDatabase:
                                 "INSERT INTO lima_claim_edge (id, from_claim_id, to_claim_id, edge_kind, note) VALUES (?, ?, ?, 'conflicts_with', '')",
                                 (_new_id(), from_id, to_id),
                             )
+                inserted_obligation_ids: list[str] = []
                 for obligation in universe.formalization_targets[
                     : int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN)
                 ]:
                     claim_id = None
                     if obligation.title in claim_ids_by_title:
                         claim_id = claim_ids_by_title[obligation.title]
+                    kind = obligation.obligation_kind[:80]
+                    canonical_hash = _canonical_hash(
+                        [
+                            problem_id,
+                            kind,
+                            obligation.title,
+                            obligation.statement_md,
+                            obligation.lean_goal,
+                        ]
+                    )
+                    existing_obligation = conn.execute(
+                        """
+                        SELECT id FROM lima_obligation
+                        WHERE problem_id = ? AND canonical_hash = ?
+                        LIMIT 1
+                        """,
+                        (problem_id, canonical_hash),
+                    ).fetchone()
+                    if existing_obligation:
+                        inserted_obligation_ids.append(str(existing_obligation["id"]))
+                        continue
+                    local_kinds = {"finite_check", "counterexample_search", "invariant_check", "consistency"}
+                    normalized_status = obligation.status[:32]
+                    if normalized_status == "queued":
+                        normalized_status = "queued_local" if kind in local_kinds else "queued_formal_review"
+                    if kind in {"lean_goal", "bridge_lemma", "equivalence"} and normalized_status == "queued_local":
+                        normalized_status = "queued_formal_review"
+                    why_exists = (
+                        obligation.why_exists_md
+                        or f"Compiled from Lima universe '{universe.title}' after rupture verdict {verdict}."
+                    )
+                    prove_or_kill = (
+                        obligation.prove_or_kill_md
+                        or "Verify this if it preserves the survivor; refute it to fracture the universe early."
+                    )
+                    lineage = {
+                        "source_problem_id": problem_id,
+                        "source_run_id": run_id,
+                        "source_universe_title": universe.title,
+                        "source_family_key": universe.family_key,
+                        "source_claim_id": claim_id,
+                        "rupture_summary": str(rupture.get("summary_md") or ""),
+                        "policy_snapshot": policy_snapshot,
+                        "zero_live_authority": True,
+                    }
+                    obligation_id = _new_id()
                     conn.execute(
                         """
                         INSERT INTO lima_obligation (
                             id, problem_id, universe_id, claim_id, obligation_kind,
                             title, statement_md, lean_goal, status, priority,
+                            why_exists_md, prove_or_kill_md, lineage_json, canonical_hash,
+                            review_status, formal_backend, formal_payload_json,
                             aristotle_ref_json, result_summary_md, created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '', ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '', ?, ?)
                         """,
                         (
-                            _new_id(),
+                            obligation_id,
                             problem_id,
                             universe_id,
                             claim_id,
-                            obligation.obligation_kind[:80],
+                            kind,
                             obligation.title[:500],
                             obligation.statement_md[:8000],
                             obligation.lean_goal[:4000],
-                            obligation.status[:32],
+                            normalized_status,
                             int(obligation.priority),
+                            why_exists[:4000],
+                            prove_or_kill[:4000],
+                            _json(lineage),
+                            canonical_hash,
+                            str(obligation.review_status or "not_reviewed")[:32],
+                            str(obligation.formal_backend or "")[:80],
+                            _json({}),
                             now,
                             now,
                         ),
                     )
+                    inserted_obligation_ids.append(obligation_id)
                 if rupture:
                     rupture_id = _new_id()
                     conn.execute(
@@ -925,14 +1035,18 @@ class LimaDatabase:
                         "source": "lima",
                         "universe_id": universe_id,
                         "family_id": family_id,
+                        "claim_ids": list(claim_ids_by_title.values()),
+                        "obligation_ids": inserted_obligation_ids,
                         "title": universe.title,
-                        "destination_kind": "formal_queue",
+                        "destination_kind": "formal_review_queue",
                         "fracture_summary": str(rupture.get("summary_md") or ""),
+                        "top_fractures": rupture.get("fractures") or [],
                         "key_obligations": [
                             target.model_dump(mode="json")
                             for target in universe.formalization_targets[:3]
                         ],
                         "linked_literature": [],
+                        "policy_snapshot": policy_snapshot,
                         "zero_live_authority": True,
                     }
                     conn.execute(
@@ -941,7 +1055,7 @@ class LimaDatabase:
                             id, problem_id, universe_id, destination_kind, status,
                             payload_json, created_at, reviewed_at
                         )
-                        VALUES (?, ?, ?, 'formal_queue', 'pending', ?, ?, NULL)
+                        VALUES (?, ?, ?, 'formal_review_queue', 'pending', ?, ?, NULL)
                         """,
                         (_new_id(), problem_id, universe_id, _json(payload), now),
                     )
@@ -1161,6 +1275,43 @@ class LimaDatabase:
         finally:
             conn.close()
 
+    def list_universe_literature_links(self, problem_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT l.*, u.title AS universe_title, s.title AS source_title, s.source_type
+                FROM lima_universe_literature_link l
+                JOIN lima_universe u ON u.id = l.universe_id
+                JOIN lima_literature_source s ON s.id = l.source_id
+                WHERE u.problem_id = ?
+                ORDER BY l.created_at DESC
+                LIMIT ?
+                """,
+                (problem_id, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_artifacts(self, problem_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT a.*, u.title AS universe_title
+                FROM lima_artifact a
+                LEFT JOIN lima_universe u ON u.id = a.universe_id
+                WHERE a.problem_id = ?
+                ORDER BY a.created_at DESC
+                LIMIT ?
+                """,
+                (problem_id, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
     def list_universes(self, problem_id: str, limit: int = 30) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
@@ -1275,6 +1426,45 @@ class LimaDatabase:
         finally:
             conn.close()
 
+    def list_obligations_by_statuses(
+        self, problem_id: str, statuses: list[str], *, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" * len(statuses))
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                f"""
+                SELECT o.*, u.title AS universe_title
+                FROM lima_obligation o
+                LEFT JOIN lima_universe u ON u.id = o.universe_id
+                WHERE o.problem_id = ? AND o.status IN ({placeholders})
+                ORDER BY o.priority DESC, o.created_at DESC
+                LIMIT ?
+                """,
+                [problem_id, *statuses, min(limit, 200)],
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def get_obligation(self, obligation_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT o.*, u.title AS universe_title, u.family_id
+                FROM lima_obligation o
+                LEFT JOIN lima_universe u ON u.id = o.universe_id
+                WHERE o.id = ?
+                """,
+                (obligation_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def update_obligation_result(
         self,
         obligation_id: str,
@@ -1303,6 +1493,151 @@ class LimaDatabase:
             if cur.rowcount <= 0:
                 return False, "unknown obligation"
             return True, f"obligation {status}"
+        finally:
+            conn.close()
+
+    def set_obligation_status(
+        self,
+        obligation_id: str,
+        status: str,
+        *,
+        review_status: str | None = None,
+        formal_backend: str | None = None,
+        formal_payload: dict[str, Any] | None = None,
+        result_summary_md: str | None = None,
+    ) -> tuple[bool, str]:
+        assignments = ["status = ?", "updated_at = ?"]
+        values: list[Any] = [status[:32], _now()]
+        if review_status is not None:
+            assignments.append("review_status = ?")
+            values.append(review_status[:32])
+        if formal_backend is not None:
+            assignments.append("formal_backend = ?")
+            values.append(formal_backend[:80])
+        if formal_payload is not None:
+            assignments.append("formal_payload_json = ?")
+            values.append(_json(formal_payload))
+        if result_summary_md is not None:
+            assignments.append("result_summary_md = ?")
+            values.append(result_summary_md[:8000])
+        values.append(obligation_id)
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                f"UPDATE lima_obligation SET {', '.join(assignments)} WHERE id = ?",
+                values,
+            )
+            conn.commit()
+            if cur.rowcount <= 0:
+                return False, "unknown obligation"
+            return True, f"obligation {status}"
+        finally:
+            conn.close()
+
+    def create_formal_review_item(
+        self,
+        *,
+        problem_id: str,
+        obligation_id: str,
+        universe_id: str | None,
+        claim_id: str | None,
+        backend_kind: str,
+        packet: dict[str, Any],
+    ) -> str:
+        now = _now()
+        existing = None
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                """
+                SELECT id FROM lima_formal_review_queue
+                WHERE obligation_id = ? AND status IN ('queued_formal_review', 'approved_for_formal', 'submitted_formal')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (obligation_id,),
+            ).fetchone()
+            if existing:
+                return str(existing["id"])
+            item_id = _new_id()
+            conn.execute(
+                """
+                INSERT INTO lima_formal_review_queue (
+                    id, problem_id, obligation_id, universe_id, claim_id,
+                    backend_kind, status, review_decision, packet_json,
+                    backend_result_json, created_at, reviewed_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'queued_formal_review', 'pending', ?, '{}', ?, NULL, ?)
+                """,
+                (
+                    item_id,
+                    problem_id,
+                    obligation_id,
+                    universe_id or None,
+                    claim_id or None,
+                    backend_kind[:80],
+                    _json(packet),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return item_id
+        finally:
+            conn.close()
+
+    def update_formal_review_item(
+        self,
+        review_id: str,
+        *,
+        status: str,
+        review_decision: str | None = None,
+        backend_result: dict[str, Any] | None = None,
+    ) -> tuple[bool, str]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                UPDATE lima_formal_review_queue
+                SET status = ?,
+                    review_decision = COALESCE(?, review_decision),
+                    backend_result_json = COALESCE(?, backend_result_json),
+                    reviewed_at = CASE WHEN ? IS NOT NULL THEN ? ELSE reviewed_at END,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status[:32],
+                    review_decision[:32] if review_decision else None,
+                    _json(backend_result) if backend_result is not None else None,
+                    review_decision,
+                    _now(),
+                    _now(),
+                    review_id,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount <= 0:
+                return False, "unknown formal review item"
+            return True, f"formal review {status}"
+        finally:
+            conn.close()
+
+    def list_formal_reviews(self, problem_id: str, limit: int = 30) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT r.*, o.title AS obligation_title, o.obligation_kind
+                FROM lima_formal_review_queue r
+                LEFT JOIN lima_obligation o ON o.id = r.obligation_id
+                WHERE r.problem_id = ?
+                ORDER BY r.created_at DESC
+                LIMIT ?
+                """,
+                (problem_id, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
         finally:
             conn.close()
 
@@ -1521,6 +1856,9 @@ class LimaDatabase:
             "handoffs": self.list_handoffs(problem_id, limit=20),
             "literature_sources": sources,
             "literature_extracts": extracts[:20],
+            "literature_links": self.list_universe_literature_links(problem_id, limit=30),
+            "formal_reviews": self.list_formal_reviews(problem_id, limit=20),
+            "artifacts": self.list_artifacts(problem_id, limit=30),
             "policy_revisions": self.list_policy_revisions(problem_id, limit=8),
         }
 

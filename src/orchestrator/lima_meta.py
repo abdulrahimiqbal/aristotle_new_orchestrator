@@ -31,7 +31,17 @@ def analyze_and_update_policy(
         kind = str(fracture.get("failure_type") or "unknown")
         repeated_failures[kind] = repeated_failures.get(kind, 0) + 1
 
-    queued_obligations = [o for o in obligations if str(o.get("status")) == "queued"]
+    queued_obligations = [
+        o for o in obligations if str(o.get("status")) in {"queued", "queued_local", "queued_formal_review"}
+    ]
+    verified_local = [o for o in obligations if str(o.get("status")) == "verified_local"]
+    refuted_local = [o for o in obligations if str(o.get("status")) == "refuted_local"]
+    formal_ready = [
+        o
+        for o in obligations
+        if str(o.get("status")) in {"approved_for_formal", "submitted_formal", "verified_formal"}
+    ]
+    prior_art_hits = [f for f in fractures if str(f.get("failure_type")) == "prior_art"]
     policy_changes = {
         "mission_locked": True,
         "generation": {
@@ -52,11 +62,15 @@ def analyze_and_update_policy(
         },
         "literature": {
             "prior_art_check_required": True,
-            "route_cycle_and_completion_families_to_manual_literature": True,
+            "problem_aware_query_generation": True,
+            "prior_art_hit_count": len(prior_art_hits),
         },
         "formal": {
             "escalate_only_after_human_approval": True,
             "queued_obligation_count": len(queued_obligations),
+            "verified_local_count": len(verified_local),
+            "refuted_local_count": len(refuted_local),
+            "formal_ready_count": len(formal_ready),
         },
         "scoring": {
             "falsifiability_weight": 1.25 if repeated_failures else 1.0,
@@ -70,6 +84,14 @@ def analyze_and_update_policy(
         "family_count": len(families),
         "fracture_count": len(fractures),
         "queued_obligation_count": len(queued_obligations),
+        "local_verification_yield": len(verified_local),
+        "local_refutation_yield": len(refuted_local),
+        "formalization_yield": len(formal_ready),
+        "prior_art_hit_rate": (len(prior_art_hits) / max(1, len(fractures))),
+        "family_survival_rate": (
+            sum(int(f.get("survival_count") or 0) for f in families)
+            / max(1, sum(int(f.get("survival_count") or 0) + int(f.get("failure_count") or 0) for f in families))
+        ),
         "failure_type_histogram": repeated_failures,
     }
     summary = (
