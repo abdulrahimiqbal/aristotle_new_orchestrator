@@ -18,6 +18,7 @@ from orchestrator.db import Database
 from orchestrator.lima_agent import lima_loop, run_lima
 from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_literature import refresh_literature
+from orchestrator.lima_obligations import run_queued_obligation_checks
 from orchestrator.lima_presenter import build_lima_ui_context
 from orchestrator.llm import decompose_prompt
 from orchestrator.manager import manager_loop
@@ -1022,6 +1023,24 @@ async def lima_literature_refresh_fragment(
     )
 
 
+@app.post("/api/lima/obligations/run", response_class=HTMLResponse)
+async def lima_obligations_run_fragment(
+    request: Request,
+    _auth: OperatorWriteAuth,
+    problem_slug: str = Form(""),
+):
+    selected_problem = (problem_slug or app_config.LIMA_DEFAULT_PROBLEM).strip()
+    lima_db.initialize()
+    problem = lima_db.get_problem(selected_problem)
+    result = run_queued_obligation_checks(lima_db, problem_id=str(problem["id"]))
+    flash = {"ok": True, "obligation_checks": result}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=selected_problem, lima_flash=flash),
+    )
+
+
 @app.post("/api/lima/handoff/{handoff_id}/approve", response_class=HTMLResponse)
 async def lima_handoff_approve(
     request: Request, handoff_id: str, _auth: OperatorWriteAuth
@@ -1029,9 +1048,17 @@ async def lima_handoff_approve(
     row = lima_db.get_handoff(handoff_id)
     if not row:
         return HTMLResponse("Unknown Lima handoff", status_code=404)
-    ok, msg = lima_db.set_handoff_status(handoff_id, "approved")
-    flash = {"ok": ok, "handoff": "approved", "error": None if ok else msg}
     problem_id = str(row.get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    ok, msg = lima_db.set_handoff_status(handoff_id, "approved")
+    obligation_result = None
+    if ok:
+        obligation_result = run_queued_obligation_checks(lima_db, problem_id=problem_id)
+    flash = {
+        "ok": ok,
+        "handoff": "approved",
+        "error": None if ok else msg,
+        "obligation_checks": obligation_result,
+    }
     return templates.TemplateResponse(
         request,
         "lima_panel.html",

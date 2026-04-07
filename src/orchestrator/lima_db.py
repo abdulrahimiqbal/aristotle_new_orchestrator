@@ -1275,6 +1275,72 @@ class LimaDatabase:
         finally:
             conn.close()
 
+    def update_obligation_result(
+        self,
+        obligation_id: str,
+        *,
+        status: str,
+        result_summary_md: str,
+        aristotle_ref: dict[str, Any] | None = None,
+    ) -> tuple[bool, str]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                UPDATE lima_obligation
+                SET status = ?, result_summary_md = ?, aristotle_ref_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status[:32],
+                    result_summary_md[:8000],
+                    _json(aristotle_ref or {}),
+                    _now(),
+                    obligation_id,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount <= 0:
+                return False, "unknown obligation"
+            return True, f"obligation {status}"
+        finally:
+            conn.close()
+
+    def create_artifact(
+        self,
+        *,
+        problem_id: str,
+        universe_id: str | None,
+        artifact_kind: str,
+        content: dict[str, Any],
+    ) -> str:
+        artifact_id = _new_id()
+        content_raw = _json(content)
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO lima_artifact (
+                    id, problem_id, universe_id, artifact_kind, content_json,
+                    content_hash, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    problem_id,
+                    universe_id or None,
+                    artifact_kind[:80],
+                    content_raw,
+                    hashlib.sha256(content_raw.encode("utf-8")).hexdigest(),
+                    _now(),
+                ),
+            )
+            conn.commit()
+            return artifact_id
+        finally:
+            conn.close()
+
     def list_handoffs(
         self, problem_id: str, *, status: str | None = None, limit: int = 30
     ) -> list[dict[str, Any]]:

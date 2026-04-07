@@ -29,6 +29,7 @@ from orchestrator.lima_models import (
     safe_json_loads,
     slugify,
 )
+from orchestrator.lima_obligations import run_queued_obligation_checks
 from orchestrator.lima_rupture import rupture_universes
 from orchestrator.llm import invoke_llm
 
@@ -745,6 +746,11 @@ async def run_lima(
                     relation_kind=infer_literature_relation(universe, source),
                     note="Linked by Lima local literature routing.",
                 )
+        obligation_result = run_queued_obligation_checks(
+            lima_db,
+            problem_id=problem_id,
+            limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
+        )
         meta_result = None
         if app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES:
             meta_result = analyze_and_update_policy(
@@ -761,6 +767,7 @@ async def run_lima(
             "literature_source_count": len(literature_context),
             "summary": generated.run_summary_md,
             "validation_warnings": json_warnings,
+            "obligation_checks": obligation_result,
             "meta": meta_result,
         }
     finally:

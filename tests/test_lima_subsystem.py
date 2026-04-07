@@ -247,7 +247,9 @@ def test_lima_run_persists_memory_without_live_main_queue(
     problem = lima.get_problem("collatz")
     assert lima.list_universes(problem["id"])
     assert lima.list_fractures(problem["id"])
-    assert lima.list_obligations(problem["id"])
+    obligations = lima.list_obligations(problem["id"])
+    assert obligations
+    assert any(o["status"] == "checked" for o in obligations)
     assert lima.list_handoffs(problem["id"], status="pending")
 
     conn = sqlite3.connect(str(tmp_path / "main.db"))
