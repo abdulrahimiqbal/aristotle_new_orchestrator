@@ -175,3 +175,21 @@ SUPERSHADOW_GLOBAL_TICK_INTERVAL_SEC = _int_env(
 )
 SUPERSHADOW_MAX_HANDOFFS_PER_RUN = _int_env("SUPERSHADOW_MAX_HANDOFFS_PER_RUN", 2)
 SUPERSHADOW_MAX_PENDING_HANDOFFS = _int_env("SUPERSHADOW_MAX_PENDING_HANDOFFS", 18)
+
+# Lima lab: falsification-first upstream research engine.
+# Lima uses a separate SQLite DB and never writes directly into the live experiment queue.
+LIMA_DATABASE_PATH = os.environ.get("LIMA_DATABASE_PATH", "lima.db")
+LIMA_ENABLED = _bool_env("LIMA_ENABLED", False)
+LIMA_LOOP_INTERVAL_SEC = _int_env("LIMA_LOOP_INTERVAL_SEC", 1800)
+LIMA_DEFAULT_PROBLEM = os.environ.get("LIMA_DEFAULT_PROBLEM", "collatz").strip() or "collatz"
+_LIMA_MODE_RAW = os.environ.get("LIMA_DEFAULT_MODE", "balanced").strip().lower()
+LIMA_DEFAULT_MODE = (
+    _LIMA_MODE_RAW if _LIMA_MODE_RAW in ("wild", "stress", "forge", "balanced") else "balanced"
+)
+LIMA_MAX_UNIVERSES_PER_RUN = _int_env("LIMA_MAX_UNIVERSES_PER_RUN", 3)
+LIMA_MAX_OBLIGATIONS_PER_RUN = _int_env("LIMA_MAX_OBLIGATIONS_PER_RUN", 6)
+LIMA_MAX_LITERATURE_RESULTS = _int_env("LIMA_MAX_LITERATURE_RESULTS", 6)
+LIMA_USE_NUMPY = _bool_env("LIMA_USE_NUMPY", True)
+LIMA_USE_SYMPY = _bool_env("LIMA_USE_SYMPY", True)
+LIMA_USE_Z3 = _bool_env("LIMA_USE_Z3", False)
+LIMA_ENABLE_AUTO_POLICY_UPDATES = _bool_env("LIMA_ENABLE_AUTO_POLICY_UPDATES", True)

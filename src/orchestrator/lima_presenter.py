@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def _load_json(raw: Any, default: Any) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return default
+
+
+def _pretty(raw: Any) -> str:
+    parsed = _load_json(raw, {})
+    try:
+        return json.dumps(parsed, indent=2, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(raw or "")
+
+
+def _present_handoff(row: dict[str, Any]) -> dict[str, Any]:
+    payload = _load_json(row.get("payload_json"), {})
+    return {
+        "title": str(payload.get("title") or row.get("universe_title") or "Lima handoff"),
+        "destination_kind": str(row.get("destination_kind") or payload.get("destination_kind") or "review_packet"),
+        "fracture_summary": str(payload.get("fracture_summary") or ""),
+        "key_obligations": payload.get("key_obligations") or [],
+        "payload_json_pretty": _pretty(row.get("payload_json")),
+    }
+
+
+def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None = None) -> dict[str, Any]:
+    state = dict(snapshot.get("state") or {})
+    latest_run = dict(snapshot.get("latest_run") or {}) if snapshot.get("latest_run") else None
+    universes = [dict(u) for u in snapshot.get("universes") or []]
+    handoffs = [dict(h) for h in snapshot.get("handoffs") or []]
+    pending_handoffs: list[dict[str, Any]] = []
+    reviewed_handoffs: list[dict[str, Any]] = []
+    for handoff in handoffs:
+        handoff["preview"] = _present_handoff(handoff)
+        if str(handoff.get("status") or "") == "pending":
+            pending_handoffs.append(handoff)
+        else:
+            reviewed_handoffs.append(handoff)
+
+    fractures = [dict(f) for f in snapshot.get("fractures") or []]
+    obligations = [dict(o) for o in snapshot.get("obligations") or []]
+    literature_extracts = [dict(e) for e in snapshot.get("literature_extracts") or []]
+
+    promising = [u for u in universes if str(u.get("universe_status")) in {"promising", "formalized", "handed_off"}]
+    latest_summary = ""
+    if latest_run:
+        latest_summary = str(latest_run.get("run_summary_md") or "")
+
+    return {
+        "lima_problem": snapshot.get("problem") or {},
+        "lima_problems": snapshot.get("problems") or [],
+        "lima_state": state,
+        "lima_frontier_pretty": _pretty(state.get("frontier_json")),
+        "lima_pressure_pretty": _pretty(state.get("pressure_map_json")),
+        "lima_policy_pretty": _pretty(state.get("policy_json")),
+        "lima_latest_run": latest_run,
+        "lima_latest_summary": latest_summary,
+        "lima_runs": snapshot.get("runs") or [],
+        "lima_families": snapshot.get("families") or [],
+        "lima_universes": universes,
+        "lima_promising_universes": promising,
+        "lima_fractures": fractures,
+        "lima_obligations": obligations,
+        "lima_queued_obligations": [
+            o for o in obligations if str(o.get("status") or "") == "queued"
+        ],
+        "lima_literature_sources": snapshot.get("literature_sources") or [],
+        "lima_literature_extracts": literature_extracts,
+        "lima_pending_handoffs": pending_handoffs,
+        "lima_reviewed_handoffs": reviewed_handoffs,
+        "lima_policy_revisions": snapshot.get("policy_revisions") or [],
+        "lima_flash": lima_flash,
+        "lima_primary_cta": "Run Lima",
+        "lima_metrics": {
+            "run_count": len(snapshot.get("runs") or []),
+            "family_count": len(snapshot.get("families") or []),
+            "universe_count": len(universes),
+            "fracture_count": len(fractures),
+            "queued_obligations": len(
+                [o for o in obligations if str(o.get("status") or "") == "queued"]
+            ),
+            "pending_handoffs": len(pending_handoffs),
+            "literature_sources": len(snapshot.get("literature_sources") or []),
+        },
+    }

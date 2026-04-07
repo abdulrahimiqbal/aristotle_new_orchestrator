@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Annotated, Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from fastapi.templating import Jinja2Templates
@@ -15,6 +15,10 @@ from fastapi.templating import Jinja2Templates
 from orchestrator import config as app_config
 from orchestrator.admin_routes import build_admin_router
 from orchestrator.db import Database
+from orchestrator.lima_agent import lima_loop, run_lima
+from orchestrator.lima_db import LimaDatabase
+from orchestrator.lima_literature import refresh_literature
+from orchestrator.lima_presenter import build_lima_ui_context
 from orchestrator.llm import decompose_prompt
 from orchestrator.manager import manager_loop
 from orchestrator.models import CampaignStatus, TargetStatus
@@ -50,9 +54,36 @@ logging.basicConfig(level=logging.INFO)
 DATABASE_PATH = app_config.DATABASE_PATH
 
 db = Database(DATABASE_PATH)
+lima_db = LimaDatabase(app_config.LIMA_DATABASE_PATH, reference_database_path=DATABASE_PATH)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def _require_operator_write(
+    authorization: Annotated[str | None, Header()] = None,
+    x_admin_token: Annotated[str | None, Header(alias="X-Admin-Token")] = None,
+    admin_token: Annotated[str | None, Query()] = None,
+) -> bool:
+    """Protect write routes when ADMIN_TOKEN is configured.
+
+    The existing dashboard supports local/dev deployments without ADMIN_TOKEN.
+    In protected deployments, Lima writes use the same bearer/X-Admin-Token
+    pattern as admin routes.
+    """
+
+    if not app_config.ADMIN_TOKEN:
+        return True
+    bearer: str | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer = authorization[7:].strip()
+    got = (bearer or (x_admin_token or "").strip() or (admin_token or "").strip())
+    if got != app_config.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+
+OperatorWriteAuth = Annotated[bool, Depends(_require_operator_write)]
 
 
 def _operator_runtime_context() -> dict:
@@ -92,6 +123,15 @@ def _operator_runtime_context() -> dict:
         "supershadow_max_pending_handoffs": int(
             app_config.SUPERSHADOW_MAX_PENDING_HANDOFFS
         ),
+        "lima_enabled": bool(app_config.LIMA_ENABLED),
+        "lima_database_path": app_config.LIMA_DATABASE_PATH,
+        "lima_loop_interval_sec": int(app_config.LIMA_LOOP_INTERVAL_SEC),
+        "lima_default_problem": app_config.LIMA_DEFAULT_PROBLEM,
+        "lima_default_mode": app_config.LIMA_DEFAULT_MODE,
+        "lima_max_universes_per_run": int(app_config.LIMA_MAX_UNIVERSES_PER_RUN),
+        "lima_max_obligations_per_run": int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
+        "lima_max_literature_results": int(app_config.LIMA_MAX_LITERATURE_RESULTS),
+        "lima_auto_policy_updates": bool(app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES),
     }
 
 
@@ -299,6 +339,26 @@ def _supershadow_global_panel_context(
     }
 
 
+def _lima_panel_context(
+    *,
+    problem: str | None = None,
+    lima_flash: dict | None = None,
+) -> dict:
+    lima_db.initialize()
+    snapshot = lima_db.get_dashboard_snapshot(problem or app_config.LIMA_DEFAULT_PROBLEM)
+    ui_ctx = build_lima_ui_context(snapshot, lima_flash=lima_flash)
+    return {
+        "selected": None,
+        "operator": _operator_runtime_context(),
+        "public_view": False,
+        "shadow_view": False,
+        "supershadow_view": False,
+        "lima_view": True,
+        "campaigns": db.get_all_campaigns(),
+        **ui_ctx,
+    }
+
+
 async def _maybe_submit_shadow_promoted_experiment(
     payload_json: str | None, extra: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -334,6 +394,7 @@ def _ticks_view(rows: list[dict]) -> list[dict]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.initialize()
+    lima_db.initialize()
     Path(app_config.WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
     migrate_legacy_shared_workspaces(
         db,
@@ -343,12 +404,18 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(manager_loop(db))
     shadow_task = asyncio.create_task(shadow_global_loop(db))
     supershadow_task = asyncio.create_task(supershadow_global_loop(db))
+    lima_task = asyncio.create_task(lima_loop(lima_db, db))
     try:
         yield
     finally:
+        lima_task.cancel()
         supershadow_task.cancel()
         shadow_task.cancel()
         task.cancel()
+        try:
+            await lima_task
+        except asyncio.CancelledError:
+            pass
         try:
             await supershadow_task
         except asyncio.CancelledError:
@@ -534,6 +601,29 @@ async def supershadow_dashboard(request: Request):
             "public_view": False,
             "shadow_view": False,
             "supershadow_view": True,
+            "campaign_shadow_view": False,
+            **ctx,
+        },
+    )
+
+
+@app.get("/lima", response_class=HTMLResponse)
+async def lima_dashboard(request: Request, problem: str | None = None):
+    ctx = _lima_panel_context(problem=problem)
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "campaigns": ctx["campaigns"],
+            "selected": None,
+            "state": None,
+            "ticks": [],
+            "progress": None,
+            "operator": _operator_runtime_context(),
+            "public_view": False,
+            "shadow_view": False,
+            "supershadow_view": False,
+            "lima_view": True,
             "campaign_shadow_view": False,
             **ctx,
         },
@@ -785,6 +875,31 @@ async def supershadow_global_panel_fragment(request: Request):
     )
 
 
+@app.get("/api/lima/panel", response_class=HTMLResponse)
+async def lima_panel_fragment(request: Request, problem: str | None = None):
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem),
+    )
+
+
+@app.get("/api/lima/ops")
+async def lima_ops(problem: str | None = None):
+    lima_db.initialize()
+    snapshot = lima_db.get_dashboard_snapshot(problem or app_config.LIMA_DEFAULT_PROBLEM)
+    metrics = build_lima_ui_context(snapshot).get("lima_metrics", {})
+    return {
+        "problem": snapshot.get("problem"),
+        "enabled": bool(app_config.LIMA_ENABLED),
+        "auto_interval_sec": int(app_config.LIMA_LOOP_INTERVAL_SEC),
+        "database_path": app_config.LIMA_DATABASE_PATH,
+        "default_mode": app_config.LIMA_DEFAULT_MODE,
+        "zero_live_authority": True,
+        **metrics,
+    }
+
+
 @app.get("/api/supershadow/ops")
 async def supershadow_global_ops():
     snap = db.get_supershadow_ops_snapshot(SUPERSHADOW_GLOBAL_GOAL_ID)
@@ -810,6 +925,82 @@ async def supershadow_global_run_fragment(request: Request):
         request,
         "supershadow_panel.html",
         _supershadow_global_panel_context(supershadow_flash=flash),
+    )
+
+
+@app.post("/api/lima/run", response_class=HTMLResponse)
+async def lima_run_fragment(
+    request: Request,
+    _auth: OperatorWriteAuth,
+    problem_slug: str = Form(""),
+    mode: str = Form(""),
+):
+    selected_problem = (problem_slug or app_config.LIMA_DEFAULT_PROBLEM).strip()
+    flash = await run_lima(
+        lima_db,
+        db,
+        problem_slug=selected_problem,
+        trigger_kind="manual",
+        mode=mode or app_config.LIMA_DEFAULT_MODE,
+    )
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=selected_problem, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/literature/refresh", response_class=HTMLResponse)
+async def lima_literature_refresh_fragment(
+    request: Request,
+    _auth: OperatorWriteAuth,
+    problem_slug: str = Form(""),
+):
+    selected_problem = (problem_slug or app_config.LIMA_DEFAULT_PROBLEM).strip()
+    lima_db.initialize()
+    problem = lima_db.get_problem(selected_problem)
+    state = lima_db.get_state(str(problem["id"]))
+    pressure = json.loads(state.get("pressure_map_json") or "{}")
+    res = refresh_literature(lima_db, problem=problem, pressure_map=pressure)
+    flash = {"ok": True, "literature_refresh": res}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=selected_problem, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/handoff/{handoff_id}/approve", response_class=HTMLResponse)
+async def lima_handoff_approve(
+    request: Request, handoff_id: str, _auth: OperatorWriteAuth
+):
+    row = lima_db.get_handoff(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown Lima handoff", status_code=404)
+    ok, msg = lima_db.set_handoff_status(handoff_id, "approved")
+    flash = {"ok": ok, "handoff": "approved", "error": None if ok else msg}
+    problem_id = str(row.get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/handoff/{handoff_id}/reject", response_class=HTMLResponse)
+async def lima_handoff_reject(
+    request: Request, handoff_id: str, _auth: OperatorWriteAuth
+):
+    row = lima_db.get_handoff(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown Lima handoff", status_code=404)
+    ok, msg = lima_db.set_handoff_status(handoff_id, "rejected")
+    flash = {"ok": ok, "handoff": "rejected", "error": None if ok else msg}
+    problem_id = str(row.get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
     )
 
 
