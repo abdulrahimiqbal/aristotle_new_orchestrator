@@ -120,7 +120,7 @@ class LocalFileLiteratureBackend:
     source_name = "local_file"
 
     def __init__(self, root: str | None = None) -> None:
-        self.root = Path(root or app_config.LIMA_LITERATURE_LOCAL_DIR)
+        self.root = Path(root or app_config.LIMA_LITERATURE_LOCALFILE_DIR)
 
     def search(
         self, *, problem: dict[str, Any], queries: list[str], limit: int
@@ -356,6 +356,8 @@ def build_literature_queries(
     title = str(problem.get("title") or problem.get("slug") or "")
     seed = _load_seed(problem)
     routing = seed.get("routing_policy") if isinstance(seed.get("routing_policy"), dict) else {}
+    persisted_routing = _load_json_dict(problem.get("routing_policy_json"))
+    routing = {**routing, **persisted_routing}
     for keyword in routing.get("retrieval_keywords") or seed.get("retrieval_keywords") or []:
         queries.append(str(keyword))
     if title:
@@ -502,6 +504,18 @@ def _method_extract(title: str, body: Any, source: str) -> dict[str, Any]:
 
 def _load_seed(problem: dict[str, Any]) -> dict[str, Any]:
     raw = problem.get("seed_packet_json")
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _load_json_dict(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     if not isinstance(raw, str) or not raw.strip():

@@ -190,10 +190,19 @@ def _mode(value: str | None) -> LimaMode:
     return v  # type: ignore[return-value]
 
 
+def _problem_routing(problem: dict[str, Any]) -> dict[str, Any]:
+    seed = safe_json_loads(problem.get("seed_packet_json"), {})
+    seed_routing = seed.get("routing_policy") if isinstance(seed.get("routing_policy"), dict) else {}
+    persisted = safe_json_loads(problem.get("routing_policy_json"), {})
+    policy = dict(seed_routing)
+    if isinstance(persisted, dict):
+        policy.update(persisted)
+    return policy
+
+
 def _build_reference_points(main_db: Database, problem: dict[str, Any]) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
-    seed = safe_json_loads(problem.get("seed_packet_json"), {})
-    routing = seed.get("routing_policy") if isinstance(seed.get("routing_policy"), dict) else {}
+    routing = _problem_routing(problem)
     slug = slugify(problem.get("slug"), fallback="problem")
     retrieval_terms = [
         slug.replace("_", " "),

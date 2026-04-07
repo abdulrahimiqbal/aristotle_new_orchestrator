@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
+from orchestrator import config as app_config
+from orchestrator.lima_agent import _build_reference_points
 from orchestrator.lima_db import LimaDatabase
-from orchestrator.lima_literature import LocalFileLiteratureBackend
+from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
 from orchestrator.lima_models import LimaObligationSpec
 from orchestrator.lima_obligations import (
     approve_formal_review,
+    archive_obligation,
     queue_formal_review,
+    rerun_local_obligation,
     run_queued_obligation_checks,
 )
 
@@ -72,6 +77,9 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
     try:
         obligation_columns = {row[1] for row in conn.execute("PRAGMA table_info(lima_obligation)")}
         problem_columns = {row[1] for row in conn.execute("PRAGMA table_info(lima_problem)")}
+        formal_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(lima_formal_review_queue)")
+        }
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     finally:
         conn.close()
@@ -80,7 +88,12 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
     assert "why_exists_md" in obligation_columns
     assert "canonical_hash" in obligation_columns
     assert "formal_payload_json" in obligation_columns
+    assert "estimated_formalization_value" in obligation_columns
+    assert "estimated_execution_cost" in obligation_columns
     assert "lima_formal_review_queue" in tables
+    assert "family_id" in formal_columns
+    assert "claim_ids_json" in formal_columns
+    assert "lineage_json" in formal_columns
 
 
 def test_lima_formal_review_queue_is_zero_live_authority(tmp_path: Path) -> None:
@@ -92,11 +105,18 @@ def test_lima_formal_review_queue_is_zero_live_authority(tmp_path: Path) -> None
     try:
         conn.execute(
             """
-            INSERT INTO lima_obligation (
-                id, problem_id, universe_id, obligation_kind, title, statement_md,
-                lean_goal, status, priority, created_at, updated_at
+                INSERT INTO lima_obligation (
+                    id, problem_id, universe_id, obligation_kind, title, statement_md,
+                    lean_goal, status, priority, why_exists_md, prove_or_kill_md, lineage_json,
+                    estimated_formalization_value, estimated_execution_cost, created_at, updated_at
+                )
+            VALUES (
+                'obl1', ?, 'univ1', 'lean_goal', 'Odd transfer', 'Define odd transfer.',
+                'forall n : Nat, True', 'queued_formal_review', 4,
+                'Bridge target from odd-transfer claim.', 'Failure blocks the quotient bridge.',
+                '{"source_run_id":"run1","source_claim_id":"claim1","claim_ids":["claim1"],"rupture_summary":"Prior-art fracture pressure."}',
+                4.5, 4.0, 'now', 'now'
             )
-            VALUES ('obl1', ?, 'univ1', 'lean_goal', 'Odd transfer', 'Define odd transfer.', 'forall n : Nat, True', 'queued_formal_review', 4, 'now', 'now')
             """,
             (problem["id"],),
         )
@@ -113,6 +133,9 @@ def test_lima_formal_review_queue_is_zero_live_authority(tmp_path: Path) -> None
     assert approved["ok"] is True
     assert obligation["status"] == "approved_for_formal"
     assert reviews
+    assert reviews[0]["claim_ids_json"] == '["claim1"]'
+    assert "Prior-art fracture pressure" in reviews[0]["rupture_summary_md"]
+    assert "run1" in reviews[0]["lineage_json"]
     assert approved["backend_result"]["live_aristotle_job_created"] is False
 
 
@@ -133,6 +156,28 @@ def test_lima_local_file_literature_backend(tmp_path: Path) -> None:
     assert len(records) == 1
     assert records[0].source_type == "local_file"
     assert records[0].extracts[0]["extract_kind"] == "lemma"
+
+
+def test_lima_literature_backend_all_degrades_to_localfile(tmp_path: Path, monkeypatch) -> None:
+    notes = tmp_path / "literature"
+    notes.mkdir()
+    (notes / "goldbach.json").write_text(
+        '{"title":"Goldbach local theorem","abstract_md":"Theorem: local note."}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_config, "LIMA_LITERATURE_LOCALFILE_DIR", str(notes))
+    monkeypatch.setattr(app_config, "LIMA_ENABLE_ARXIV_BACKEND", False)
+    monkeypatch.setattr(app_config, "LIMA_ENABLE_SEMANTIC_SCHOLAR_BACKEND", False)
+    monkeypatch.setattr(app_config, "LIMA_ENABLE_CROSSREF_BACKEND", False)
+
+    backend = make_literature_backend("all")
+    records = backend.search(
+        problem={"slug": "goldbach", "title": "Goldbach conjecture"},
+        queries=["Goldbach theorem"],
+        limit=5,
+    )
+
+    assert any(record.source_type == "local_file" for record in records)
 
 
 def test_lima_legacy_queued_status_runs_local_check(tmp_path: Path) -> None:
@@ -162,7 +207,79 @@ def test_lima_legacy_queued_status_runs_local_check(tmp_path: Path) -> None:
     assert obligation["status"] == "verified_local"
 
 
+def test_lima_rerun_and_archive_obligation_are_zero_live_authority(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    problem = db.get_problem("collatz")
+    conn = sqlite3.connect(str(tmp_path / "lima.db"))
+    try:
+        conn.execute(
+            """
+            INSERT INTO lima_obligation (
+                id, problem_id, universe_id, obligation_kind, title, statement_md,
+                lean_goal, status, priority, created_at, updated_at
+            )
+            VALUES ('obl3', ?, 'univ3', 'finite_check', 'Residue descent scan modulo 16', 'Compute exact scan.', '', 'verified_local', 4, 'now', 'now')
+            """,
+            (problem["id"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rerun = rerun_local_obligation(db, obligation_id="obl3")
+    archived = archive_obligation(db, obligation_id="obl3")
+    obligation = db.get_obligation("obl3")
+
+    assert rerun["ok"] is True
+    assert rerun["status"] == "verified_local"
+    assert archived == {"ok": True, "obligation_id": "obl3", "status": "archived"}
+    assert obligation["status"] == "archived"
+
+
 def test_lima_obligation_status_normalization() -> None:
     assert LimaObligationSpec(status="queued").status == "queued_local"
     assert LimaObligationSpec(status="checked").status == "verified_local"
     assert LimaObligationSpec(status="falsified").status == "refuted_local"
+    assert LimaObligationSpec(status="archived").status == "archived"
+
+
+def test_lima_reference_ingestion_uses_problem_routing_not_collatz_defaults() -> None:
+    class FakeMainDb:
+        def __init__(self) -> None:
+            self.shadow_goal = ""
+            self.supershadow_goal = ""
+
+        def get_all_campaigns(self):
+            return [
+                SimpleNamespace(id="c1", prompt="Goldbach conjecture parity campaign", status=None),
+                SimpleNamespace(id="c2", prompt="Collatz 3x+1 campaign", status=None),
+            ]
+
+        def list_shadow_global_hypotheses(self, goal_id, limit=12):
+            self.shadow_goal = goal_id
+            return [{"id": "s1", "claim": "goldbach shadow"}]
+
+        def list_supershadow_concepts(self, goal_id, limit=12):
+            self.supershadow_goal = goal_id
+            return [{"id": "ss1", "claim": "goldbach supershadow"}]
+
+    fake = FakeMainDb()
+    refs = _build_reference_points(
+        fake,
+        {
+            "slug": "goldbach",
+            "title": "Goldbach conjecture",
+            "seed_packet_json": "{}",
+            "routing_policy_json": (
+                '{"retrieval_keywords":["Goldbach","parity"],'
+                '"shadow_goal_id":"global_goldbach",'
+                '"supershadow_goal_id":"global_goldbach_supershadow"}'
+            ),
+        },
+    )
+
+    campaign_ids = {ref["external_id"] for ref in refs if ref["reference_kind"] == "campaign"}
+    assert campaign_ids == {"c1"}
+    assert fake.shadow_goal == "global_goldbach"
+    assert fake.supershadow_goal == "global_goldbach_supershadow"

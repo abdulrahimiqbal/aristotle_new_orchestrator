@@ -20,8 +20,10 @@ from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_literature import refresh_literature
 from orchestrator.lima_obligations import (
     approve_formal_review,
+    archive_obligation,
     queue_formal_review,
     reject_formal_review,
+    rerun_local_obligation,
     run_queued_obligation_checks,
 )
 from orchestrator.lima_presenter import build_lima_ui_context
@@ -139,7 +141,7 @@ def _operator_runtime_context() -> dict:
         "lima_max_literature_results": int(app_config.LIMA_MAX_LITERATURE_RESULTS),
         "lima_auto_policy_updates": bool(app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES),
         "lima_literature_backends": app_config.LIMA_LITERATURE_BACKENDS,
-        "lima_literature_local_dir": app_config.LIMA_LITERATURE_LOCAL_DIR,
+        "lima_literature_local_dir": app_config.LIMA_LITERATURE_LOCALFILE_DIR,
         "lima_formal_backend": app_config.LIMA_FORMAL_BACKEND,
         "lima_formal_auto_submit": bool(app_config.LIMA_FORMAL_AUTO_SUBMIT),
         "lima_auto_local_obligation_checks": bool(app_config.LIMA_AUTO_LOCAL_OBLIGATION_CHECKS),
@@ -1085,6 +1087,36 @@ async def lima_obligation_reject_formal_fragment(
     request: Request, obligation_id: str, _auth: OperatorWriteAuth
 ):
     result = reject_formal_review(lima_db, obligation_id=obligation_id)
+    row = lima_db.get_obligation(obligation_id)
+    problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    flash = {"ok": bool(result.get("ok")), "formal_review": result, "error": result.get("error")}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/obligation/{obligation_id}/rerun-local", response_class=HTMLResponse)
+async def lima_obligation_rerun_local_fragment(
+    request: Request, obligation_id: str, _auth: OperatorWriteAuth
+):
+    result = rerun_local_obligation(lima_db, obligation_id=obligation_id)
+    row = lima_db.get_obligation(obligation_id)
+    problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    flash = {"ok": bool(result.get("ok")), "obligation_checks": result, "error": result.get("error")}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/obligation/{obligation_id}/archive", response_class=HTMLResponse)
+async def lima_obligation_archive_fragment(
+    request: Request, obligation_id: str, _auth: OperatorWriteAuth
+):
+    result = archive_obligation(lima_db, obligation_id=obligation_id)
     row = lima_db.get_obligation(obligation_id)
     problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
     flash = {"ok": bool(result.get("ok")), "formal_review": result, "error": result.get("error")}

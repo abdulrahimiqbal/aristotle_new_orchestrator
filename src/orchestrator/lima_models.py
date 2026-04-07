@@ -22,6 +22,7 @@ LimaObligationStatus = Literal[
     "verified_formal",
     "refuted_formal",
     "inconclusive",
+    "archived",
 ]
 
 
@@ -130,6 +131,8 @@ class LimaObligationSpec(BaseModel):
     canonical_key: str = Field(default="")
     review_status: str = Field(default="not_reviewed")
     formal_backend: str = Field(default="")
+    estimated_formalization_value: float = Field(default=0, ge=0, le=5)
+    estimated_execution_cost: float = Field(default=0, ge=0, le=5)
 
     @field_validator("obligation_kind")
     @classmethod
@@ -164,6 +167,7 @@ class LimaObligationSpec(BaseModel):
             "verified_formal",
             "refuted_formal",
             "inconclusive",
+            "archived",
         }
         v = slugify(value, fallback="queued_local")
         if v == "queued":

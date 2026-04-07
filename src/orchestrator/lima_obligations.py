@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from orchestrator import config as app_config
 from orchestrator.lima_db import LimaDatabase
-from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, slugify
+from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, safe_json_loads, slugify
 from orchestrator.lima_rupture import collatz_step, residue_pattern_summary
 
 
@@ -53,6 +53,31 @@ def canonical_obligation_key(obligation: LimaObligationSpec | dict[str, Any]) ->
     return slugify(" ".join(str(part or "") for part in parts), fallback="obligation")
 
 
+def _obligation_scores(kind: str, priority: int) -> tuple[float, float]:
+    value_base = {
+        "bridge_lemma": 4.5,
+        "equivalence": 4.25,
+        "lean_goal": 4.0,
+        "invariant_check": 3.5,
+        "finite_check": 3.0,
+        "counterexample_search": 3.0,
+        "consistency": 2.75,
+        "literature_crosscheck": 2.5,
+    }.get(kind, 3.0)
+    cost_base = {
+        "finite_check": 1.0,
+        "counterexample_search": 1.25,
+        "literature_crosscheck": 1.5,
+        "consistency": 2.0,
+        "invariant_check": 2.25,
+        "bridge_lemma": 3.5,
+        "equivalence": 4.0,
+        "lean_goal": 4.0,
+    }.get(kind, 2.5)
+    boost = max(0, min(5, priority)) * 0.1
+    return (min(5.0, value_base + boost), min(5.0, cost_base))
+
+
 def compile_obligations_for_universe(
     universe: LimaUniverseSpec,
     rupture_report: dict[str, Any] | None = None,
@@ -71,7 +96,17 @@ def compile_obligations_for_universe(
         status = obligation.status
         if status in {"queued", ""}:
             status = "queued_local" if kind in LOCAL_CHECK_KINDS else "queued_formal_review"
-        out.append(obligation.model_copy(update={"canonical_key": key, "status": status}))
+        value, cost = _obligation_scores(kind, obligation.priority)
+        out.append(
+            obligation.model_copy(
+                update={
+                    "canonical_key": key,
+                    "status": status,
+                    "estimated_formalization_value": obligation.estimated_formalization_value or value,
+                    "estimated_execution_cost": obligation.estimated_execution_cost or cost,
+                }
+            )
+        )
 
     for target in universe.formalization_targets:
         add(
@@ -210,11 +245,13 @@ class LocalStubFormalBackend:
     backend_kind = "local_stub"
 
     def build_packet(self, obligation: dict[str, Any]) -> FormalReviewPacket:
+        lineage = safe_json_loads(obligation.get("lineage_json"), {})
         payload = {
             "source": "lima",
             "obligation_id": obligation.get("id"),
             "problem_id": obligation.get("problem_id"),
             "universe_id": obligation.get("universe_id"),
+            "family_id": obligation.get("family_id"),
             "claim_id": obligation.get("claim_id"),
             "obligation_kind": obligation.get("obligation_kind"),
             "title": obligation.get("title"),
@@ -222,7 +259,9 @@ class LocalStubFormalBackend:
             "lean_goal": obligation.get("lean_goal"),
             "why_exists_md": obligation.get("why_exists_md"),
             "prove_or_kill_md": obligation.get("prove_or_kill_md"),
-            "lineage": obligation.get("lineage_json"),
+            "estimated_formalization_value": obligation.get("estimated_formalization_value"),
+            "estimated_execution_cost": obligation.get("estimated_execution_cost"),
+            "lineage": lineage,
             "zero_live_authority": True,
         }
         return FormalReviewPacket(
@@ -259,11 +298,54 @@ def queue_formal_review(
         return {"ok": False, "error": "unknown_obligation"}
     backend = backend or make_formal_backend(str(obligation.get("formal_backend") or ""))
     packet = backend.build_packet(obligation)
+    problem_id = str(obligation["problem_id"])
+    universe_id = str(obligation.get("universe_id") or "")
+    claim_id = str(obligation.get("claim_id") or "")
+    lineage = safe_json_loads(obligation.get("lineage_json"), {})
+    if isinstance(lineage, dict):
+        source_run_id = str(lineage.get("source_run_id") or "")
+        rupture_summary = str(lineage.get("rupture_summary") or "")
+        claim_ids = [
+            str(c)
+            for c in (
+                lineage.get("claim_ids")
+                if isinstance(lineage.get("claim_ids"), list)
+                else [lineage.get("source_claim_id") or claim_id]
+            )
+            if c
+        ]
+    else:
+        lineage = {}
+        source_run_id = ""
+        rupture_summary = ""
+        claim_ids = [claim_id] if claim_id else []
+    links = [
+        link
+        for link in lima_db.list_universe_literature_links(problem_id, limit=50)
+        if not universe_id or str(link.get("universe_id") or "") == universe_id
+    ][:8]
+    policy_revisions = lima_db.list_policy_revisions(problem_id, limit=1)
+    policy_revision_id = str(policy_revisions[0].get("id") or "") if policy_revisions else ""
+    lineage_payload = {
+        **lineage,
+        "source_problem_id": problem_id,
+        "source_universe_id": universe_id,
+        "source_family_id": str(obligation.get("family_id") or ""),
+        "source_claim_id": claim_id,
+        "source_run_id": source_run_id,
+        "zero_live_authority": True,
+    }
     review_id = lima_db.create_formal_review_item(
-        problem_id=str(obligation["problem_id"]),
+        problem_id=problem_id,
         obligation_id=obligation_id,
-        universe_id=str(obligation.get("universe_id") or ""),
-        claim_id=str(obligation.get("claim_id") or ""),
+        universe_id=universe_id,
+        claim_id=claim_id,
+        family_id=str(obligation.get("family_id") or ""),
+        claim_ids=claim_ids,
+        rupture_summary_md=rupture_summary,
+        literature_links=links,
+        policy_revision_id=policy_revision_id,
+        lineage=lineage_payload,
         backend_kind=packet.backend_kind,
         packet=packet.payload,
     )
@@ -338,7 +420,90 @@ def reject_formal_review(lima_db: LimaDatabase, *, obligation_id: str) -> dict[s
         review_status="rejected",
         result_summary_md="Formal review rejected by operator. Lima should keep the fracture and avoid escalation.",
     )
+    for review in lima_db.list_formal_reviews(str(obligation["problem_id"]), limit=100):
+        if str(review.get("obligation_id") or "") == obligation_id:
+            lima_db.update_formal_review_item(
+                str(review["id"]),
+                status="inconclusive",
+                review_decision="rejected",
+                backend_result={
+                    "status": "rejected",
+                    "submitted_formal": False,
+                    "live_aristotle_job_created": False,
+                },
+            )
+            break
     return {"ok": True, "obligation_id": obligation_id, "status": "inconclusive"}
+
+
+def archive_obligation(lima_db: LimaDatabase, *, obligation_id: str) -> dict[str, Any]:
+    obligation = lima_db.get_obligation(obligation_id)
+    if not obligation:
+        return {"ok": False, "error": "unknown_obligation"}
+    lima_db.set_obligation_status(
+        obligation_id,
+        "archived",
+        review_status="archived",
+        result_summary_md="Archived by operator. Lima retains lineage but will not route this obligation further.",
+    )
+    for review in lima_db.list_formal_reviews(str(obligation["problem_id"]), limit=100):
+        if str(review.get("obligation_id") or "") == obligation_id:
+            lima_db.update_formal_review_item(
+                str(review["id"]),
+                status="archived",
+                review_decision="archived",
+                backend_result={
+                    "status": "archived",
+                    "submitted_formal": False,
+                    "live_aristotle_job_created": False,
+                },
+            )
+            break
+    return {"ok": True, "obligation_id": obligation_id, "status": "archived"}
+
+
+def rerun_local_obligation(lima_db: LimaDatabase, *, obligation_id: str) -> dict[str, Any]:
+    obligation = lima_db.get_obligation(obligation_id)
+    if not obligation:
+        return {"ok": False, "error": "unknown_obligation"}
+    kind = str(obligation.get("obligation_kind") or "")
+    if kind not in LOCAL_CHECK_KINDS:
+        return {"ok": False, "error": "not_local_check", "obligation_id": obligation_id}
+    problem_id = str(obligation.get("problem_id") or "")
+    lima_db.set_obligation_status(
+        obligation_id,
+        "running_local",
+        review_status=str(obligation.get("review_status") or "not_reviewed"),
+    )
+    refreshed = lima_db.get_obligation(obligation_id) or obligation
+    status, summary, artifact = _finite_check(refreshed)
+    lima_db.create_artifact(
+        problem_id=problem_id,
+        universe_id=str(obligation.get("universe_id") or ""),
+        artifact_kind="obligation_check",
+        content={
+            "obligation_id": obligation_id,
+            "obligation_kind": kind,
+            "title": obligation.get("title"),
+            "status": status,
+            "summary": summary,
+            "artifact": artifact,
+            "rerun": True,
+            "zero_live_authority": True,
+        },
+    )
+    lima_db.update_obligation_result(
+        obligation_id,
+        status=status,
+        result_summary_md=summary,
+        aristotle_ref={
+            "executor": "lima_local_obligation_check",
+            "rerun": True,
+            "live_aristotle_job_created": False,
+            "artifact_kind": "obligation_check",
+        },
+    )
+    return {"ok": True, "obligation_id": obligation_id, "status": status, "summary": summary}
 
 
 def run_queued_obligation_checks(

@@ -24,6 +24,29 @@ def _json(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False)
 
 
+def _routing_policy_from_seed(seed: Any, *, slug: str = "") -> dict[str, Any]:
+    parsed = seed if isinstance(seed, dict) else safe_json_loads(seed, {})
+    if not isinstance(parsed, dict):
+        parsed = {}
+    routing = parsed.get("routing_policy") if isinstance(parsed.get("routing_policy"), dict) else {}
+    policy = dict(routing)
+    for key in (
+        "retrieval_keywords",
+        "campaign_tags",
+        "shadow_goal_id",
+        "supershadow_goal_id",
+        "literature_defaults",
+        "bounded_test_templates",
+    ):
+        if key in parsed and key not in policy:
+            policy[key] = parsed[key]
+    if slug and "shadow_goal_id" not in policy:
+        policy["shadow_goal_id"] = f"global_{slug}"
+    if slug and "supershadow_goal_id" not in policy:
+        policy["supershadow_goal_id"] = f"global_{slug}_supershadow"
+    return policy
+
+
 def _canonical_hash(parts: list[Any]) -> str:
     return hashlib.sha256(_json(parts).encode("utf-8")).hexdigest()
 
@@ -213,6 +236,8 @@ class LimaDatabase:
                     review_status TEXT NOT NULL DEFAULT 'not_reviewed',
                     formal_backend TEXT NOT NULL DEFAULT '',
                     formal_payload_json TEXT NOT NULL DEFAULT '{}',
+                    estimated_formalization_value REAL NOT NULL DEFAULT 0,
+                    estimated_execution_cost REAL NOT NULL DEFAULT 0,
                     aristotle_ref_json TEXT NOT NULL DEFAULT '{}',
                     result_summary_md TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -229,6 +254,12 @@ class LimaDatabase:
                     obligation_id TEXT NOT NULL,
                     universe_id TEXT,
                     claim_id TEXT,
+                    family_id TEXT,
+                    claim_ids_json TEXT NOT NULL DEFAULT '[]',
+                    rupture_summary_md TEXT NOT NULL DEFAULT '',
+                    literature_links_json TEXT NOT NULL DEFAULT '[]',
+                    policy_revision_id TEXT NOT NULL DEFAULT '',
+                    lineage_json TEXT NOT NULL DEFAULT '{}',
                     backend_kind TEXT NOT NULL DEFAULT 'local_stub',
                     status TEXT NOT NULL DEFAULT 'queued_formal_review',
                     review_decision TEXT NOT NULL DEFAULT 'pending',
@@ -410,8 +441,19 @@ class LimaDatabase:
         _ensure_column(conn, "lima_obligation", "review_status", "TEXT NOT NULL DEFAULT 'not_reviewed'")
         _ensure_column(conn, "lima_obligation", "formal_backend", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "formal_payload_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_obligation", "estimated_formalization_value", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "lima_obligation", "estimated_execution_cost", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "lima_formal_review_queue", "family_id", "TEXT")
+        _ensure_column(conn, "lima_formal_review_queue", "claim_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "lima_formal_review_queue", "rupture_summary_md", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_formal_review_queue", "literature_links_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "lima_formal_review_queue", "policy_revision_id", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_formal_review_queue", "lineage_json", "TEXT NOT NULL DEFAULT '{}'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lima_obligation_canonical ON lima_obligation(problem_id, canonical_hash)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lima_formal_family ON lima_formal_review_queue(family_id)"
         )
 
     def ensure_default_problem(self) -> str:
@@ -422,6 +464,16 @@ class LimaDatabase:
                 "Odd/even induced dynamics and 2-adic completions are plausible bridge languages.",
                 "Naive global height monotonicity is a known trap.",
             ],
+            "retrieval_keywords": ["Collatz", "3x+1", "parity vector", "residue class"],
+            "campaign_tags": ["collatz", "3x+1"],
+            "routing_policy": {
+                "retrieval_keywords": ["Collatz", "3x+1", "parity vector", "residue class"],
+                "campaign_tags": ["collatz", "3x+1"],
+                "shadow_goal_id": "global_collatz",
+                "supershadow_goal_id": "global_collatz_supershadow",
+                "literature_defaults": ["local", "local_file"],
+                "bounded_test_templates": ["residue_scan_mod_16", "counterexample_hunt"],
+            },
             "default_modes": ["balanced", "wild", "stress", "forge"],
         }
         return self.ensure_problem(
@@ -458,6 +510,7 @@ class LimaDatabase:
             seed_raw = seed if seed.strip() else "{}"
         else:
             seed_raw = _json(seed or {})
+        routing_policy_raw = _json(_routing_policy_from_seed(seed_raw, slug=slug))
         conn = self._connect()
         try:
             row = conn.execute("SELECT id FROM lima_problem WHERE slug = ?", (slug,)).fetchone()
@@ -470,10 +523,11 @@ class LimaDatabase:
                         statement_md = COALESCE(NULLIF(?, ''), statement_md),
                         domain = COALESCE(NULLIF(?, ''), domain),
                         default_goal_text = COALESCE(NULLIF(?, ''), default_goal_text),
+                        routing_policy_json = COALESCE(NULLIF(?, '{}'), routing_policy_json),
                         updated_at = ?
                     WHERE id = ?
                     """,
-                    (title, statement_md, domain, default_goal_text, now, pid),
+                    (title, statement_md, domain, default_goal_text, routing_policy_raw, now, pid),
                 )
             else:
                 pid = _new_id()
@@ -481,11 +535,22 @@ class LimaDatabase:
                     """
                     INSERT INTO lima_problem (
                         id, slug, title, statement_md, domain, status, default_goal_text,
-                        seed_packet_json, created_at, updated_at
+                        seed_packet_json, routing_policy_json, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
                     """,
-                    (pid, slug, title, statement_md, domain, default_goal_text, seed_raw, now, now),
+                    (
+                        pid,
+                        slug,
+                        title,
+                        statement_md,
+                        domain,
+                        default_goal_text,
+                        seed_raw,
+                        routing_policy_raw,
+                        now,
+                        now,
+                    ),
                 )
                 conn.execute(
                     """
@@ -521,6 +586,7 @@ class LimaDatabase:
             seed_raw = seed if seed.strip() else "{}"
         else:
             seed_raw = _json(seed or {})
+        routing_policy_raw = _json(_routing_policy_from_seed(seed_raw, slug=normalized_slug))
         conn = self._connect()
         try:
             existing = conn.execute(
@@ -534,6 +600,7 @@ class LimaDatabase:
                     UPDATE lima_problem
                     SET title = ?, statement_md = ?, domain = ?,
                         default_goal_text = ?, seed_packet_json = ?, status = 'active',
+                        routing_policy_json = ?,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -543,6 +610,7 @@ class LimaDatabase:
                         domain[:120],
                         default_goal_text[:4000],
                         seed_raw,
+                        routing_policy_raw,
                         now,
                         problem_id,
                     ),
@@ -569,9 +637,9 @@ class LimaDatabase:
                 """
                 INSERT INTO lima_problem (
                     id, slug, title, statement_md, domain, status, default_goal_text,
-                    seed_packet_json, created_at, updated_at
+                    seed_packet_json, routing_policy_json, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
                 """,
                 (
                     problem_id,
@@ -581,6 +649,7 @@ class LimaDatabase:
                     domain[:120],
                     default_goal_text[:4000],
                     seed_raw,
+                    routing_policy_raw,
                     now,
                     now,
                 ),
@@ -939,9 +1008,12 @@ class LimaDatabase:
                     lineage = {
                         "source_problem_id": problem_id,
                         "source_run_id": run_id,
+                        "source_universe_id": universe_id,
                         "source_universe_title": universe.title,
+                        "source_family_id": family_id,
                         "source_family_key": universe.family_key,
                         "source_claim_id": claim_id,
+                        "claim_ids": [claim_id] if claim_id else [],
                         "rupture_summary": str(rupture.get("summary_md") or ""),
                         "policy_snapshot": policy_snapshot,
                         "zero_live_authority": True,
@@ -954,9 +1026,10 @@ class LimaDatabase:
                             title, statement_md, lean_goal, status, priority,
                             why_exists_md, prove_or_kill_md, lineage_json, canonical_hash,
                             review_status, formal_backend, formal_payload_json,
+                            estimated_formalization_value, estimated_execution_cost,
                             aristotle_ref_json, result_summary_md, created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '', ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '', ?, ?)
                         """,
                         (
                             obligation_id,
@@ -976,6 +1049,8 @@ class LimaDatabase:
                             str(obligation.review_status or "not_reviewed")[:32],
                             str(obligation.formal_backend or "")[:80],
                             _json({}),
+                            float(obligation.estimated_formalization_value or 0),
+                            float(obligation.estimated_execution_cost or 0),
                             now,
                             now,
                         ),
@@ -1543,6 +1618,12 @@ class LimaDatabase:
         claim_id: str | None,
         backend_kind: str,
         packet: dict[str, Any],
+        family_id: str | None = None,
+        claim_ids: list[str] | None = None,
+        rupture_summary_md: str = "",
+        literature_links: list[dict[str, Any]] | None = None,
+        policy_revision_id: str = "",
+        lineage: dict[str, Any] | None = None,
     ) -> str:
         now = _now()
         existing = None
@@ -1564,10 +1645,12 @@ class LimaDatabase:
                 """
                 INSERT INTO lima_formal_review_queue (
                     id, problem_id, obligation_id, universe_id, claim_id,
+                    family_id, claim_ids_json, rupture_summary_md,
+                    literature_links_json, policy_revision_id, lineage_json,
                     backend_kind, status, review_decision, packet_json,
                     backend_result_json, created_at, reviewed_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 'queued_formal_review', 'pending', ?, '{}', ?, NULL, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued_formal_review', 'pending', ?, '{}', ?, NULL, ?)
                 """,
                 (
                     item_id,
@@ -1575,6 +1658,12 @@ class LimaDatabase:
                     obligation_id,
                     universe_id or None,
                     claim_id or None,
+                    family_id or None,
+                    _json(claim_ids or ([claim_id] if claim_id else [])),
+                    rupture_summary_md[:8000],
+                    _json(literature_links or []),
+                    policy_revision_id[:120],
+                    _json(lineage or {}),
                     backend_kind[:80],
                     _json(packet),
                     now,

@@ -364,7 +364,20 @@
           {% if obligation.prove_or_kill_md %}
           <p class="mt-1 text-xs leading-relaxed text-zinc-500"><span class="text-zinc-400">Prove or kill:</span> {{ obligation.prove_or_kill_md }}</p>
           {% endif %}
-          {% if obligation.status in ['queued_formal_review', 'inconclusive'] or obligation.obligation_kind in ['lean_goal', 'bridge_lemma', 'equivalence', 'literature_crosscheck'] %}
+          <p class="mt-2 text-[11px] font-mono text-zinc-600">formal value {{ obligation.estimated_formalization_value or 0 }} / cost {{ obligation.estimated_execution_cost or 0 }}</p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            {% if obligation.obligation_kind in ['finite_check', 'counterexample_search', 'invariant_check', 'consistency'] %}
+            <form hx-post="/api/lima/obligation/{{ obligation.id }}/rerun-local" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="rounded-lg bg-sky-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-70">Rerun locally</button>
+            </form>
+            {% endif %}
+            {% if obligation.status != 'archived' %}
+            <form hx-post="/api/lima/obligation/{{ obligation.id }}/archive" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-zinc-500 ring-1 ring-zinc-700/70 hover:bg-zinc-900 disabled:opacity-70">Archive</button>
+            </form>
+            {% endif %}
+          </div>
+          {% if obligation.status != 'archived' and (obligation.status in ['queued_formal_review', 'inconclusive'] or obligation.obligation_kind in ['lean_goal', 'bridge_lemma', 'equivalence', 'literature_crosscheck']) %}
           <div class="mt-3 flex flex-wrap gap-2">
             <form hx-post="/api/lima/obligation/{{ obligation.id }}/formal-review" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
               <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Queue formal review</button>
@@ -403,6 +416,7 @@
           <select name="backend_selection" class="rounded-lg border border-zinc-700/80 bg-zinc-950 px-2 py-2 text-xs text-zinc-100">
             <option value="configured">Configured</option>
             <option value="local">Local</option>
+            <option value="local_file">LocalFile</option>
             <option value="arxiv">arXiv</option>
             <option value="semantic_scholar">Semantic Scholar</option>
             <option value="crossref">Crossref</option>
@@ -458,6 +472,15 @@
             </div>
             <p class="mt-2 text-sm text-zinc-200">{{ review.obligation_title }}</p>
             <p class="mt-1 text-[11px] text-zinc-500">decision {{ review.review_decision }} / {{ review.created_at }}</p>
+            {% if review.family_id or review.claim_ids_json or review.rupture_summary_md %}
+            <details class="mt-2 text-xs">
+              <summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400">Lineage packet</summary>
+              <p class="mt-2 text-[11px] font-mono text-zinc-600">family {{ review.family_id or 'unknown' }} / claims {{ review.claim_ids_json }}</p>
+              {% if review.rupture_summary_md %}
+              <p class="mt-2 text-[11px] leading-relaxed text-zinc-500">{{ review.rupture_summary_md }}</p>
+              {% endif %}
+            </details>
+            {% endif %}
           </div>
           {% else %}
           <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No formal review packets yet.</p>
