@@ -293,10 +293,14 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         assert run_resp.status_code == 200
         assert "Goldbach conjecture bridge-obligation atlas" in run_resp.text
         assert "Formal obligations" in run_resp.text
+        assert "Hold for obligations" in run_resp.text
 
         problem = app_mod.lima_db.get_problem("goldbach")
         handoffs = app_mod.lima_db.list_handoffs(problem["id"], status="pending")
         assert handoffs
+        hold_resp = client.post(f"/api/lima/handoff/{handoffs[0]['id']}/hold")
+        assert hold_resp.status_code == 200
+        assert "held for obligation review" in hold_resp.text
         approve_resp = client.post(f"/api/lima/handoff/{handoffs[0]['id']}/approve")
         assert approve_resp.status_code == 200
         assert "no live Aristotle job was created" in approve_resp.text

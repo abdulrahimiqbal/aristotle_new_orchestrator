@@ -1039,6 +1039,23 @@ async def lima_handoff_approve(
     )
 
 
+@app.post("/api/lima/handoff/{handoff_id}/hold", response_class=HTMLResponse)
+async def lima_handoff_hold(
+    request: Request, handoff_id: str, _auth: OperatorWriteAuth
+):
+    row = lima_db.get_handoff(handoff_id)
+    if not row:
+        return HTMLResponse("Unknown Lima handoff", status_code=404)
+    ok, msg = lima_db.set_handoff_status(handoff_id, "held")
+    flash = {"ok": ok, "handoff": "held", "error": None if ok else msg}
+    problem_id = str(row.get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=problem_id, lima_flash=flash),
+    )
+
+
 @app.post("/api/lima/handoff/{handoff_id}/reject", response_class=HTMLResponse)
 async def lima_handoff_reject(
     request: Request, handoff_id: str, _auth: OperatorWriteAuth

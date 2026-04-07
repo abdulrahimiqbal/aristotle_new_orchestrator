@@ -46,10 +46,10 @@ def _decision_state(
         return {
             "label": "Review needed",
             "title": f"{count} handoff packet{'s' if count != 1 else ''} waiting",
-            "body": "Read the recommendation, then approve or reject. Approval keeps it as a reviewed packet and does not create a live Aristotle job.",
+            "body": "Read the recommendation, then hold, approve, or reject. Approval keeps it as a reviewed packet and does not create a live Aristotle job.",
             "tone": "review",
             "next_title": "Review the handoff queue",
-            "next_body": "Start with the packets that Lima thinks survived enough pressure to be worth human judgment.",
+            "next_body": "Start with the queued packet and its formal obligations before treating the idea as ready for promotion.",
         }
     if latest_run:
         obligation_count = len(queued_obligations)
@@ -69,6 +69,62 @@ def _decision_state(
         "tone": "ready",
         "next_title": "Run the first search pass",
         "next_body": "This creates the first research memory layer for the selected problem.",
+    }
+
+
+def _review_guidance(
+    *,
+    pending_handoffs: list[dict[str, Any]],
+    queued_obligations: list[dict[str, Any]],
+    fractures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not pending_handoffs:
+        return {}
+
+    warning_text = " ".join(
+        [
+            str(h.get("preview", {}).get("fracture_summary") or "")
+            for h in pending_handoffs
+        ]
+        + [str(f.get("failure_type") or "") for f in fractures]
+        + [str(f.get("breakpoint_md") or "") for f in fractures]
+    ).lower()
+    has_prior_art_pressure = "prior_art" in warning_text or "prior-art" in warning_text
+
+    if has_prior_art_pressure and queued_obligations:
+        body = (
+            "Hold the packet for obligation checks. Lima found prior-art pressure, so the useful next move is to test the narrow finite and Lean obligations before approval."
+        )
+        bullets = [
+            f"Inspect {len(queued_obligations)} queued obligation(s).",
+            "Check novelty against the literature memory.",
+            "Reject if the quotient move only restates known 3x+1 cycle or residue work.",
+        ]
+    elif queued_obligations:
+        body = (
+            "Hold the packet until the queued obligations are inspected. The packet may be useful, but the next decision should be grounded in the formal checks."
+        )
+        bullets = [
+            f"Inspect {len(queued_obligations)} queued obligation(s).",
+            "Approve only if the obligations remain narrow and non-vacuous.",
+            "Approval still does not create a live Aristotle job.",
+        ]
+    else:
+        body = (
+            "Review the packet before approval. There are no queued obligations attached, so the decision depends on the packet evidence and fracture summary."
+        )
+        bullets = [
+            "Check the fracture summary.",
+            "Approve only if the packet has a concrete next test.",
+            "Approval still does not create a live Aristotle job.",
+        ]
+
+    return {
+        "label": "Recommendation",
+        "title": "Hold for obligation review" if queued_obligations else "Review before approval",
+        "body": body,
+        "bullets": bullets,
+        "primary_action_label": "Hold for obligations" if queued_obligations else "Hold for review",
     }
 
 
@@ -103,6 +159,11 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         universes=universes,
         queued_obligations=queued_obligations,
     )
+    review_guidance = _review_guidance(
+        pending_handoffs=pending_handoffs,
+        queued_obligations=queued_obligations,
+        fractures=fractures,
+    )
 
     return {
         "lima_problem": snapshot.get("problem") or {},
@@ -128,6 +189,7 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_flash": lima_flash,
         "lima_primary_cta": "Run Lima",
         "lima_decision_state": decision_state,
+        "lima_review_guidance": review_guidance,
         "lima_modes": [
             {
                 "value": "balanced",

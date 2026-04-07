@@ -1323,8 +1323,8 @@ class LimaDatabase:
         row = self.get_handoff(handoff_id)
         if not row:
             return False, "unknown handoff"
-        if str(row.get("status")) != "pending":
-            return False, "not pending"
+        if str(row.get("status")) not in {"pending", "held"}:
+            return False, "not reviewable"
         conn = self._connect()
         try:
             conn.execute(
