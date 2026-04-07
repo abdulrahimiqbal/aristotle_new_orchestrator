@@ -52,6 +52,8 @@
               Lima handoff rejected and retained in fracture-aware memory.
             {% elif lima_flash.get('literature_refresh') %}
               Literature refresh stored {{ lima_flash.literature_refresh.source_count }} source(s) through {{ lima_flash.literature_refresh.backend }}.
+            {% elif lima_flash.get('problem') %}
+              Problem {{ lima_flash.problem }}: <span class="font-semibold">{{ lima_flash.problem_title }}</span>.
             {% else %}
               {{ lima_flash }}
             {% endif %}
@@ -89,11 +91,60 @@
           </button>
         </form>
 
+        <details class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+          <summary class="cursor-pointer select-none text-sm font-medium text-zinc-300">Add a new Lima problem</summary>
+          <form hx-post="/api/lima/problem"
+                hx-target="#campaign-panel"
+                hx-swap="innerHTML"
+                hx-disabled-elt="button"
+                class="mt-4 grid gap-3">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Title</span>
+                <input name="title" required placeholder="Goldbach conjecture"
+                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+              </label>
+              <label>
+                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Slug</span>
+                <input name="slug" placeholder="goldbach"
+                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+              </label>
+            </div>
+            <label>
+              <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Statement</span>
+              <textarea name="statement_md" required rows="3" placeholder="State the conjecture or research problem..."
+                        class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"></textarea>
+            </label>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Domain</span>
+                <input name="domain" value="number_theory"
+                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+              </label>
+              <label>
+                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Seed packet JSON or notes</span>
+                <input name="seed_packet_json" placeholder='{"known_frontier":["..."]}'
+                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+              </label>
+            </div>
+            <label>
+              <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Default goal</span>
+              <input name="default_goal_text" placeholder="Optional problem-specific Lima mission"
+                     class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+            </label>
+            <button type="submit"
+                    class="w-fit rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-700 hover:bg-zinc-700 disabled:opacity-70">
+              Create problem
+            </button>
+          </form>
+        </details>
+
         <div class="flex flex-wrap gap-2 text-[11px] font-mono text-zinc-500">
           <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">db: {{ operator.lima_database_path }}</span>
           <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">auto-loop: {% if operator.lima_enabled %}on{% else %}off{% endif %} / {{ operator.lima_loop_interval_sec }}s</span>
           <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">universes/run: {{ operator.lima_max_universes_per_run }}</span>
           <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">obligations/run: {{ operator.lima_max_obligations_per_run }}</span>
+          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">literature: {{ operator.lima_literature_backends }}</span>
         </div>
       </div>
 
@@ -151,8 +202,16 @@
           <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Literature memory</h2>
           <p class="mt-1 text-xs text-zinc-500">Local/manual stubs now; future APIs can plug into the same interface.</p>
         </div>
-        <form hx-post="/api/lima/literature/refresh" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+        <form hx-post="/api/lima/literature/refresh" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button" class="flex items-center gap-2">
           <input type="hidden" name="problem_slug" value="{{ lima_problem.slug }}" />
+          <select name="backend_selection" class="rounded-lg bg-zinc-950 border border-zinc-700/80 px-2 py-2 text-xs text-zinc-100">
+            <option value="configured">Configured</option>
+            <option value="local">Local</option>
+            <option value="arxiv">arXiv</option>
+            <option value="semantic_scholar">Semantic Scholar</option>
+            <option value="crossref">Crossref</option>
+            <option value="all">All</option>
+          </select>
           <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-700 ring-1 ring-zinc-600/50 disabled:opacity-70">Refresh</button>
         </form>
       </div>

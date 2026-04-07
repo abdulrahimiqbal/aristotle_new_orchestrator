@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from orchestrator import config as app_config
-from orchestrator.lima_models import LimaUniverseSpec, json_dumps, safe_json_loads, slugify
+from orchestrator.lima_models import LimaUniverseSpec, safe_json_loads, slugify
 
 
 def _new_id() -> str:
@@ -448,6 +448,104 @@ class LimaDatabase:
                 )
             conn.commit()
             return pid
+        finally:
+            conn.close()
+
+    def create_problem(
+        self,
+        *,
+        slug: str,
+        title: str,
+        statement_md: str,
+        domain: str,
+        default_goal_text: str,
+        seed_packet_json: dict[str, Any] | str | None = None,
+    ) -> tuple[str, bool]:
+        now = _now()
+        normalized_slug = slugify(slug or title, fallback="problem")
+        seed = seed_packet_json
+        if isinstance(seed, str):
+            seed_raw = seed if seed.strip() else "{}"
+        else:
+            seed_raw = _json(seed or {})
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM lima_problem WHERE slug = ?",
+                (normalized_slug,),
+            ).fetchone()
+            if existing:
+                problem_id = str(existing["id"])
+                conn.execute(
+                    """
+                    UPDATE lima_problem
+                    SET title = ?, statement_md = ?, domain = ?,
+                        default_goal_text = ?, seed_packet_json = ?, status = 'active',
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        title[:500],
+                        statement_md,
+                        domain[:120],
+                        default_goal_text[:4000],
+                        seed_raw,
+                        now,
+                        problem_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO lima_state (
+                        problem_id, revision, frontier_summary_md, frontier_json,
+                        pressure_map_json, worldview_json, policy_json,
+                        generation_priors_json, rupture_policy_json,
+                        literature_policy_json, formal_policy_json, updated_at
+                    )
+                    VALUES (?, 0, '', ?, '{}', '{}', '{}', '{}', '{}', '{}', '{}', ?)
+                    ON CONFLICT(problem_id) DO UPDATE SET
+                        frontier_json = excluded.frontier_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (problem_id, seed_raw, now),
+                )
+                conn.commit()
+                return problem_id, False
+            problem_id = _new_id()
+            conn.execute(
+                """
+                INSERT INTO lima_problem (
+                    id, slug, title, statement_md, domain, status, default_goal_text,
+                    seed_packet_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                """,
+                (
+                    problem_id,
+                    normalized_slug,
+                    title[:500],
+                    statement_md,
+                    domain[:120],
+                    default_goal_text[:4000],
+                    seed_raw,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO lima_state (
+                    problem_id, revision, frontier_summary_md, frontier_json,
+                    pressure_map_json, worldview_json, policy_json,
+                    generation_priors_json, rupture_policy_json,
+                    literature_policy_json, formal_policy_json, updated_at
+                )
+                VALUES (?, 0, '', ?, '{}', '{}', '{}', '{}', '{}', '{}', '{}', ?)
+                """,
+                (problem_id, seed_raw, now),
+            )
+            conn.commit()
+            return problem_id, True
         finally:
             conn.close()
 

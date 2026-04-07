@@ -11,7 +11,12 @@ from orchestrator import config as app_config
 from orchestrator.db import Database
 from orchestrator.lima_agent import run_lima
 from orchestrator.lima_db import LimaDatabase
-from orchestrator.lima_literature import refresh_literature
+from orchestrator.lima_literature import (
+    ArxivLiteratureBackend,
+    CrossrefLiteratureBackend,
+    SemanticScholarLiteratureBackend,
+    refresh_literature,
+)
 from orchestrator.lima_meta import analyze_and_update_policy
 from orchestrator.lima_models import (
     LimaClaimSpec,
@@ -150,6 +155,77 @@ def test_lima_literature_and_meta_policy_persistence(tmp_path: Path) -> None:
     assert "zero-live-authority" in revisions[0]["change_reason_md"] or "zero-live-authority".replace("-", " ") in revisions[0]["change_reason_md"].lower()
 
 
+def test_lima_real_literature_backends_parse_http_payloads(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, *, text: str = "", payload: dict | None = None) -> None:
+            self.text = text
+            self._payload = payload or {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self._payload
+
+    def fake_get(url, **kwargs):
+        if "export.arxiv.org" in url:
+            return FakeResponse(
+                text="""<?xml version="1.0" encoding="UTF-8"?>
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2401.00001v1</id>
+                    <title>Collatz residue dynamics</title>
+                    <summary>A note about residue dynamics.</summary>
+                    <published>2024-01-01T00:00:00Z</published>
+                    <author><name>A. Author</name></author>
+                  </entry>
+                </feed>"""
+            )
+        if "semanticscholar" in url:
+            return FakeResponse(
+                payload={
+                    "data": [
+                        {
+                            "paperId": "p1",
+                            "title": "Semantic Collatz paper",
+                            "authors": [{"name": "B. Author"}],
+                            "year": 2025,
+                            "venue": "Venue",
+                            "abstract": "Abstract",
+                            "url": "https://example.com/p1",
+                            "externalIds": {"DOI": "10.1/test", "ArXiv": "2501.1"},
+                        }
+                    ]
+                }
+            )
+        return FakeResponse(
+            payload={
+                "message": {
+                    "items": [
+                        {
+                            "title": ["Crossref Collatz paper"],
+                            "author": [{"given": "C.", "family": "Author"}],
+                            "published-online": {"date-parts": [[2023, 1, 1]]},
+                            "container-title": ["Journal"],
+                            "DOI": "10.2/test",
+                            "URL": "https://doi.org/10.2/test",
+                            "abstract": "<jats:p>Crossref abstract.</jats:p>",
+                        }
+                    ]
+                }
+            }
+        )
+
+    monkeypatch.setattr("orchestrator.lima_literature.httpx.get", fake_get)
+    problem = {"slug": "collatz", "title": "Collatz conjecture"}
+    queries = ["Collatz residue dynamics"]
+    assert ArxivLiteratureBackend().search(problem=problem, queries=queries, limit=1)[0].arxiv_id == "2401.00001v1"
+    assert SemanticScholarLiteratureBackend().search(problem=problem, queries=queries, limit=1)[0].doi == "10.1/test"
+    crossref = CrossrefLiteratureBackend().search(problem=problem, queries=queries, limit=1)[0]
+    assert crossref.title == "Crossref Collatz paper"
+    assert crossref.year == 2023
+
+
 def test_lima_run_persists_memory_without_live_main_queue(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -195,16 +271,30 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         assert resp.status_code == 200
         assert "Lima Lab" in resp.text
         assert "zero live authority" in resp.text
+        assert "Add a new Lima problem" in resp.text
+
+        create_resp = client.post(
+            "/api/lima/problem",
+            data={
+                "title": "Goldbach conjecture",
+                "slug": "goldbach",
+                "statement_md": "Every even integer greater than 2 is a sum of two primes.",
+                "domain": "number_theory",
+                "default_goal_text": "Stress-test additive-number-theory universes.",
+            },
+        )
+        assert create_resp.status_code == 200
+        assert "Goldbach conjecture" in create_resp.text
 
         run_resp = client.post(
             "/api/lima/run",
-            data={"problem_slug": "collatz", "mode": "balanced"},
+            data={"problem_slug": "goldbach", "mode": "balanced"},
         )
         assert run_resp.status_code == 200
-        assert "Odd-state quotient bridge" in run_resp.text
+        assert "Goldbach conjecture bridge-obligation atlas" in run_resp.text
         assert "Formal obligations" in run_resp.text
 
-        problem = app_mod.lima_db.get_problem("collatz")
+        problem = app_mod.lima_db.get_problem("goldbach")
         handoffs = app_mod.lima_db.list_handoffs(problem["id"], status="pending")
         assert handoffs
         approve_resp = client.post(f"/api/lima/handoff/{handoffs[0]['id']}/approve")

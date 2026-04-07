@@ -297,6 +297,119 @@ def _local_generation(
     pressure_map: dict[str, Any],
     literature_refresh: dict[str, Any],
 ) -> LimaGenerationResponse:
+    problem_title = str(problem.get("title") or problem.get("slug") or "the problem")
+    problem_slug = str(problem.get("slug") or "").lower()
+    if "collatz" not in problem_slug and "collatz" not in problem_title.lower():
+        generic_family = {
+            "wild": "structural_completion_atlas",
+            "stress": "counterexample_boundary_atlas",
+            "forge": "minimal_bridge_obligation_atlas",
+            "balanced": "minimal_bridge_obligation_atlas",
+        }[mode]
+        universe = LimaUniverseSpec(
+            title=f"{problem_title} bridge-obligation atlas",
+            family_key=generic_family,
+            family_kind="new" if mode == "wild" else "adjacent",
+            branch_of_math=str(problem.get("domain") or "general mathematics"),
+            solved_world=(
+                "A decomposition of the problem into local regimes where every "
+                "candidate mechanism is paired with a falsifier and a narrow bridge."
+            ),
+            why_problem_is_easy_here=(
+                "The conjecture becomes easier only if each regime has a precise "
+                "translation back to the original statement and a small obstruction search."
+            ),
+            core_story_md=(
+                f"Lima starts {problem_title} with a conservative atlas: define regimes, "
+                "state bridge obligations, and kill any regime that lacks a counterexample boundary."
+            ),
+            core_objects=[
+                LimaObjectSpec(
+                    object_kind="state_space",
+                    name="ProblemRegimeAtlas",
+                    description_md="A problem-specific partition into regimes with explicit bridge obligations.",
+                    formal_shape="Regime -> Proposition",
+                    payload={"problem_slug": problem.get("slug")},
+                ),
+                LimaObjectSpec(
+                    object_kind="bridge",
+                    name="OriginalStatementBridge",
+                    description_md="A translation layer from local regime claims back to the original conjecture.",
+                    formal_shape="local_claim -> original_statement",
+                    payload={},
+                ),
+            ],
+            laws=[
+                LimaClaimSpec(
+                    claim_kind="law",
+                    title="Every regime needs a falsifier",
+                    statement_md="A regime is not useful unless it has a bounded obstruction search or a formal bridge target.",
+                    priority=4,
+                )
+            ],
+            backward_translation=[
+                "Map each local regime claim back to the original conjecture statement.",
+                "Reject regimes whose assumptions cannot be stated independently of the target conclusion.",
+            ],
+            bridge_lemmas=[
+                LimaClaimSpec(
+                    claim_kind="bridge_lemma",
+                    title="Regime bridge implies original reduction",
+                    statement_md="If every regime bridge is verified, the atlas reduces the original problem to local obligations.",
+                    priority=5,
+                )
+            ],
+            conditional_theorem=LimaClaimSpec(
+                claim_kind="conditional_theorem",
+                title="Atlas reduction theorem",
+                statement_md="If the regime atlas covers the problem and all bridge obligations survive rupture, the original conjecture is reduced.",
+                priority=5,
+            ),
+            kill_tests=[
+                LimaClaimSpec(
+                    claim_kind="kill_test",
+                    title="Vacuity audit",
+                    statement_md="Reject any regime that assumes the original conjecture or has no independent falsifier.",
+                    priority=5,
+                )
+            ],
+            expected_failure_mode="The atlas may be vacuous, non-covering, or too broad to formalize.",
+            literature_queries=[
+                f"{problem_title} survey",
+                f"{problem_title} counterexample methods",
+            ],
+            formalization_targets=[
+                LimaObligationSpec(
+                    obligation_kind="equivalence",
+                    title="State the first regime bridge",
+                    statement_md="Write one regime-to-original-statement bridge as a formal obligation.",
+                    priority=4,
+                )
+            ],
+            scores={
+                "compression_score": 3,
+                "fit_score": 3,
+                "novelty_score": 3,
+                "falsifiability_score": 4,
+                "bridgeability_score": 4,
+                "formalizability_score": 3,
+                "theorem_yield_score": 3,
+                "literature_novelty_score": 3,
+            },
+        )
+        return LimaGenerationResponse(
+            frontier_summary_md=(
+                f"{problem_title} is newly registered in Lima; frontier memory starts "
+                "from the user statement, seed packet, literature routing, and fracture constraints."
+            ),
+            pressure_map=pressure_map,
+            run_summary_md=(
+                f"Lima {mode} run initialized {problem_title} with a conservative "
+                "bridge-obligation atlas and deterministic rupture checks."
+            ),
+            universes=[universe],
+            policy_notes=["Generic problem fallback used; no live authority granted."],
+        )
     family_key = {
         "wild": "completion_boundary_sheaf",
         "stress": "residue_fracture_boundary",

@@ -132,6 +132,7 @@ def _operator_runtime_context() -> dict:
         "lima_max_obligations_per_run": int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
         "lima_max_literature_results": int(app_config.LIMA_MAX_LITERATURE_RESULTS),
         "lima_auto_policy_updates": bool(app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES),
+        "lima_literature_backends": app_config.LIMA_LITERATURE_BACKENDS,
     }
 
 
@@ -950,18 +951,69 @@ async def lima_run_fragment(
     )
 
 
+@app.post("/api/lima/problem", response_class=HTMLResponse)
+async def lima_problem_create_fragment(
+    request: Request,
+    _auth: OperatorWriteAuth,
+    slug: str = Form(""),
+    title: str = Form(...),
+    statement_md: str = Form(...),
+    domain: str = Form("number_theory"),
+    default_goal_text: str = Form(""),
+    seed_packet_json: str = Form(""),
+):
+    raw_seed = (seed_packet_json or "").strip()
+    seed_payload: dict[str, Any] = {}
+    if raw_seed:
+        try:
+            parsed = json.loads(raw_seed)
+            seed_payload = parsed if isinstance(parsed, dict) else {"notes": raw_seed}
+        except json.JSONDecodeError:
+            seed_payload = {"notes": raw_seed}
+    if not default_goal_text.strip():
+        default_goal_text = (
+            "Find falsification-first conceptual universes for this problem, "
+            "compile claims and obligations, and preserve fracture memory."
+        )
+    problem_id, created = lima_db.create_problem(
+        slug=slug or title,
+        title=title.strip(),
+        statement_md=statement_md.strip(),
+        domain=domain.strip() or "unspecified",
+        default_goal_text=default_goal_text.strip(),
+        seed_packet_json=seed_payload,
+    )
+    problem = lima_db.get_problem(problem_id)
+    flash = {
+        "ok": True,
+        "problem": "created" if created else "updated",
+        "problem_title": problem.get("title"),
+    }
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=str(problem.get("slug") or problem_id), lima_flash=flash),
+    )
+
+
 @app.post("/api/lima/literature/refresh", response_class=HTMLResponse)
 async def lima_literature_refresh_fragment(
     request: Request,
     _auth: OperatorWriteAuth,
     problem_slug: str = Form(""),
+    backend_selection: str = Form("configured"),
 ):
     selected_problem = (problem_slug or app_config.LIMA_DEFAULT_PROBLEM).strip()
     lima_db.initialize()
     problem = lima_db.get_problem(selected_problem)
     state = lima_db.get_state(str(problem["id"]))
     pressure = json.loads(state.get("pressure_map_json") or "{}")
-    res = refresh_literature(lima_db, problem=problem, pressure_map=pressure)
+    res = refresh_literature(
+        lima_db,
+        problem=problem,
+        pressure_map=pressure,
+        backend_selection=backend_selection or "configured",
+    )
     flash = {"ok": True, "literature_refresh": res}
     return templates.TemplateResponse(
         request,

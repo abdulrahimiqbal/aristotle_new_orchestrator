@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Protocol
+import xml.etree.ElementTree as ET
+
+import httpx
 
 from orchestrator import config as app_config
 from orchestrator.lima_db import LimaDatabase
@@ -110,6 +114,202 @@ class LocalManualLiteratureBackend:
         return seeds[: max(0, limit)]
 
 
+class CompositeLiteratureBackend:
+    def __init__(self, backends: list[LiteratureBackend]) -> None:
+        self.backends = backends or [LocalManualLiteratureBackend()]
+
+    def search(
+        self, *, problem: dict[str, Any], queries: list[str], limit: int
+    ) -> list[LiteratureRecord]:
+        out: list[LiteratureRecord] = []
+        seen: set[str] = set()
+        for backend in self.backends:
+            if len(out) >= limit:
+                break
+            try:
+                records = backend.search(
+                    problem=problem, queries=queries, limit=max(0, limit - len(out))
+                )
+            except Exception:
+                records = []
+            for record in records:
+                key = (
+                    record.doi.lower()
+                    or record.arxiv_id.lower()
+                    or re.sub(r"\s+", " ", record.title.lower()).strip()
+                )
+                if not key or key in seen:
+                    continue
+                out.append(record)
+                seen.add(key)
+                if len(out) >= limit:
+                    break
+        return out[:limit]
+
+
+class HttpLiteratureBackend:
+    source_name = "http"
+
+    def __init__(self, *, timeout: float | None = None) -> None:
+        self.timeout = timeout or float(app_config.LIMA_LITERATURE_HTTP_TIMEOUT_SEC)
+
+    def _get(self, url: str, **kwargs: Any) -> httpx.Response:
+        response = httpx.get(url, timeout=self.timeout, **kwargs)
+        response.raise_for_status()
+        return response
+
+
+class ArxivLiteratureBackend(HttpLiteratureBackend):
+    source_name = "arxiv"
+    endpoint = "https://export.arxiv.org/api/query"
+
+    def search(
+        self, *, problem: dict[str, Any], queries: list[str], limit: int
+    ) -> list[LiteratureRecord]:
+        records: list[LiteratureRecord] = []
+        for query in queries[:3]:
+            if len(records) >= limit:
+                break
+            response = self._get(
+                self.endpoint,
+                params={
+                    "search_query": f"all:{query}",
+                    "start": 0,
+                    "max_results": max(1, min(limit - len(records), 5)),
+                    "sortBy": "relevance",
+                    "sortOrder": "descending",
+                },
+                headers={"User-Agent": _user_agent()},
+            )
+            records.extend(_parse_arxiv_atom(response.text, limit - len(records)))
+        return records[:limit]
+
+
+class SemanticScholarLiteratureBackend(HttpLiteratureBackend):
+    source_name = "semantic_scholar"
+    endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
+
+    def search(
+        self, *, problem: dict[str, Any], queries: list[str], limit: int
+    ) -> list[LiteratureRecord]:
+        records: list[LiteratureRecord] = []
+        headers = {"User-Agent": _user_agent()}
+        if app_config.LIMA_SEMANTIC_SCHOLAR_API_KEY:
+            headers["x-api-key"] = app_config.LIMA_SEMANTIC_SCHOLAR_API_KEY
+        for query in queries[:3]:
+            if len(records) >= limit:
+                break
+            response = self._get(
+                self.endpoint,
+                params={
+                    "query": query,
+                    "limit": max(1, min(limit - len(records), 10)),
+                    "fields": "title,authors,year,venue,abstract,url,externalIds",
+                },
+                headers=headers,
+            )
+            payload = response.json()
+            for item in payload.get("data") or []:
+                if not isinstance(item, dict):
+                    continue
+                external = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
+                title = str(item.get("title") or "").strip()
+                if not title:
+                    continue
+                records.append(
+                    LiteratureRecord(
+                        source_type="semantic_scholar",
+                        title=title,
+                        authors=[
+                            str(author.get("name") or "")
+                            for author in item.get("authors") or []
+                            if isinstance(author, dict) and author.get("name")
+                        ],
+                        year=_int_or_none(item.get("year")),
+                        venue=str(item.get("venue") or ""),
+                        doi=str(external.get("DOI") or ""),
+                        arxiv_id=str(external.get("ArXiv") or ""),
+                        url=str(item.get("url") or ""),
+                        abstract_md=str(item.get("abstract") or ""),
+                        bibtex={"externalIds": external, "paperId": item.get("paperId")},
+                        extracts=[_method_extract(title, item.get("abstract"), "semantic_scholar")],
+                    )
+                )
+                if len(records) >= limit:
+                    break
+        return records[:limit]
+
+
+class CrossrefLiteratureBackend(HttpLiteratureBackend):
+    source_name = "crossref"
+    endpoint = "https://api.crossref.org/works"
+
+    def search(
+        self, *, problem: dict[str, Any], queries: list[str], limit: int
+    ) -> list[LiteratureRecord]:
+        records: list[LiteratureRecord] = []
+        headers = {"User-Agent": _user_agent()}
+        for query in queries[:3]:
+            if len(records) >= limit:
+                break
+            response = self._get(
+                self.endpoint,
+                params={"query": query, "rows": max(1, min(limit - len(records), 10))},
+                headers=headers,
+            )
+            payload = response.json()
+            message = payload.get("message") if isinstance(payload, dict) else {}
+            for item in message.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                titles = item.get("title") or []
+                title = str(titles[0] if titles else "").strip()
+                if not title:
+                    continue
+                published = item.get("published-print") or item.get("published-online") or {}
+                records.append(
+                    LiteratureRecord(
+                        source_type="crossref",
+                        title=title,
+                        authors=_crossref_authors(item.get("author") or []),
+                        year=_crossref_year(published),
+                        venue=str((item.get("container-title") or [""])[0] or ""),
+                        doi=str(item.get("DOI") or ""),
+                        url=str(item.get("URL") or ""),
+                        abstract_md=_strip_markup(str(item.get("abstract") or "")),
+                        bibtex={
+                            "publisher": item.get("publisher"),
+                            "type": item.get("type"),
+                            "score": item.get("score"),
+                        },
+                        extracts=[_method_extract(title, item.get("abstract"), "crossref")],
+                    )
+                )
+                if len(records) >= limit:
+                    break
+        return records[:limit]
+
+
+def make_literature_backend(selection: str | None = None) -> LiteratureBackend:
+    raw = (selection or app_config.LIMA_LITERATURE_BACKENDS or "local").strip().lower()
+    if raw in {"configured", "default"}:
+        raw = app_config.LIMA_LITERATURE_BACKENDS.strip().lower() or "local"
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    if "all" in names:
+        names = ["local", "arxiv", "semantic_scholar", "crossref"]
+    backends: list[LiteratureBackend] = []
+    for name in names:
+        if name == "local":
+            backends.append(LocalManualLiteratureBackend())
+        elif name == "arxiv":
+            backends.append(ArxivLiteratureBackend())
+        elif name in {"semantic", "semantic_scholar", "semanticscholar"}:
+            backends.append(SemanticScholarLiteratureBackend())
+        elif name == "crossref":
+            backends.append(CrossrefLiteratureBackend())
+    return CompositeLiteratureBackend(backends or [LocalManualLiteratureBackend()])
+
+
 def build_literature_queries(
     problem: dict[str, Any],
     pressure_map: dict[str, Any],
@@ -144,8 +344,9 @@ def refresh_literature(
     pressure_map: dict[str, Any],
     universes: list[LimaUniverseSpec] | None = None,
     backend: LiteratureBackend | None = None,
+    backend_selection: str | None = None,
 ) -> dict[str, Any]:
-    backend = backend or LocalManualLiteratureBackend()
+    backend = backend or make_literature_backend(backend_selection)
     queries = build_literature_queries(problem, pressure_map, universes)
     records = backend.search(
         problem=problem,
@@ -175,6 +376,7 @@ def refresh_literature(
         "inserted_source_ids": inserted,
         "source_count": len(inserted),
         "backend": backend.__class__.__name__,
+        "backend_selection": backend_selection or app_config.LIMA_LITERATURE_BACKENDS,
     }
 
 
@@ -196,3 +398,93 @@ def infer_literature_relation(universe: LimaUniverseSpec, source: dict[str, Any]
     if slugify(universe.family_key) and slugify(universe.family_key).replace("_", " ") in blob:
         return "support"
     return "terminology"
+
+
+def _user_agent() -> str:
+    base = "aristotle-orchestrator-lima/0.1"
+    if app_config.LIMA_CROSSREF_MAILTO:
+        return f"{base} (mailto:{app_config.LIMA_CROSSREF_MAILTO})"
+    return base
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _strip_markup(value: str) -> str:
+    return re.sub(r"<[^>]+>", "", value or "").strip()
+
+
+def _method_extract(title: str, body: Any, source: str) -> dict[str, Any]:
+    return {
+        "extract_kind": "method",
+        "title": f"{source}: {title}"[:500],
+        "body_md": _strip_markup(str(body or ""))[:4000],
+        "formal_hint": "Use as literature grounding or prior-art pressure, not as a direct formal obligation.",
+        "tags": [source, "literature"],
+        "relevance_score": 0.5,
+    }
+
+
+def _parse_arxiv_atom(text: str, limit: int) -> list[LiteratureRecord]:
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "arxiv": "http://arxiv.org/schemas/atom",
+    }
+    root = ET.fromstring(text)
+    records: list[LiteratureRecord] = []
+    for entry in root.findall("atom:entry", ns):
+        title = " ".join((entry.findtext("atom:title", default="", namespaces=ns) or "").split())
+        if not title:
+            continue
+        authors = [
+            " ".join((author.findtext("atom:name", default="", namespaces=ns) or "").split())
+            for author in entry.findall("atom:author", ns)
+        ]
+        url = entry.findtext("atom:id", default="", namespaces=ns) or ""
+        arxiv_id = url.rsplit("/", 1)[-1] if url else ""
+        published = entry.findtext("atom:published", default="", namespaces=ns) or ""
+        records.append(
+            LiteratureRecord(
+                source_type="arxiv",
+                title=title,
+                authors=[a for a in authors if a],
+                year=_int_or_none(published[:4]),
+                venue="arXiv",
+                arxiv_id=arxiv_id,
+                url=url,
+                abstract_md=" ".join(
+                    (entry.findtext("atom:summary", default="", namespaces=ns) or "").split()
+                ),
+                bibtex={"published": published},
+                extracts=[_method_extract(title, entry.findtext("atom:summary", default="", namespaces=ns), "arxiv")],
+            )
+        )
+        if len(records) >= limit:
+            break
+    return records
+
+
+def _crossref_authors(authors: list[Any]) -> list[str]:
+    out: list[str] = []
+    for author in authors:
+        if not isinstance(author, dict):
+            continue
+        name = " ".join(
+            part
+            for part in (str(author.get("given") or ""), str(author.get("family") or ""))
+            if part
+        ).strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def _crossref_year(published: dict[str, Any]) -> int | None:
+    parts = published.get("date-parts") if isinstance(published, dict) else None
+    if isinstance(parts, list) and parts and isinstance(parts[0], list) and parts[0]:
+        return _int_or_none(parts[0][0])
+    return None
