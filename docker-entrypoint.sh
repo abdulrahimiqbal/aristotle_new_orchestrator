@@ -7,4 +7,7 @@ if [ -n "${WORKSPACE_LEGACY_DIR}" ]; then
   mkdir -p "${WORKSPACE_LEGACY_DIR}"
 fi
 mkdir -p "$(dirname "${DATABASE_PATH}")"
+if [ -n "${LIMA_DATABASE_PATH}" ]; then
+  mkdir -p "$(dirname "${LIMA_DATABASE_PATH}")"
+fi
 exec "$@"

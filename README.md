@@ -185,6 +185,7 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_PATH` | SQLite database file (default: `orchestrator.db` in the CWD) |
+| `LIMA_DATABASE_PATH` | Separate Lima SQLite database file (default: `lima.db` next to `DATABASE_PATH`; Docker/Railway: `/data/lima.db`) |
 | `WORKSPACE_ROOT` | Parent directory for per-campaign workspaces (default: `./workspace_root` locally; Docker/Railway: `/data/workspaces`) |
 | `WORKSPACE_LEGACY_DIR` | Optional legacy shared workspace path to migrate from (default: falls back to `WORKSPACE_DIR` if set) |
 | `WORKSPACE_DIR` | **Legacy.** Used only as a default for `WORKSPACE_LEGACY_DIR` when the latter is unset |
@@ -297,7 +298,7 @@ docker run -p 8000:8000 \
   aristotle-orchestrator
 ```
 
-Mount a volume at `/data`. The image sets `WORKSPACE_ROOT=/data/workspaces`, `WORKSPACE_LEGACY_DIR=/data/workspace`, and `DATABASE_PATH=/data/orchestrator.db`. Install the `aristotle` CLI in your image if you need it inside the container; the host `PATH` is not available unless you add a layer that installs it.
+Mount a volume at `/data`. The image sets `WORKSPACE_ROOT=/data/workspaces`, `WORKSPACE_LEGACY_DIR=/data/workspace`, `DATABASE_PATH=/data/orchestrator.db`, and `LIMA_DATABASE_PATH=/data/lima.db`. Install the `aristotle` CLI in your image if you need it inside the container; the host `PATH` is not available unless you add a layer that installs it.
 
 **Mathlib in Docker**: expect a long first build unless you pre-run `lake exe cache get` in a derived image or persistent volume layer.
 
@@ -337,6 +338,7 @@ The container listens on **`PORT`** (Railway sets this automatically). SQLite an
 | `LLM_MODEL` | e.g. `kimi-k2-turbo-preview` (use the exact id from Moonshot) |
 | `ARISTOTLE_API_KEY` | Your Aristotle key |
 | `DATABASE_PATH` | `/data/orchestrator.db` (default in Docker image) |
+| `LIMA_DATABASE_PATH` | `/data/lima.db` (default in Docker image) |
 | `WORKSPACE_ROOT` | `/data/workspaces` (default in Docker image) |
 | `WORKSPACE_LEGACY_DIR` | `/data/workspace` if upgrading from the old single-workspace layout |
 

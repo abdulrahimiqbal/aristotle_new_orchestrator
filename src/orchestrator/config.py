@@ -178,7 +178,11 @@ SUPERSHADOW_MAX_PENDING_HANDOFFS = _int_env("SUPERSHADOW_MAX_PENDING_HANDOFFS", 
 
 # Lima lab: falsification-first upstream research engine.
 # Lima uses a separate SQLite DB and never writes directly into the live experiment queue.
-LIMA_DATABASE_PATH = os.environ.get("LIMA_DATABASE_PATH", "lima.db")
+# By default it lives next to the main DB so Docker/Railway volume persistence applies to both.
+LIMA_DATABASE_PATH = os.environ.get(
+    "LIMA_DATABASE_PATH",
+    str(Path(DATABASE_PATH).with_name("lima.db")),
+)
 LIMA_ENABLED = _bool_env("LIMA_ENABLED", False)
 LIMA_LOOP_INTERVAL_SEC = _int_env("LIMA_LOOP_INTERVAL_SEC", 1800)
 LIMA_DEFAULT_PROBLEM = os.environ.get("LIMA_DEFAULT_PROBLEM", "collatz").strip() or "collatz"

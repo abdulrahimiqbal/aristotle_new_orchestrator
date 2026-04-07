@@ -23,6 +23,7 @@ ENV WORKSPACE_ROOT=/data/workspaces
 # One-time migration source when upgrading from single shared /data/workspace
 ENV WORKSPACE_LEGACY_DIR=/data/workspace
 ENV DATABASE_PATH=/data/orchestrator.db
+ENV LIMA_DATABASE_PATH=/data/lima.db
 ENV PORT=8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
