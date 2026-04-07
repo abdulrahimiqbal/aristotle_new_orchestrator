@@ -379,7 +379,7 @@
           </div>
           {% if obligation.status != 'archived' and (obligation.status in ['queued_formal_review', 'inconclusive'] or obligation.obligation_kind in ['lean_goal', 'bridge_lemma', 'equivalence', 'literature_crosscheck']) %}
           <div class="mt-3 flex flex-wrap gap-2">
-            <form hx-post="/api/lima/obligation/{{ obligation.id }}/formal-review" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+            <form hx-post="/api/lima/obligation/{{ obligation.id }}/queue-formal-review" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
               <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Queue formal review</button>
             </form>
             <form hx-post="/api/lima/obligation/{{ obligation.id }}/approve-formal" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
@@ -391,8 +391,12 @@
           </div>
           {% endif %}
           {% if obligation.lineage %}
+          {% if obligation.review_note %}
+          <p class="mt-2 text-xs leading-relaxed text-zinc-500"><span class="text-zinc-400">Review:</span> {{ obligation.review_note }}</p>
+          {% endif %}
           <details class="mt-3 text-xs">
             <summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400">Lineage</summary>
+            <p class="mt-2 text-[11px] font-mono text-zinc-600">run {{ obligation.source_run_id or obligation.lineage.source_run_id or 'unknown' }} / universe {{ obligation.source_universe_id or obligation.universe_id or 'unknown' }} / claim {{ obligation.source_claim_id or obligation.claim_id or 'none' }}</p>
             <pre class="custom-scroll mt-2 max-h-40 overflow-y-auto overflow-x-auto rounded-lg border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-500">{{ obligation.lineage }}</pre>
           </details>
           {% endif %}
@@ -416,7 +420,7 @@
           <select name="backend_selection" class="rounded-lg border border-zinc-700/80 bg-zinc-950 px-2 py-2 text-xs text-zinc-100">
             <option value="configured">Configured</option>
             <option value="local">Local</option>
-            <option value="local_file">LocalFile</option>
+            <option value="localfile">LocalFile</option>
             <option value="arxiv">arXiv</option>
             <option value="semantic_scholar">Semantic Scholar</option>
             <option value="crossref">Crossref</option>

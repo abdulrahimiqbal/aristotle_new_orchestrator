@@ -231,13 +231,25 @@ class LimaDatabase:
                     priority INTEGER NOT NULL DEFAULT 3,
                     why_exists_md TEXT NOT NULL DEFAULT '',
                     prove_or_kill_md TEXT NOT NULL DEFAULT '',
+                    why_this_exists TEXT NOT NULL DEFAULT '',
+                    what_success_would_show TEXT NOT NULL DEFAULT '',
+                    what_failure_would_kill TEXT NOT NULL DEFAULT '',
+                    source_run_id TEXT NOT NULL DEFAULT '',
+                    source_universe_id TEXT NOT NULL DEFAULT '',
+                    source_claim_id TEXT NOT NULL DEFAULT '',
+                    source_claim_ids_json TEXT NOT NULL DEFAULT '[]',
                     lineage_json TEXT NOT NULL DEFAULT '{}',
                     canonical_hash TEXT NOT NULL DEFAULT '',
                     review_status TEXT NOT NULL DEFAULT 'not_reviewed',
                     formal_backend TEXT NOT NULL DEFAULT '',
                     formal_payload_json TEXT NOT NULL DEFAULT '{}',
+                    formal_submission_ref_json TEXT NOT NULL DEFAULT '{}',
+                    review_note TEXT NOT NULL DEFAULT '',
+                    reviewed_at TEXT,
                     estimated_formalization_value REAL NOT NULL DEFAULT 0,
                     estimated_execution_cost REAL NOT NULL DEFAULT 0,
+                    estimated_value REAL NOT NULL DEFAULT 0,
+                    estimated_cost REAL NOT NULL DEFAULT 0,
                     aristotle_ref_json TEXT NOT NULL DEFAULT '{}',
                     result_summary_md TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -436,13 +448,25 @@ class LimaDatabase:
         _ensure_column(conn, "lima_problem", "routing_policy_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "lima_obligation", "why_exists_md", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "prove_or_kill_md", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "why_this_exists", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "what_success_would_show", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "what_failure_would_kill", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "source_run_id", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "source_universe_id", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "source_claim_id", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "source_claim_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "lima_obligation", "lineage_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "lima_obligation", "canonical_hash", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "review_status", "TEXT NOT NULL DEFAULT 'not_reviewed'")
         _ensure_column(conn, "lima_obligation", "formal_backend", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "formal_payload_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_obligation", "formal_submission_ref_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_obligation", "review_note", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_obligation", "reviewed_at", "TEXT")
         _ensure_column(conn, "lima_obligation", "estimated_formalization_value", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "lima_obligation", "estimated_execution_cost", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "lima_obligation", "estimated_value", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "lima_obligation", "estimated_cost", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "lima_formal_review_queue", "family_id", "TEXT")
         _ensure_column(conn, "lima_formal_review_queue", "claim_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "lima_formal_review_queue", "rupture_summary_md", "TEXT NOT NULL DEFAULT ''")
@@ -452,9 +476,16 @@ class LimaDatabase:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lima_obligation_canonical ON lima_obligation(problem_id, canonical_hash)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_obligation_backend ON lima_obligation(formal_backend)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_obligation_reviewed ON lima_obligation(reviewed_at)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lima_formal_family ON lima_formal_review_queue(family_id)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_formal_backend ON lima_formal_review_queue(backend_kind)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_formal_reviewed ON lima_formal_review_queue(reviewed_at)")
+        conn.execute("UPDATE lima_obligation SET status = 'queued_local' WHERE status = 'queued'")
+        conn.execute("UPDATE lima_obligation SET status = 'verified_local' WHERE status = 'checked'")
+        conn.execute("UPDATE lima_obligation SET status = 'refuted_local' WHERE status = 'falsified'")
 
     def ensure_default_problem(self) -> str:
         slug = slugify(app_config.LIMA_DEFAULT_PROBLEM, fallback="collatz")
@@ -1005,6 +1036,10 @@ class LimaDatabase:
                         obligation.prove_or_kill_md
                         or "Verify this if it preserves the survivor; refute it to fracture the universe early."
                     )
+                    success_would_show = (
+                        f"Success would support Lima universe '{universe.title}' as a narrow formal-review candidate."
+                    )
+                    failure_would_kill = prove_or_kill
                     lineage = {
                         "source_problem_id": problem_id,
                         "source_run_id": run_id,
@@ -1024,12 +1059,17 @@ class LimaDatabase:
                         INSERT INTO lima_obligation (
                             id, problem_id, universe_id, claim_id, obligation_kind,
                             title, statement_md, lean_goal, status, priority,
-                            why_exists_md, prove_or_kill_md, lineage_json, canonical_hash,
+                            why_exists_md, prove_or_kill_md,
+                            why_this_exists, what_success_would_show, what_failure_would_kill,
+                            source_run_id, source_universe_id, source_claim_id, source_claim_ids_json,
+                            lineage_json, canonical_hash,
                             review_status, formal_backend, formal_payload_json,
+                            formal_submission_ref_json, review_note, reviewed_at,
                             estimated_formalization_value, estimated_execution_cost,
+                            estimated_value, estimated_cost,
                             aristotle_ref_json, result_summary_md, created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '', ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             obligation_id,
@@ -1044,13 +1084,27 @@ class LimaDatabase:
                             int(obligation.priority),
                             why_exists[:4000],
                             prove_or_kill[:4000],
+                            why_exists[:4000],
+                            success_would_show[:4000],
+                            failure_would_kill[:4000],
+                            run_id,
+                            universe_id,
+                            claim_id or "",
+                            _json([claim_id] if claim_id else []),
                             _json(lineage),
                             canonical_hash,
                             str(obligation.review_status or "not_reviewed")[:32],
                             str(obligation.formal_backend or "")[:80],
                             _json({}),
+                            _json({}),
+                            "",
+                            None,
                             float(obligation.estimated_formalization_value or 0),
                             float(obligation.estimated_execution_cost or 0),
+                            float(obligation.estimated_formalization_value or 0),
+                            float(obligation.estimated_execution_cost or 0),
+                            _json({}),
+                            "",
                             now,
                             now,
                         ),
@@ -1553,12 +1607,19 @@ class LimaDatabase:
             cur = conn.execute(
                 """
                 UPDATE lima_obligation
-                SET status = ?, result_summary_md = ?, aristotle_ref_json = ?, updated_at = ?
+                SET status = ?, result_summary_md = ?, aristotle_ref_json = ?,
+                    formal_submission_ref_json = CASE
+                      WHEN ? IN ('submitted_formal', 'verified_formal', 'refuted_formal') THEN ?
+                      ELSE formal_submission_ref_json
+                    END,
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     status[:32],
                     result_summary_md[:8000],
+                    _json(aristotle_ref or {}),
+                    status[:32],
                     _json(aristotle_ref or {}),
                     _now(),
                     obligation_id,
@@ -1579,7 +1640,9 @@ class LimaDatabase:
         review_status: str | None = None,
         formal_backend: str | None = None,
         formal_payload: dict[str, Any] | None = None,
+        formal_submission_ref: dict[str, Any] | None = None,
         result_summary_md: str | None = None,
+        review_note: str | None = None,
     ) -> tuple[bool, str]:
         assignments = ["status = ?", "updated_at = ?"]
         values: list[Any] = [status[:32], _now()]
@@ -1592,9 +1655,25 @@ class LimaDatabase:
         if formal_payload is not None:
             assignments.append("formal_payload_json = ?")
             values.append(_json(formal_payload))
+        if formal_submission_ref is not None:
+            assignments.append("formal_submission_ref_json = ?")
+            values.append(_json(formal_submission_ref))
         if result_summary_md is not None:
             assignments.append("result_summary_md = ?")
             values.append(result_summary_md[:8000])
+        if review_note is not None:
+            assignments.append("review_note = ?")
+            values.append(review_note[:4000])
+        if review_status in {"approved", "rejected", "archived"} or status in {
+            "approved_for_formal",
+            "submitted_formal",
+            "verified_formal",
+            "refuted_formal",
+            "inconclusive",
+            "archived",
+        }:
+            assignments.append("reviewed_at = COALESCE(reviewed_at, ?)")
+            values.append(_now())
         values.append(obligation_id)
         conn = self._connect()
         try:

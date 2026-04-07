@@ -190,8 +190,9 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `LIMA_AUTO_LOCAL_OBLIGATION_CHECKS` | Run bounded local Lima checks automatically after a Lima pass (`true` by default) |
 | `LIMA_FORMAL_BACKEND` | Formal review adapter (`local_stub` by default; records review packets without live submission) |
 | `LIMA_FORMAL_AUTO_SUBMIT` | Reserved approval gate for future formal backends; default `false` keeps zero-live-authority |
-| `LIMA_LITERATURE_BACKENDS` | Comma-separated literature backends: `local`, `local_file`, `arxiv`, `semantic_scholar`, `crossref`; network backends require their enable flags |
+| `LIMA_LITERATURE_BACKENDS` | Comma-separated literature backends: `local`, `localfile`/`local_file`, `arxiv`, `semantic_scholar`, `crossref`; network backends require their enable flags |
 | `LIMA_LITERATURE_LOCALFILE_DIR` | Optional folder of local `.md`, `.txt`, or `.json` literature notes for the `local_file` backend; `LIMA_LITERATURE_LOCAL_DIR` remains accepted as a legacy alias |
+| `LIMA_ENABLE_LOCALFILE_LITERATURE` | Enable LocalFile note ingestion; defaults to `true` and degrades cleanly when the folder is absent |
 | `LIMA_ENABLE_ARXIV_BACKEND` / `LIMA_ENABLE_SEMANTIC_SCHOLAR_BACKEND` / `LIMA_ENABLE_CROSSREF_BACKEND` | Enable optional network literature backends; all default off |
 | `WORKSPACE_ROOT` | Parent directory for per-campaign workspaces (default: `./workspace_root` locally; Docker/Railway: `/data/workspaces`) |
 | `WORKSPACE_LEGACY_DIR` | Optional legacy shared workspace path to migrate from (default: falls back to `WORKSPACE_DIR` if set) |
@@ -362,7 +363,7 @@ The Lima loop is:
 5. Queue formal obligations (`lean_goal`, `bridge_lemma`, `equivalence`, and novelty crosschecks) for human formal review.
 6. Only after review can a packet be marked approved for formal work or Shadow incubation. The default `local_stub` backend records a packet and never submits live Aristotle jobs.
 
-Literature backends are pluggable. `local` is deterministic and always available. `local_file` reads notes from `LIMA_LITERATURE_LOCALFILE_DIR`. arXiv, Semantic Scholar, and Crossref adapters are present but disabled unless explicitly enabled so runtime does not require internet access.
+Literature backends are pluggable. `local` is deterministic and always available. `localfile`/`local_file` reads notes from `LIMA_LITERATURE_LOCALFILE_DIR`. arXiv, Semantic Scholar, and Crossref adapters are present but disabled unless explicitly enabled so runtime does not require internet access.
 
 Run locally:
 

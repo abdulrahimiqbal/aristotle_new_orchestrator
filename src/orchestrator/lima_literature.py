@@ -117,7 +117,7 @@ class LocalManualLiteratureBackend:
 
 
 class LocalFileLiteratureBackend:
-    source_name = "local_file"
+    source_name = "localfile"
 
     def __init__(self, root: str | None = None) -> None:
         self.root = Path(root or app_config.LIMA_LITERATURE_LOCALFILE_DIR)
@@ -328,7 +328,7 @@ def make_literature_backend(selection: str | None = None) -> LiteratureBackend:
         raw = app_config.LIMA_LITERATURE_BACKENDS.strip().lower() or "local"
     names = [name.strip() for name in raw.split(",") if name.strip()]
     if "all" in names:
-        names = ["local", "local_file", "arxiv", "semantic_scholar", "crossref"]
+        names = ["local", "localfile", "arxiv", "semantic_scholar", "crossref"]
     backends: list[LiteratureBackend] = []
     for name in names:
         if name == "local":
@@ -342,8 +342,9 @@ def make_literature_backend(selection: str | None = None) -> LiteratureBackend:
         elif name == "crossref":
             if app_config.LIMA_ENABLE_CROSSREF_BACKEND:
                 backends.append(CrossrefLiteratureBackend())
-        elif name in {"local_file", "file", "files"}:
-            backends.append(LocalFileLiteratureBackend())
+        elif name in {"local_file", "localfile", "file", "files"}:
+            if app_config.LIMA_ENABLE_LOCALFILE_LITERATURE:
+                backends.append(LocalFileLiteratureBackend())
     return CompositeLiteratureBackend(backends or [LocalManualLiteratureBackend()])
 
 
@@ -544,7 +545,7 @@ def _record_from_local_file(path: Path, text: str) -> LiteratureRecord | None:
             return None
         extracts = payload.get("extracts") if isinstance(payload.get("extracts"), list) else []
         return LiteratureRecord(
-            source_type="local_file",
+            source_type="localfile",
             title=str(payload.get("title") or path.stem),
             authors=[str(a) for a in payload.get("authors") or []],
             year=_int_or_none(payload.get("year")),
@@ -553,21 +554,47 @@ def _record_from_local_file(path: Path, text: str) -> LiteratureRecord | None:
             arxiv_id=str(payload.get("arxiv_id") or ""),
             url=str(payload.get("url") or path.as_posix()),
             abstract_md=str(payload.get("abstract_md") or payload.get("abstract") or ""),
-            bibtex={"path": path.as_posix(), "local_file": True},
-            extracts=extracts or [_extract_from_text(path.stem, str(payload.get("abstract_md") or ""), "local_file")],
+            bibtex={"path": path.as_posix(), "file_mtime": path.stat().st_mtime, "localfile": True},
+            extracts=extracts
+            or _extracts_from_text(path.stem, str(payload.get("abstract_md") or ""), "localfile"),
         )
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     title = lines[0].lstrip("# ").strip() if lines else path.stem
     body = "\n".join(lines[1:])[:8000] if len(lines) > 1 else text[:8000]
     return LiteratureRecord(
-        source_type="local_file",
+        source_type="localfile",
         title=title or path.stem,
         venue="local notes",
         url=path.as_posix(),
         abstract_md=body,
-        bibtex={"path": path.as_posix(), "local_file": True},
-        extracts=[_extract_from_text(title or path.stem, body, "local_file")],
+        bibtex={"path": path.as_posix(), "file_mtime": path.stat().st_mtime, "localfile": True},
+        extracts=_extracts_from_text(title or path.stem, body, "localfile"),
     )
+
+
+def _extracts_from_text(title: str, body: str, source: str) -> list[dict[str, Any]]:
+    pattern = re.compile(
+        r"(?im)^\s*(theorem|lemma|method|warning|negative_result|negative result|terminology|analogy|open_problem|open problem)\s*:\s*(.+)$"
+    )
+    out: list[dict[str, Any]] = []
+    kind_map = {
+        "negative result": "negative_result",
+        "open problem": "open_problem",
+    }
+    for match in pattern.finditer(body):
+        raw_kind = match.group(1).lower().replace(" ", "_")
+        kind = kind_map.get(match.group(1).lower(), raw_kind)
+        out.append(
+            {
+                "extract_kind": kind,
+                "title": f"{source}: {title}"[:500],
+                "body_md": match.group(2).strip()[:4000],
+                "formal_hint": "Use this local note as grounding, prior-art pressure, or terminology.",
+                "tags": [source, kind],
+                "relevance_score": 0.6,
+            }
+        )
+    return out or [_extract_from_text(title, body, source)]
 
 
 def _extract_from_text(title: str, body: str, source: str) -> dict[str, Any]:

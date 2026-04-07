@@ -241,6 +241,9 @@ class FormalBackend(Protocol):
         ...
 
 
+FormalBackendProtocol = FormalBackend
+
+
 class LocalStubFormalBackend:
     backend_kind = "local_stub"
 
@@ -281,9 +284,27 @@ class LocalStubFormalBackend:
         }
 
 
+LocalFormalStubBackend = LocalStubFormalBackend
+
+
+class FutureAristotleLeanFormalBackend(LocalStubFormalBackend):
+    backend_kind = "future_aristotle_lean_stub"
+
+    def submit_approved(self, packet: FormalReviewPacket) -> dict[str, Any]:
+        result = super().submit_approved(packet)
+        result["backend"] = self.backend_kind
+        result["message"] = (
+            "Future Aristotle/Lean adapter placeholder recorded approval; "
+            "no live work was submitted."
+        )
+        return result
+
+
 def make_formal_backend(kind: str | None = None) -> FormalBackend:
     selected = (kind or app_config.LIMA_FORMAL_BACKEND or "local_stub").strip().lower()
     # Future Aristotle/Lean/Mathlib adapters must preserve the same approval boundary.
+    if selected in {"future_aristotle_lean_stub", "aristotle_lean_stub"}:
+        return FutureAristotleLeanFormalBackend()
     return LocalStubFormalBackend()
 
 
@@ -355,6 +376,7 @@ def queue_formal_review(
         review_status="pending",
         formal_backend=packet.backend_kind,
         formal_payload=packet.payload,
+        review_note="Queued for formal review; no live Aristotle job was created.",
         result_summary_md="Queued for formal review. No live Aristotle job was created.",
     )
     return {
@@ -387,6 +409,8 @@ def approve_formal_review(
         review_status="approved",
         formal_backend=packet.backend_kind,
         formal_payload=packet.payload,
+        formal_submission_ref=backend_result,
+        review_note=str(backend_result.get("message") or "Approved for formal review."),
         result_summary_md=str(backend_result.get("message") or "Approved for formal review."),
     )
     lima_db.update_formal_review_item(
@@ -418,6 +442,7 @@ def reject_formal_review(lima_db: LimaDatabase, *, obligation_id: str) -> dict[s
         obligation_id,
         "inconclusive",
         review_status="rejected",
+        review_note="Formal review rejected by operator.",
         result_summary_md="Formal review rejected by operator. Lima should keep the fracture and avoid escalation.",
     )
     for review in lima_db.list_formal_reviews(str(obligation["problem_id"]), limit=100):
@@ -444,6 +469,7 @@ def archive_obligation(lima_db: LimaDatabase, *, obligation_id: str) -> dict[str
         obligation_id,
         "archived",
         review_status="archived",
+        review_note="Archived by operator.",
         result_summary_md="Archived by operator. Lima retains lineage but will not route this obligation further.",
     )
     for review in lima_db.list_formal_reviews(str(obligation["problem_id"]), limit=100):
@@ -514,9 +540,7 @@ def run_queued_obligation_checks(
 ) -> dict[str, Any]:
     """Run bounded Lima-local checks without creating live Aristotle work."""
 
-    obligations = lima_db.list_obligations_by_statuses(
-        problem_id, ["queued", "queued_local"], limit=limit
-    )
+    obligations = lima_db.list_obligations_by_statuses(problem_id, ["queued_local"], limit=limit)
     checked: list[str] = []
     falsified: list[str] = []
     skipped: list[str] = []

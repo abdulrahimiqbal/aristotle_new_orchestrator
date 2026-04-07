@@ -1053,6 +1053,7 @@ async def lima_obligations_run_fragment(
 
 
 @app.post("/api/lima/obligation/{obligation_id}/formal-review", response_class=HTMLResponse)
+@app.post("/api/lima/obligation/{obligation_id}/queue-formal-review", response_class=HTMLResponse)
 async def lima_obligation_formal_review_fragment(
     request: Request, obligation_id: str, _auth: OperatorWriteAuth
 ):

@@ -66,6 +66,14 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            INSERT INTO lima_obligation (
+                id, problem_id, universe_id, obligation_kind, title, statement_md,
+                status, priority, created_at, updated_at
+            )
+            VALUES
+                ('legacy-queued', 'legacy-problem', 'legacy-universe', 'finite_check', 'Queued', '', 'queued', 3, 'now', 'now'),
+                ('legacy-checked', 'legacy-problem', 'legacy-universe', 'finite_check', 'Checked', '', 'checked', 3, 'now', 'now'),
+                ('legacy-falsified', 'legacy-problem', 'legacy-universe', 'finite_check', 'Falsified', '', 'falsified', 3, 'now', 'now');
             """
         )
         conn.commit()
@@ -81,6 +89,12 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
             row[1] for row in conn.execute("PRAGMA table_info(lima_formal_review_queue)")
         }
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        migrated_statuses = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT id, status FROM lima_obligation WHERE id LIKE 'legacy-%'"
+            )
+        }
     finally:
         conn.close()
 
@@ -88,12 +102,24 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
     assert "why_exists_md" in obligation_columns
     assert "canonical_hash" in obligation_columns
     assert "formal_payload_json" in obligation_columns
+    assert "formal_submission_ref_json" in obligation_columns
+    assert "review_note" in obligation_columns
+    assert "reviewed_at" in obligation_columns
+    assert "source_run_id" in obligation_columns
+    assert "source_claim_ids_json" in obligation_columns
     assert "estimated_formalization_value" in obligation_columns
     assert "estimated_execution_cost" in obligation_columns
+    assert "estimated_value" in obligation_columns
+    assert "estimated_cost" in obligation_columns
     assert "lima_formal_review_queue" in tables
     assert "family_id" in formal_columns
     assert "claim_ids_json" in formal_columns
     assert "lineage_json" in formal_columns
+    assert migrated_statuses == {
+        "legacy-queued": "queued_local",
+        "legacy-checked": "verified_local",
+        "legacy-falsified": "refuted_local",
+    }
 
 
 def test_lima_formal_review_queue_is_zero_live_authority(tmp_path: Path) -> None:
@@ -132,6 +158,8 @@ def test_lima_formal_review_queue_is_zero_live_authority(tmp_path: Path) -> None
     assert queued["ok"] is True
     assert approved["ok"] is True
     assert obligation["status"] == "approved_for_formal"
+    assert "no remote Lean/Aristotle work" in obligation["formal_submission_ref_json"]
+    assert obligation["reviewed_at"]
     assert reviews
     assert reviews[0]["claim_ids_json"] == '["claim1"]'
     assert "Prior-art fracture pressure" in reviews[0]["rupture_summary_md"]
@@ -154,7 +182,7 @@ def test_lima_local_file_literature_backend(tmp_path: Path) -> None:
     )
 
     assert len(records) == 1
-    assert records[0].source_type == "local_file"
+    assert records[0].source_type == "localfile"
     assert records[0].extracts[0]["extract_kind"] == "lemma"
 
 
@@ -177,7 +205,15 @@ def test_lima_literature_backend_all_degrades_to_localfile(tmp_path: Path, monke
         limit=5,
     )
 
-    assert any(record.source_type == "local_file" for record in records)
+    assert any(record.source_type == "localfile" for record in records)
+
+    direct_backend = make_literature_backend("localfile")
+    direct_records = direct_backend.search(
+        problem={"slug": "goldbach", "title": "Goldbach conjecture"},
+        queries=["Goldbach theorem"],
+        limit=5,
+    )
+    assert any(record.source_type == "localfile" for record in direct_records)
 
 
 def test_lima_legacy_queued_status_runs_local_check(tmp_path: Path) -> None:
@@ -192,7 +228,7 @@ def test_lima_legacy_queued_status_runs_local_check(tmp_path: Path) -> None:
                 id, problem_id, universe_id, obligation_kind, title, statement_md,
                 lean_goal, status, priority, created_at, updated_at
             )
-            VALUES ('obl2', ?, 'univ2', 'finite_check', 'Residue descent scan modulo 16', 'Compute exact scan.', '', 'queued', 4, 'now', 'now')
+            VALUES ('obl2', ?, 'univ2', 'finite_check', 'Residue descent scan modulo 16', 'Compute exact scan.', '', 'queued_local', 4, 'now', 'now')
             """,
             (problem["id"],),
         )
