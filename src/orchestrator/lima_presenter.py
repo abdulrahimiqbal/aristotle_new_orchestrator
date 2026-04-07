@@ -34,6 +34,44 @@ def _present_handoff(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _decision_state(
+    *,
+    latest_run: dict[str, Any] | None,
+    pending_handoffs: list[dict[str, Any]],
+    universes: list[dict[str, Any]],
+    queued_obligations: list[dict[str, Any]],
+) -> dict[str, str]:
+    if pending_handoffs:
+        count = len(pending_handoffs)
+        return {
+            "label": "Review needed",
+            "title": f"{count} handoff packet{'s' if count != 1 else ''} waiting",
+            "body": "Read the recommendation, then approve or reject. Approval keeps it as a reviewed packet and does not create a live Aristotle job.",
+            "tone": "review",
+            "next_title": "Review the handoff queue",
+            "next_body": "Start with the packets that Lima thinks survived enough pressure to be worth human judgment.",
+        }
+    if latest_run:
+        obligation_count = len(queued_obligations)
+        universe_count = len(universes)
+        return {
+            "label": "Idle",
+            "title": "Latest run is ready to inspect",
+            "body": f"Lima has {universe_count} candidate universe{'s' if universe_count != 1 else ''} and {obligation_count} queued obligation{'s' if obligation_count != 1 else ''} for this problem.",
+            "tone": "idle",
+            "next_title": "Run another search pass",
+            "next_body": "Use another pass when you want Lima to explore, stress-test, or formalize from the current memory.",
+        }
+    return {
+        "label": "Ready",
+        "title": "Ready for the first Lima run",
+        "body": "Pick a mode and run Lima. It will invent candidate universes, attack them, queue formal obligations, and create review packets only when there is something to judge.",
+        "tone": "ready",
+        "next_title": "Run the first search pass",
+        "next_body": "This creates the first research memory layer for the selected problem.",
+    }
+
+
 def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None = None) -> dict[str, Any]:
     state = dict(snapshot.get("state") or {})
     latest_run = dict(snapshot.get("latest_run") or {}) if snapshot.get("latest_run") else None
@@ -56,6 +94,15 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
     latest_summary = ""
     if latest_run:
         latest_summary = str(latest_run.get("run_summary_md") or "")
+    queued_obligations = [
+        o for o in obligations if str(o.get("status") or "") == "queued"
+    ]
+    decision_state = _decision_state(
+        latest_run=latest_run,
+        pending_handoffs=pending_handoffs,
+        universes=universes,
+        queued_obligations=queued_obligations,
+    )
 
     return {
         "lima_problem": snapshot.get("problem") or {},
@@ -72,9 +119,7 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_promising_universes": promising,
         "lima_fractures": fractures,
         "lima_obligations": obligations,
-        "lima_queued_obligations": [
-            o for o in obligations if str(o.get("status") or "") == "queued"
-        ],
+        "lima_queued_obligations": queued_obligations,
         "lima_literature_sources": snapshot.get("literature_sources") or [],
         "lima_literature_extracts": literature_extracts,
         "lima_pending_handoffs": pending_handoffs,
@@ -82,14 +127,35 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_policy_revisions": snapshot.get("policy_revisions") or [],
         "lima_flash": lima_flash,
         "lima_primary_cta": "Run Lima",
+        "lima_decision_state": decision_state,
+        "lima_modes": [
+            {
+                "value": "balanced",
+                "label": "Balanced",
+                "hint": "general search pass",
+            },
+            {
+                "value": "wild",
+                "label": "Wild",
+                "hint": "broader invention",
+            },
+            {
+                "value": "stress",
+                "label": "Stress",
+                "hint": "break candidates harder",
+            },
+            {
+                "value": "forge",
+                "label": "Forge",
+                "hint": "push toward formal obligations",
+            },
+        ],
         "lima_metrics": {
             "run_count": len(snapshot.get("runs") or []),
             "family_count": len(snapshot.get("families") or []),
             "universe_count": len(universes),
             "fracture_count": len(fractures),
-            "queued_obligations": len(
-                [o for o in obligations if str(o.get("status") or "") == "queued"]
-            ),
+            "queued_obligations": len(queued_obligations),
             "pending_handoffs": len(pending_handoffs),
             "literature_sources": len(snapshot.get("literature_sources") or []),
         },

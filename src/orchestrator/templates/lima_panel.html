@@ -1,246 +1,204 @@
 {# Lima lab - falsification-first upstream research engine with zero live authority #}
-<div class="space-y-6 max-w-5xl mx-auto">
+<div class="mx-auto max-w-5xl space-y-6">
   <header class="rounded-3xl border border-emerald-500/35 bg-gradient-to-br from-emerald-950/35 via-zinc-950 to-zinc-950 p-6 ring-1 ring-emerald-500/20 sm:p-7">
-    <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-      <div class="max-w-3xl space-y-4">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-xs font-bold uppercase tracking-widest text-emerald-300/95">Lima Lab</span>
-          <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40">FALSIFICATION FIRST</span>
-          <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-zinc-800/90 text-zinc-300 ring-1 ring-zinc-700/70">zero live authority</span>
-        </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-xs font-bold uppercase tracking-widest text-emerald-300/95">Lima Lab</span>
+      <span class="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-100 ring-1 ring-emerald-500/40">FALSIFICATION FIRST</span>
+      <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-semibold text-zinc-300 ring-1 ring-zinc-700/70">zero live authority</span>
+    </div>
 
-        <div>
-          <h1 class="font-display text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
-            Imagine the universe, break it, compile only the survivor.
-          </h1>
-          <p class="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-300">
-            Lima sits upstream of Shadow and Aristotle. It reads the frontier, invents solved-world frameworks,
-            attacks them deterministically, cites literature, remembers fractures, and emits only reviewable handoffs.
-          </p>
-        </div>
+    <div class="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+      <div>
+        <h1 class="font-display text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
+          Lima scouts, breaks, and hands you only reviewable packets.
+        </h1>
+        <p class="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-300">
+          It invents candidate universes, attacks them, remembers fractures, cites literature, and keeps live Aristotle work behind human review.
+        </p>
+      </div>
 
-        <div class="rounded-2xl border border-zinc-800/90 bg-black/25 p-4">
-          <p class="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/90 mb-1">Current problem</p>
-          <p class="text-sm font-medium text-zinc-100">{{ lima_problem.title }}</p>
-          <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ lima_problem.statement_md }}</p>
-          <p class="mt-2 text-[11px] font-mono text-zinc-500">problem_id: {{ lima_problem.id }} / slug: {{ lima_problem.slug }}</p>
-        </div>
+      <div class="rounded-2xl border border-zinc-800/90 bg-black/25 p-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/90">Current problem</p>
+        <p class="mt-2 text-sm font-medium text-zinc-100">{{ lima_problem.title }}</p>
+        <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ lima_problem.statement_md }}</p>
+      </div>
+    </div>
 
+    <div class="mt-5 grid gap-3 md:grid-cols-3">
+      <div class="rounded-2xl border {% if lima_decision_state.tone == 'review' %}border-amber-500/35 bg-amber-950/15{% else %}border-zinc-800/90 bg-zinc-900/40{% endif %} p-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest {% if lima_decision_state.tone == 'review' %}text-amber-200{% else %}text-zinc-500{% endif %}">Status</p>
+        <p class="mt-2 text-base font-semibold text-zinc-100">{{ lima_decision_state.title }}</p>
+        <p class="mt-2 text-xs leading-relaxed text-zinc-400">{{ lima_decision_state.body }}</p>
+      </div>
+      <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Latest result</p>
         {% if lima_latest_summary %}
-        <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
-          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Last run takeaway</p>
-          <p class="text-sm leading-relaxed text-zinc-200">{{ lima_latest_summary }}</p>
-          {% if lima_latest_run %}
-          <p class="mt-2 text-[11px] font-mono text-zinc-500">{{ lima_latest_run.created_at }} / {{ lima_latest_run.trigger_kind }} / {{ lima_latest_run.mode }}</p>
-          {% endif %}
-        </div>
+        <p class="mt-2 text-sm leading-relaxed text-zinc-200">{{ lima_latest_summary }}</p>
+        {% if lima_latest_run %}
+        <p class="mt-2 text-[11px] font-mono text-zinc-500">{{ lima_latest_run.created_at }} / {{ lima_latest_run.trigger_kind }} / {{ lima_latest_run.mode }}</p>
         {% endif %}
-
-        {% if lima_flash %}
-        <div class="rounded-2xl border px-4 py-3 text-sm {% if lima_flash.get('ok') %}border-emerald-500/40 bg-emerald-950/25 text-emerald-100{% else %}border-red-500/40 bg-red-950/25 text-red-200{% endif %}">
-          {% if lima_flash.get('ok') %}
-            {% if lima_flash.get('run_id') %}
-              Lima persisted <span class="font-semibold">{{ lima_flash.get('universe_count', 0) }}</span> universe(s),
-              <span class="font-semibold">{{ lima_flash.get('fracture_count', 0) }}</span> fracture(s), and
-              <span class="font-semibold">{{ lima_flash.get('handoff_count', 0) }}</span> pending handoff(s).
-              {% if lima_flash.get('validation_warnings') %}
-              <p class="mt-2 text-xs text-amber-200/90">Validation notes: {{ lima_flash.validation_warnings|join(', ') }}</p>
-              {% endif %}
-            {% elif lima_flash.get('handoff') == 'approved' %}
-              Lima handoff approved. It remains a review packet; no live Aristotle job was created.
-            {% elif lima_flash.get('handoff') == 'rejected' %}
-              Lima handoff rejected and retained in fracture-aware memory.
-            {% elif lima_flash.get('literature_refresh') %}
-              Literature refresh stored {{ lima_flash.literature_refresh.source_count }} source(s) through {{ lima_flash.literature_refresh.backend }}.
-            {% elif lima_flash.get('problem') %}
-              Problem {{ lima_flash.problem }}: <span class="font-semibold">{{ lima_flash.problem_title }}</span>.
-            {% else %}
-              {{ lima_flash }}
-            {% endif %}
-          {% else %}
-            {{ lima_flash.get('error', 'error') }}
-          {% endif %}
-        </div>
+        {% else %}
+        <p class="mt-2 text-sm leading-relaxed text-zinc-400">No runs yet. Start with one Lima pass to create universes, fractures, obligations, and possible handoffs.</p>
         {% endif %}
+      </div>
+      <div class="rounded-2xl border border-emerald-500/25 bg-emerald-950/15 p-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/90">What you decide</p>
+        <p class="mt-2 text-sm leading-relaxed text-emerald-100/90">
+          Run another pass, inspect the memory, or review a packet. Approving a packet does not launch a live job.
+        </p>
+      </div>
+    </div>
 
-        <form hx-post="/api/lima/run"
-              hx-target="#campaign-panel"
-              hx-swap="innerHTML"
-              hx-disabled-elt="button"
-              class="flex flex-col gap-3 rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4 sm:flex-row sm:items-end">
-          <label class="flex-1">
-            <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Problem</span>
-            <select name="problem_slug" class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+    {% if lima_flash %}
+    <div class="mt-5 rounded-2xl border px-4 py-3 text-sm {% if lima_flash.get('ok') %}border-emerald-500/40 bg-emerald-950/25 text-emerald-100{% else %}border-red-500/40 bg-red-950/25 text-red-200{% endif %}">
+      {% if lima_flash.get('ok') %}
+        {% if lima_flash.get('run_id') %}
+          Lima persisted <span class="font-semibold">{{ lima_flash.get('universe_count', 0) }}</span> universe(s),
+          <span class="font-semibold">{{ lima_flash.get('fracture_count', 0) }}</span> fracture(s), and
+          <span class="font-semibold">{{ lima_flash.get('handoff_count', 0) }}</span> pending handoff(s).
+          {% if lima_flash.get('validation_warnings') %}
+          <p class="mt-2 text-xs text-amber-200/90">Validation notes: {{ lima_flash.validation_warnings|join(', ') }}</p>
+          {% endif %}
+        {% elif lima_flash.get('handoff') == 'approved' %}
+          Lima handoff approved. It remains a review packet; no live Aristotle job was created.
+        {% elif lima_flash.get('handoff') == 'rejected' %}
+          Lima handoff rejected and retained in fracture-aware memory.
+        {% elif lima_flash.get('literature_refresh') %}
+          Literature refresh stored {{ lima_flash.literature_refresh.source_count }} source(s) through {{ lima_flash.literature_refresh.backend }}.
+        {% elif lima_flash.get('problem') %}
+          Problem {{ lima_flash.problem }}: <span class="font-semibold">{{ lima_flash.problem_title }}</span>.
+        {% else %}
+          {{ lima_flash }}
+        {% endif %}
+      {% else %}
+        {{ lima_flash.get('error', 'error') }}
+      {% endif %}
+    </div>
+    {% endif %}
+  </header>
+
+  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div class="max-w-xl">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Next step</p>
+        <h2 class="mt-2 font-display text-xl font-semibold text-zinc-100">{{ lima_decision_state.next_title }}</h2>
+        <p class="mt-2 text-sm leading-relaxed text-zinc-400">{{ lima_decision_state.next_body }}</p>
+        {% if lima_pending_handoffs %}
+        <a href="#handoff-queue" class="mt-4 inline-flex rounded-lg bg-amber-500/90 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-amber-400">
+          Review {{ lima_pending_handoffs|length }} pending
+        </a>
+        {% endif %}
+      </div>
+
+      <form hx-post="/api/lima/run"
+            hx-target="#campaign-panel"
+            hx-swap="innerHTML"
+            hx-disabled-elt="button"
+            class="w-full max-w-xl rounded-2xl border border-zinc-800/90 bg-zinc-950/40 p-4 lg:w-[28rem]">
+        <div class="grid gap-3">
+          <label>
+            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Problem</span>
+            <select name="problem_slug" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
               {% for p in lima_problems %}
               <option value="{{ p.slug }}" {% if p.id == lima_problem.id %}selected{% endif %}>{{ p.title }}</option>
               {% endfor %}
             </select>
           </label>
-          <label class="sm:w-44">
-            <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Mode</span>
-            <select name="mode" class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
-              {% for mode in ["balanced", "wild", "stress", "forge"] %}
-              <option value="{{ mode }}" {% if mode == operator.lima_default_mode %}selected{% endif %}>{{ mode }}</option>
+          <label>
+            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Mode</span>
+            <select name="mode" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+              {% for mode in lima_modes %}
+              <option value="{{ mode.value }}" {% if mode.value == operator.lima_default_mode %}selected{% endif %}>{{ mode.label }} - {{ mode.hint }}</option>
               {% endfor %}
             </select>
           </label>
           <button type="submit"
-                  class="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition-colors hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-70">
+                  class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70">
             <span class="htmx-hide-while-loading">{{ lima_primary_cta }}</span>
             <span class="htmx-indicator items-center gap-2">Breaking universes...</span>
           </button>
-        </form>
-
-        <details class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
-          <summary class="cursor-pointer select-none text-sm font-medium text-zinc-300">Add a new Lima problem</summary>
-          <form hx-post="/api/lima/problem"
-                hx-target="#campaign-panel"
-                hx-swap="innerHTML"
-                hx-disabled-elt="button"
-                class="mt-4 grid gap-3">
-            <div class="grid gap-3 sm:grid-cols-2">
-              <label>
-                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Title</span>
-                <input name="title" required placeholder="Goldbach conjecture"
-                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-              </label>
-              <label>
-                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Slug</span>
-                <input name="slug" placeholder="goldbach"
-                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-              </label>
-            </div>
-            <label>
-              <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Statement</span>
-              <textarea name="statement_md" required rows="3" placeholder="State the conjecture or research problem..."
-                        class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"></textarea>
-            </label>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <label>
-                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Domain</span>
-                <input name="domain" value="number_theory"
-                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-              </label>
-              <label>
-                <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Seed packet JSON or notes</span>
-                <input name="seed_packet_json" placeholder='{"known_frontier":["..."]}'
-                       class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-              </label>
-            </div>
-            <label>
-              <span class="block text-[10px] font-semibold uppercase tracking-widest text-zinc-500 mb-1">Default goal</span>
-              <input name="default_goal_text" placeholder="Optional problem-specific Lima mission"
-                     class="w-full rounded-xl bg-zinc-950 border border-zinc-700/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-            </label>
-            <button type="submit"
-                    class="w-fit rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-700 hover:bg-zinc-700 disabled:opacity-70">
-              Create problem
-            </button>
-          </form>
-        </details>
-
-        <div class="flex flex-wrap gap-2 text-[11px] font-mono text-zinc-500">
-          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">db: {{ operator.lima_database_path }}</span>
-          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">auto-loop: {% if operator.lima_enabled %}on{% else %}off{% endif %} / {{ operator.lima_loop_interval_sec }}s</span>
-          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">universes/run: {{ operator.lima_max_universes_per_run }}</span>
-          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">obligations/run: {{ operator.lima_max_obligations_per_run }}</span>
-          <span class="rounded-full bg-zinc-900/80 px-2.5 py-1 ring-1 ring-zinc-800/80">literature: {{ operator.lima_literature_backends }}</span>
         </div>
-      </div>
-
-      <div class="w-full max-w-sm space-y-3 lg:w-80">
-        <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
-            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Universes</p>
-            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.universe_count }}</p>
-            <p class="mt-1 text-xs text-zinc-500">structured candidate worlds</p>
-          </div>
-          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
-            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Fractures</p>
-            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.fracture_count }}</p>
-            <p class="mt-1 text-xs text-zinc-500">remembered ways universes break</p>
-          </div>
-          <div class="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
-            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Queued obligations</p>
-            <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.queued_obligations }}</p>
-            <p class="mt-1 text-xs text-zinc-500">formal review candidates</p>
-          </div>
-          <div class="rounded-2xl border border-emerald-500/25 bg-emerald-950/15 p-4">
-            <p class="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/90">Doctrine</p>
-            <p class="mt-2 text-sm leading-relaxed text-emerald-100/90">
-              Supershadow imagines. Lima imagines, breaks, formalizes, remembers, cites, and improves policy.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </header>
-
-  <section class="grid gap-4 lg:grid-cols-2">
-    <div class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
-      <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Family leaderboard</h2>
-      <div class="mt-4 space-y-3">
-        {% for family in lima_families %}
-        <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-medium text-zinc-100">{{ family.family_key }}</span>
-            <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] text-zinc-400 ring-1 ring-zinc-700/70">{{ family.family_kind }}</span>
-            <span class="text-[10px] font-mono text-zinc-600">{{ family.status }}</span>
-          </div>
-          <p class="mt-2 text-xs leading-relaxed text-zinc-500">{{ family.thesis_md }}</p>
-          <p class="mt-2 text-[11px] font-mono text-zinc-500">survive {{ family.survival_count }} / fail {{ family.failure_count }} / formal {{ family.formal_win_count }}</p>
-        </div>
-        {% else %}
-        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No families yet. Run Lima to create the first memory layer.</p>
-        {% endfor %}
-      </div>
+      </form>
     </div>
 
-    <div class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Literature memory</h2>
-          <p class="mt-1 text-xs text-zinc-500">Local/manual stubs now; future APIs can plug into the same interface.</p>
-        </div>
-        <form hx-post="/api/lima/literature/refresh" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button" class="flex items-center gap-2">
-          <input type="hidden" name="problem_slug" value="{{ lima_problem.slug }}" />
-          <select name="backend_selection" class="rounded-lg bg-zinc-950 border border-zinc-700/80 px-2 py-2 text-xs text-zinc-100">
-            <option value="configured">Configured</option>
-            <option value="local">Local</option>
-            <option value="arxiv">arXiv</option>
-            <option value="semantic_scholar">Semantic Scholar</option>
-            <option value="crossref">Crossref</option>
-            <option value="all">All</option>
-          </select>
-          <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-700 ring-1 ring-zinc-600/50 disabled:opacity-70">Refresh</button>
-        </form>
+    <div class="mt-4 grid gap-3 sm:grid-cols-4">
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Universes</p>
+        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.universe_count }}</p>
       </div>
-      <div class="mt-4 space-y-3">
-        {% for source in lima_literature_sources %}
-        <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-medium text-zinc-100">{{ source.title }}</span>
-            <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-200 ring-1 ring-emerald-500/30">{{ source.source_type }}</span>
-          </div>
-          <p class="mt-1 text-[11px] text-zinc-500">{{ source.venue }}{% if source.year %} / {{ source.year }}{% endif %}</p>
-          <p class="mt-2 text-xs leading-relaxed text-zinc-400">{{ source.abstract_md }}</p>
-        </div>
-        {% else %}
-        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No literature sources yet.</p>
-        {% endfor %}
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Fractures</p>
+        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.fracture_count }}</p>
+      </div>
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Obligations</p>
+        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.queued_obligations }}</p>
+      </div>
+      <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Handoffs</p>
+        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_metrics.pending_handoffs }}</p>
       </div>
     </div>
   </section>
 
+  <section id="handoff-queue" class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Review queue</p>
+        <h2 class="mt-2 font-display text-xl font-semibold text-zinc-100">Handoff queue</h2>
+        <p class="mt-1 text-xs text-zinc-500">Approvals create reviewed packets only. Lima never pushes directly to the live experiment queue.</p>
+      </div>
+      <p class="text-xs text-zinc-500">{{ lima_pending_handoffs|length }} pending</p>
+    </div>
+
+    <div class="mt-4 space-y-3">
+      {% for handoff in lima_pending_handoffs %}
+      <article class="rounded-2xl border border-emerald-500/20 bg-zinc-950/50 p-4">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div class="min-w-0 flex-1">
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200 ring-1 ring-emerald-500/30">{{ handoff.preview.destination_kind }}</span>
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ handoff.status }}</span>
+            </div>
+            <h3 class="text-sm font-medium leading-relaxed text-zinc-100">{{ handoff.preview.title }}</h3>
+            {% if handoff.preview.fracture_summary %}
+            <p class="mt-2 text-xs leading-relaxed text-zinc-500">{{ handoff.preview.fracture_summary }}</p>
+            {% endif %}
+            <details class="mt-3 text-xs">
+              <summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400">Raw handoff packet</summary>
+              <pre class="custom-scroll mt-2 max-h-40 overflow-y-auto overflow-x-auto rounded-lg border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-500">{{ handoff.preview.payload_json_pretty }}</pre>
+            </details>
+          </div>
+          <div class="flex shrink-0 gap-2">
+            <form hx-post="/api/lima/handoff/{{ handoff.id }}/approve" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-70">Approve packet</button>
+            </form>
+            <form hx-post="/api/lima/handoff/{{ handoff.id }}/reject" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
+              <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Reject</button>
+            </form>
+          </div>
+        </div>
+      </article>
+      {% else %}
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No handoffs need review right now.</p>
+      {% endfor %}
+    </div>
+  </section>
+
   <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Active universes</h2>
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Research memory</p>
+        <h2 class="mt-2 font-display text-xl font-semibold text-zinc-100">Active universes</h2>
+      </div>
+      <p class="text-xs text-zinc-500">{{ lima_metrics.universe_count }} candidate worlds</p>
+    </div>
     <div class="mt-4 space-y-4">
       {% for universe in lima_universes %}
       <article class="rounded-2xl border border-emerald-500/20 bg-zinc-950/50 p-4">
-        <div class="flex flex-wrap items-center gap-2 mb-2">
+        <div class="mb-2 flex flex-wrap items-center gap-2">
           <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200 ring-1 ring-emerald-500/30">{{ universe.universe_status }}</span>
           <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ universe.family_key }}</span>
-          <span class="text-[10px] font-mono text-zinc-600">{{ universe.id }}</span>
         </div>
         <h3 class="text-base font-medium leading-relaxed text-zinc-100">{{ universe.title }}</h3>
         <p class="mt-2 text-xs text-zinc-500">{{ universe.branch_of_math }}</p>
@@ -254,14 +212,14 @@
         </div>
       </article>
       {% else %}
-      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No universes yet. Lima is waiting for its first run.</p>
+      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No universes yet. Run Lima to create the first candidate worlds.</p>
       {% endfor %}
     </div>
   </section>
 
   <section class="grid gap-4 lg:grid-cols-2">
     <div class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
-      <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Top fractures</h2>
+      <h2 class="font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Top fractures</h2>
       <div class="mt-4 space-y-3">
         {% for fracture in lima_fractures %}
         <div class="rounded-xl border border-red-500/20 bg-zinc-950/40 p-3">
@@ -276,13 +234,13 @@
           {% endif %}
         </div>
         {% else %}
-        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No fractures yet.</p>
+        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No fractures yet.</p>
         {% endfor %}
       </div>
     </div>
 
     <div class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
-      <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Formal obligations</h2>
+      <h2 class="font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Formal obligations</h2>
       <div class="mt-4 space-y-3">
         {% for obligation in lima_obligations %}
         <div class="rounded-xl border border-sky-500/20 bg-zinc-950/40 p-3">
@@ -293,74 +251,149 @@
           <p class="mt-2 text-sm font-medium text-zinc-100">{{ obligation.title }}</p>
           <p class="mt-1 text-xs leading-relaxed text-zinc-500">{{ obligation.statement_md }}</p>
           {% if obligation.lean_goal %}
-          <pre class="mt-2 overflow-x-auto rounded-lg bg-black/30 p-2 text-[11px] text-zinc-400 custom-scroll">{{ obligation.lean_goal }}</pre>
+          <pre class="custom-scroll mt-2 overflow-x-auto rounded-lg bg-black/30 p-2 text-[11px] text-zinc-400">{{ obligation.lean_goal }}</pre>
           {% endif %}
         </div>
         {% else %}
-        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No obligations queued yet.</p>
+        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No obligations queued yet.</p>
         {% endfor %}
       </div>
     </div>
   </section>
 
-  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
-      <div>
-        <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Handoff queue</h2>
-        <p class="mt-1 text-xs text-zinc-500">Approvals create reviewed packets only. Lima never pushes directly to the live experiment queue.</p>
+  <section class="grid gap-4 lg:grid-cols-2">
+    <div class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 class="font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Literature memory</h2>
+          <p class="mt-1 text-xs text-zinc-500">Refresh sources before judging novelty.</p>
+        </div>
+        <form hx-post="/api/lima/literature/refresh" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button" class="flex items-center gap-2">
+          <input type="hidden" name="problem_slug" value="{{ lima_problem.slug }}" />
+          <select name="backend_selection" class="rounded-lg border border-zinc-700/80 bg-zinc-950 px-2 py-2 text-xs text-zinc-100">
+            <option value="configured">Configured</option>
+            <option value="local">Local</option>
+            <option value="arxiv">arXiv</option>
+            <option value="semantic_scholar">Semantic Scholar</option>
+            <option value="crossref">Crossref</option>
+            <option value="all">All</option>
+          </select>
+          <button type="submit" class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-zinc-600/50 hover:bg-zinc-700 disabled:opacity-70">Refresh</button>
+        </form>
       </div>
-      <p class="text-xs text-zinc-500">{{ lima_pending_handoffs|length }} pending</p>
+      <div class="mt-4 space-y-3">
+        {% for source in lima_literature_sources %}
+        <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-zinc-100">{{ source.title }}</span>
+            <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-200 ring-1 ring-emerald-500/30">{{ source.source_type }}</span>
+          </div>
+          <p class="mt-1 text-[11px] text-zinc-500">{{ source.venue }}{% if source.year %} / {{ source.year }}{% endif %}</p>
+          <p class="mt-2 text-xs leading-relaxed text-zinc-400">{{ source.abstract_md }}</p>
+        </div>
+        {% else %}
+        <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No literature sources yet.</p>
+        {% endfor %}
+      </div>
     </div>
 
-    <div class="space-y-3">
-      {% for handoff in lima_pending_handoffs %}
-      <article class="rounded-2xl border border-emerald-500/20 bg-zinc-950/50 p-4">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2 mb-2">
-              <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200 ring-1 ring-emerald-500/30">{{ handoff.preview.destination_kind }}</span>
-              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">{{ handoff.status }}</span>
-              <span class="text-[10px] font-mono text-zinc-600">{{ handoff.id }}</span>
+    <div class="space-y-4">
+      <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+        <summary class="cursor-pointer select-none font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Family leaderboard</summary>
+        <div class="mt-4 space-y-3">
+          {% for family in lima_families %}
+          <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-medium text-zinc-100">{{ family.family_key }}</span>
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] text-zinc-400 ring-1 ring-zinc-700/70">{{ family.family_kind }}</span>
+              <span class="text-[10px] font-mono text-zinc-600">{{ family.status }}</span>
             </div>
-            <h3 class="text-sm font-medium leading-relaxed text-zinc-100">{{ handoff.preview.title }}</h3>
-            {% if handoff.preview.fracture_summary %}
-            <p class="mt-2 text-xs leading-relaxed text-zinc-500">{{ handoff.preview.fracture_summary }}</p>
-            {% endif %}
-            <details class="mt-3 text-xs">
-              <summary class="cursor-pointer text-zinc-500 hover:text-zinc-400 select-none">Raw handoff packet</summary>
-              <pre class="mt-2 max-h-40 overflow-y-auto overflow-x-auto rounded-xl border border-zinc-800/80 bg-black/40 p-3 font-mono text-[11px] text-zinc-500 custom-scroll">{{ handoff.preview.payload_json_pretty }}</pre>
-            </details>
+            <p class="mt-2 text-xs leading-relaxed text-zinc-500">{{ family.thesis_md }}</p>
+            <p class="mt-2 text-[11px] font-mono text-zinc-500">survive {{ family.survival_count }} / fail {{ family.failure_count }} / formal {{ family.formal_win_count }}</p>
           </div>
-          <div class="flex gap-2 shrink-0">
-            <form hx-post="/api/lima/handoff/{{ handoff.id }}/approve" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
-              <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600/90 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-70">Approve packet</button>
-            </form>
-            <form hx-post="/api/lima/handoff/{{ handoff.id }}/reject" hx-target="#campaign-panel" hx-swap="innerHTML" hx-disabled-elt="button">
-              <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-700 ring-1 ring-zinc-600/50 disabled:opacity-70">Reject</button>
-            </form>
-          </div>
+          {% else %}
+          <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No families yet.</p>
+          {% endfor %}
         </div>
-      </article>
-      {% else %}
-      <p class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No handoffs are waiting.</p>
-      {% endfor %}
-    </div>
-  </section>
+      </details>
 
-  <section class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6">
-    <h2 class="font-display text-sm font-semibold text-zinc-300 uppercase tracking-widest">Policy revisions</h2>
-    <div class="mt-4 space-y-3">
-      {% for revision in lima_policy_revisions %}
-      <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">revision {{ revision.revision_no }}</span>
-          <span class="text-[10px] font-mono text-zinc-600">{{ revision.created_at }}</span>
+      <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+        <summary class="cursor-pointer select-none font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Add a new Lima problem</summary>
+        <form hx-post="/api/lima/problem"
+              hx-target="#campaign-panel"
+              hx-swap="innerHTML"
+              hx-disabled-elt="button"
+              class="mt-4 grid gap-3">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Title</span>
+              <input name="title" required placeholder="Goldbach conjecture"
+                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+            </label>
+            <label>
+              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Slug</span>
+              <input name="slug" placeholder="goldbach"
+                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+            </label>
+          </div>
+          <label>
+            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Statement</span>
+            <textarea name="statement_md" required rows="3" placeholder="State the conjecture or research problem..."
+                      class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"></textarea>
+          </label>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Domain</span>
+              <input name="domain" value="number_theory"
+                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+            </label>
+            <label>
+              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Seed packet JSON or notes</span>
+              <input name="seed_packet_json" placeholder='{"known_frontier":["..."]}'
+                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+            </label>
+          </div>
+          <label>
+            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Default goal</span>
+            <input name="default_goal_text" placeholder="Optional problem-specific Lima mission"
+                   class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+          </label>
+          <button type="submit"
+                  class="w-fit rounded-lg bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-700 hover:bg-zinc-700 disabled:opacity-70">
+            Create problem
+          </button>
+        </form>
+      </details>
+
+      <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+        <summary class="cursor-pointer select-none font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Runtime details</summary>
+        <div class="mt-4 flex flex-wrap gap-2 text-[11px] font-mono text-zinc-500">
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">problem_id: {{ lima_problem.id }}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">slug: {{ lima_problem.slug }}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">db: {{ operator.lima_database_path }}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">auto-loop: {% if operator.lima_enabled %}on{% else %}off{% endif %} / {{ operator.lima_loop_interval_sec }}s</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">universes/run: {{ operator.lima_max_universes_per_run }}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">obligations/run: {{ operator.lima_max_obligations_per_run }}</span>
+          <span class="rounded-full bg-zinc-950/80 px-2.5 py-1 ring-1 ring-zinc-800/80">literature: {{ operator.lima_literature_backends }}</span>
         </div>
-        <p class="mt-2 text-xs leading-relaxed text-zinc-500">{{ revision.change_reason_md }}</p>
-      </div>
-      {% else %}
-      <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm italic text-zinc-500">No policy revisions yet.</p>
-      {% endfor %}
+      </details>
+
+      <details class="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+        <summary class="cursor-pointer select-none font-display text-sm font-semibold uppercase tracking-widest text-zinc-300">Policy revisions</summary>
+        <div class="mt-4 space-y-3">
+          {% for revision in lima_policy_revisions %}
+          <div class="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-zinc-800/90 px-2 py-0.5 text-[10px] font-mono uppercase text-zinc-400 ring-1 ring-zinc-700/70">revision {{ revision.revision_no }}</span>
+              <span class="text-[10px] font-mono text-zinc-600">{{ revision.created_at }}</span>
+            </div>
+            <p class="mt-2 text-xs leading-relaxed text-zinc-500">{{ revision.change_reason_md }}</p>
+          </div>
+          {% else %}
+          <p class="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/30 px-4 py-5 text-sm text-zinc-500">No policy revisions yet.</p>
+          {% endfor %}
+        </div>
+      </details>
     </div>
   </section>
 </div>
