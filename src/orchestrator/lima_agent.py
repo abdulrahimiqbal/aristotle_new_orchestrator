@@ -1103,15 +1103,22 @@ async def run_lima(
 async def lima_loop(lima_db: LimaDatabase, main_db: Database) -> None:
     if not app_config.LIMA_ENABLED:
         return
+    problem_cursor = 0
     while True:
         try:
-            await run_lima(
-                lima_db,
-                main_db,
-                problem_slug=app_config.LIMA_DEFAULT_PROBLEM,
-                trigger_kind="scheduled",
-                mode=app_config.LIMA_DEFAULT_MODE,
-            )
+            problems = lima_db.list_schedulable_problems()
+            if problems:
+                if problem_cursor >= len(problems):
+                    problem_cursor = 0
+                selected = problems[problem_cursor]
+                problem_cursor = (problem_cursor + 1) % max(1, len(problems))
+                await run_lima(
+                    lima_db,
+                    main_db,
+                    problem_slug=str(selected.get("slug") or app_config.LIMA_DEFAULT_PROBLEM),
+                    trigger_kind="scheduled",
+                    mode=app_config.LIMA_DEFAULT_MODE,
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

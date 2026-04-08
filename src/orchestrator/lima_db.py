@@ -777,6 +777,44 @@ class LimaDatabase:
         finally:
             conn.close()
 
+    def list_schedulable_problems(self) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM lima_problem
+                WHERE status = 'active'
+                ORDER BY created_at ASC
+                """
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def update_problem_status(self, problem_id_or_slug: str, *, status: str) -> dict[str, Any]:
+        normalized = slugify(status, fallback="active")
+        if normalized not in {"active", "paused", "archived"}:
+            normalized = "active"
+        now = _now()
+        conn = self._connect()
+        try:
+            key = problem_id_or_slug or app_config.LIMA_DEFAULT_PROBLEM
+            cur = conn.execute(
+                """
+                UPDATE lima_problem
+                SET status = ?, updated_at = ?
+                WHERE id = ? OR slug = ?
+                """,
+                (normalized, now, key, slugify(key, fallback="problem")),
+            )
+            conn.commit()
+            if cur.rowcount <= 0:
+                raise ValueError("unknown Lima problem")
+            return self.get_problem(problem_id_or_slug)
+        finally:
+            conn.close()
+
     def get_problem(self, problem_id_or_slug: str | None = None) -> dict[str, Any]:
         key = problem_id_or_slug or app_config.LIMA_DEFAULT_PROBLEM
         self.ensure_default_problem()

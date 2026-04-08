@@ -258,6 +258,32 @@ def test_lima_transfer_metric_persistence(tmp_path: Path) -> None:
     assert "duplicate_family_rate" in rows[0]["metric_json"]
 
 
+def test_lima_problem_pause_resume_and_schedulable_filter(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    twin_id, _created = db.create_problem(
+        slug="twin_primes",
+        title="Twin primes",
+        statement_md="Infinitely many primes p have p+2 prime.",
+        domain="number_theory",
+        default_goal_text="Search for good universes.",
+    )
+    active_slugs = [row["slug"] for row in db.list_schedulable_problems()]
+    assert "collatz" in active_slugs
+    assert "twin_primes" in active_slugs
+    paused = db.update_problem_status("collatz", status="paused")
+    assert paused["status"] == "paused"
+    active_slugs = [row["slug"] for row in db.list_schedulable_problems()]
+    assert "collatz" not in active_slugs
+    assert "twin_primes" in active_slugs
+    resumed = db.update_problem_status(twin_id, status="archived")
+    assert resumed["status"] == "archived"
+    active_slugs = [row["slug"] for row in db.list_schedulable_problems()]
+    assert "twin_primes" not in active_slugs
+    db.update_problem_status("collatz", status="active")
+    assert "collatz" in [row["slug"] for row in db.list_schedulable_problems()]
+
+
 def test_lima_literature_and_meta_policy_persistence(tmp_path: Path) -> None:
     db = LimaDatabase(str(tmp_path / "lima.db"))
     db.initialize()

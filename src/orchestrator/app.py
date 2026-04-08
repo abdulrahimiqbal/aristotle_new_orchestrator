@@ -1027,6 +1027,44 @@ async def lima_problem_create_fragment(
     )
 
 
+@app.post("/api/lima/problem/{problem_slug}/pause", response_class=HTMLResponse)
+async def lima_problem_pause_fragment(
+    request: Request,
+    problem_slug: str,
+    _auth: OperatorWriteAuth,
+):
+    problem = lima_db.update_problem_status(problem_slug, status="paused")
+    flash = {
+        "ok": True,
+        "problem": "paused",
+        "problem_title": problem.get("title"),
+    }
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=str(problem.get("slug") or problem_slug), lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/problem/{problem_slug}/resume", response_class=HTMLResponse)
+async def lima_problem_resume_fragment(
+    request: Request,
+    problem_slug: str,
+    _auth: OperatorWriteAuth,
+):
+    problem = lima_db.update_problem_status(problem_slug, status="active")
+    flash = {
+        "ok": True,
+        "problem": "resumed",
+        "problem_title": problem.get("title"),
+    }
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=str(problem.get("slug") or problem_slug), lima_flash=flash),
+    )
+
+
 @app.post("/api/lima/start", response_class=HTMLResponse)
 async def lima_start_from_prompt_fragment(
     request: Request,
