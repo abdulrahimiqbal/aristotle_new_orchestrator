@@ -155,6 +155,14 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
     literature_links = [dict(e) for e in snapshot.get("literature_links") or []]
     formal_reviews = [dict(r) for r in snapshot.get("formal_reviews") or []]
     artifacts = [dict(a) for a in snapshot.get("artifacts") or []]
+    families = [dict(f) for f in snapshot.get("families") or []]
+    for family in families:
+        family["required_delta"] = _load_json(family.get("required_delta_json"), [])
+    family_search_controls = [
+        f
+        for f in families
+        if str(f.get("search_action") or "") in {"mutate", "cooldown", "retire"}
+    ]
     artifact_counts: dict[str, int] = {}
     for artifact in artifacts:
         kind = str(artifact.get("artifact_kind") or "artifact")
@@ -204,7 +212,8 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_latest_run": latest_run,
         "lima_latest_summary": latest_summary,
         "lima_runs": snapshot.get("runs") or [],
-        "lima_families": snapshot.get("families") or [],
+        "lima_families": families,
+        "lima_family_search_controls": family_search_controls,
         "lima_universes": universes,
         "lima_promising_universes": promising,
         "lima_fractures": fractures,

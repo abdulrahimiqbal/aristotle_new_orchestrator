@@ -156,6 +156,9 @@ Rules:
 - Every universe needs objects, claims, kill tests, backward translation, and at least one formalization target.
 - Prefer exact integer/rational reasoning.
 - Name prior-art risks instead of claiming novelty when a literature query suggests overlap.
+- Obey search_constraints: repeated fracture memory must change the next experiment design.
+  If a family is mutate/cooldown/retire, do not emit another member unless a core object,
+  invariant, bridge lemma, falsifier, or literature tool changes materially.
 - No live execution fields such as campaign_id, target_id, objective, new_experiment, or aristotle_job_id."""
 
 _GLOBAL_LIMA_RUN_LOCK = False
@@ -279,6 +282,7 @@ def build_pressure_map(
     state: dict[str, Any],
     reference_points: list[dict[str, Any]],
     fractures: list[dict[str, Any]],
+    family_search_constraints: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     seed = safe_json_loads(problem.get("seed_packet_json"), {})
     frontier = safe_json_loads(state.get("frontier_json"), {})
@@ -292,6 +296,24 @@ def build_pressure_map(
     ]
     if failed:
         tensions.append("Recent fracture memory emphasizes: " + ", ".join(failed[:5]))
+    search_constraints = []
+    for row in family_search_constraints or []:
+        required_delta = safe_json_loads(row.get("required_delta_json"), [])
+        search_constraints.append(
+            {
+                "family_key": row.get("family_key"),
+                "search_action": row.get("search_action"),
+                "status": row.get("status"),
+                "last_failure_type": row.get("last_failure_type"),
+                "repeat_failure_count": row.get("repeat_failure_count"),
+                "reason": row.get("search_reason_md"),
+                "required_delta": required_delta if isinstance(required_delta, list) else [],
+                "instruction": (
+                    "Do not re-emit this family unless the next universe materially changes "
+                    "a core object, invariant, bridge lemma, falsifier, or literature tool."
+                ),
+            }
+        )
     return {
         "problem_slug": problem.get("slug"),
         "seed_frontier": seed.get("known_frontier") or [],
@@ -303,6 +325,7 @@ def build_pressure_map(
             "supershadow": sum(1 for r in reference_points if r["reference_kind"].startswith("supershadow")),
         },
         "tensions": tensions,
+        "search_constraints": search_constraints,
         "failed_invariants": ["naive global height descent", *failed[:4]],
         "known_constraints": [
             "No live Aristotle or main experiment queue mutations without human approval.",
@@ -315,6 +338,15 @@ def build_pressure_map(
             "Compile first bridges as finite/residue or one-step compatibility obligations.",
         ],
     }
+
+
+def _family_constraint_action(pressure_map: dict[str, Any], family_key: str) -> str:
+    for row in pressure_map.get("search_constraints") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("family_key") or "") == family_key:
+            return str(row.get("search_action") or "")
+    return ""
 
 
 def _local_generation(
@@ -443,6 +475,132 @@ def _local_generation(
         "forge": "odd_state_quotient_bridge",
         "balanced": "odd_state_quotient_bridge",
     }[mode]
+    if _family_constraint_action(pressure_map, family_key) in {"mutate", "cooldown", "retire"}:
+        family_key = "accelerated_drift_certificate"
+        title = "Accelerated drift certificate atlas"
+        theorem = LimaClaimSpec(
+            claim_kind="conditional_theorem",
+            title="Block drift certificate implies bounded descent",
+            statement_md=(
+                "If a block-level acceleration certificate gives negative drift on every "
+                "non-terminal parity block with explicit boundary exceptions, then Collatz "
+                "trajectories admit a bounded descent certificate."
+            ),
+            priority=5,
+        )
+        universe = LimaUniverseSpec(
+            title=title,
+            family_key=family_key,
+            family_kind="adjacent",
+            branch_of_math="finite automata and Lyapunov drift",
+            solved_world=(
+                "Parity blocks carry exact acceleration factors and a rational drift certificate "
+                "rather than quotient-class descent claims."
+            ),
+            why_problem_is_easy_here=(
+                "The search target changes from a residue quotient to an explicit block certificate "
+                "whose failure should expose a smallest bad block."
+            ),
+            core_story_md=(
+                "Lima mutates away from the prior-art quotient family. The new universe asks for "
+                "finite block certificates with exact acceleration weights and boundary exceptions."
+            ),
+            core_objects=[
+                LimaObjectSpec(
+                    object_kind="automaton",
+                    name="ParityBlockAutomaton",
+                    description_md="A finite automaton of parity blocks with exact affine acceleration data.",
+                    formal_shape="List Bool -> AffineMap Nat",
+                    payload={"block_lengths": [4, 6, 8]},
+                ),
+                LimaObjectSpec(
+                    object_kind="potential",
+                    name="BlockDriftPotential",
+                    description_md="A rational potential that should decrease across certified non-terminal blocks.",
+                    formal_shape="ParityBlock -> Rat",
+                    payload={},
+                ),
+            ],
+            laws=[
+                LimaClaimSpec(
+                    claim_kind="law",
+                    title="Certified blocks have explicit drift",
+                    statement_md="Every accepted parity block carries an exact affine update and a rational drift margin.",
+                    priority=4,
+                )
+            ],
+            backward_translation=[
+                "Decompose a Collatz trajectory into fixed-length parity blocks.",
+                "Lift a negative block drift certificate to bounded ordinary integer descent with named boundary exceptions.",
+            ],
+            bridge_lemmas=[
+                LimaClaimSpec(
+                    claim_kind="bridge_lemma",
+                    title="Block certificate composes along trajectories",
+                    statement_md="Exact affine block certificates compose without assuming global Collatz descent.",
+                    formal_statement="forall b1 b2, certified b1 -> certified b2 -> certified (b1 ++ b2)",
+                    priority=5,
+                )
+            ],
+            conditional_theorem=theorem,
+            kill_tests=[
+                LimaClaimSpec(
+                    claim_kind="kill_test",
+                    title="Small bad block search",
+                    statement_md="Enumerate parity blocks of length up to 8 and find the smallest block with non-negative drift margin.",
+                    priority=5,
+                ),
+                LimaClaimSpec(
+                    claim_kind="kill_test",
+                    title="Boundary exception audit",
+                    statement_md="Reject the certificate if boundary exceptions silently include all difficult trajectories.",
+                    priority=4,
+                ),
+            ],
+            expected_failure_mode="The drift certificate may fail on a small block or hide difficulty in boundary exceptions.",
+            literature_queries=[
+                "Collatz parity vector finite automata drift certificate",
+                "3x+1 acceleration parity blocks Lyapunov function",
+            ],
+            formalization_targets=[
+                LimaObligationSpec(
+                    obligation_kind="counterexample_search",
+                    title="Bad parity block search length 8",
+                    statement_md="Enumerate parity blocks up to length 8 and report any non-negative drift margin.",
+                    priority=5,
+                ),
+                LimaObligationSpec(
+                    obligation_kind="bridge_lemma",
+                    title="Block certificate composes along trajectories",
+                    statement_md="State the composition lemma for exact affine parity-block certificates.",
+                    lean_goal="forall b1 b2 : List Bool, True",
+                    priority=4,
+                ),
+            ],
+            scores={
+                "compression_score": 3,
+                "fit_score": 3,
+                "novelty_score": 4,
+                "falsifiability_score": 5,
+                "bridgeability_score": 4,
+                "formalizability_score": 4,
+                "theorem_yield_score": 3,
+                "literature_novelty_score": 4,
+            },
+        )
+        return LimaGenerationResponse(
+            frontier_summary_md=(
+                "Collatz quotient/residue pressure is currently cooled by prior-art fractures; "
+                "Lima is mutating toward exact block-drift certificates."
+            ),
+            pressure_map=pressure_map,
+            run_summary_md=(
+                f"Lima {mode} run mutated away from a repeated fractured family and emitted "
+                "a block-drift certificate universe with new falsification targets."
+            ),
+            universes=[universe],
+            policy_notes=["Fracture-to-pressure controller required a material family mutation."],
+        )
     title = {
         "wild": "Completion-boundary sheaf for Collatz orbits",
         "stress": "Residue fracture boundary universe",
@@ -648,7 +806,15 @@ async def run_lima(
         state = lima_db.get_state(problem_id)
         reference_points = _build_reference_points(main_db, problem)
         fractures = lima_db.list_fractures(problem_id, limit=24)
-        pressure_map = build_pressure_map(problem, state, reference_points, fractures)
+        families = lima_db.list_family_leaderboard(problem_id, limit=16)
+        family_search_constraints = lima_db.list_family_search_constraints(problem_id, limit=12)
+        pressure_map = build_pressure_map(
+            problem,
+            state,
+            reference_points,
+            fractures,
+            family_search_constraints=family_search_constraints,
+        )
         literature_refresh = refresh_literature(
             lima_db,
             problem=problem,
@@ -658,7 +824,6 @@ async def run_lima(
         literature_context = lima_db.list_literature_sources(
             problem_id, limit=int(app_config.LIMA_MAX_LITERATURE_RESULTS)
         )
-        families = lima_db.list_family_leaderboard(problem_id, limit=16)
         policy_revisions = lima_db.list_policy_revisions(problem_id, limit=6)
         raw_response: dict[str, Any] = {}
         raw_preview = ""

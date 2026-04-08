@@ -8,9 +8,10 @@ from types import SimpleNamespace
 from orchestrator import config as app_config
 from orchestrator.db import Database
 from orchestrator.lima_agent import _build_reference_points
-from orchestrator.lima_db import LimaDatabase
+from orchestrator.lima_db import LimaDatabase, _canonical_hash
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
-from orchestrator.lima_models import LimaObligationSpec, safe_json_loads
+from orchestrator.lima_meta import analyze_and_update_policy
+from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, safe_json_loads
 import orchestrator.lima_obligations as lima_obligations_mod
 from orchestrator.lima_obligations import (
     AristotleFormalBackend,
@@ -96,6 +97,9 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
         formal_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(lima_formal_review_queue)")
         }
+        family_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(lima_universe_family)")
+        }
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         migrated_statuses = {
             row[0]: row[1]
@@ -119,6 +123,11 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
     assert "estimated_execution_cost" in obligation_columns
     assert "estimated_value" in obligation_columns
     assert "estimated_cost" in obligation_columns
+    assert "search_action" in family_columns
+    assert "search_reason_md" in family_columns
+    assert "required_delta_json" in family_columns
+    assert "repeat_failure_count" in family_columns
+    assert "last_failure_type" in family_columns
     assert "lima_formal_review_queue" in tables
     assert "family_id" in formal_columns
     assert "claim_ids_json" in formal_columns
@@ -417,10 +426,24 @@ def _seed_lima_formal_candidate(
                 'obl-formal', ?, 'univ-strict', 'lean_goal', 'Strict bridge lemma',
                 'Prove the strict survivor bridge.', 'forall n : Nat, True',
                 ?, 5, 'formal survivor', 'failure kills bridge',
-                'run-strict', 'univ-strict', 'formal-hash', ?, 4.0, ?, 4.0, 'now', 'now'
+                'run-strict', 'univ-strict', ?, ?, 4.0, ?, 4.0, 'now', 'now'
             )
             """,
-            (problem["id"], formal_status, formal_value, formal_value),
+            (
+                problem["id"],
+                formal_status,
+                _canonical_hash(
+                    [
+                        problem["id"],
+                        "lean_goal",
+                        "Strict bridge lemma",
+                        "Prove the strict survivor bridge.",
+                        "forall n : Nat, True",
+                    ]
+                ),
+                formal_value,
+                formal_value,
+            ),
         )
         conn.commit()
     finally:
@@ -444,6 +467,112 @@ def test_lima_strict_threshold_rejects_weakened_prior_art_candidate(tmp_path: Pa
     assert eligibility["eligible"] is False
     assert any("not a strict survivor" in reason for reason in eligibility["reasons"])
     assert any("prior-art fracture" in reason for reason in eligibility["reasons"])
+
+
+def test_lima_fracture_pressure_sets_family_search_control(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    seeded = _seed_lima_formal_candidate(
+        db,
+        universe_status="weakened",
+        fracture_type="prior_art",
+    )
+    conn = sqlite3.connect(db.path)
+    try:
+        for idx in range(2):
+            conn.execute(
+                """
+                INSERT INTO lima_fracture (
+                    id, problem_id, family_id, universe_id, failure_type,
+                    breakpoint_md, confidence, created_at
+                )
+                VALUES (?, ?, 'fam-strict', 'univ-strict', 'prior_art', 'repeated prior art', 0.7, ?)
+                """,
+                (f"fracture-extra-{idx}", seeded["problem_id"], f"now-{idx}"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    meta = analyze_and_update_policy(db, problem_id=seeded["problem_id"])
+    constraints = db.list_family_search_constraints(seeded["problem_id"])
+    strict_family = [c for c in constraints if c["family_key"] == "strict_family"][0]
+
+    assert meta["family_search_controls"]
+    assert strict_family["search_action"] == "cooldown"
+    assert strict_family["status"] == "cooled_down"
+    assert strict_family["repeat_failure_count"] == 3
+    assert "literature-distinct" in strict_family["required_delta_json"]
+
+
+def test_lima_suppresses_repeated_weakened_handoff_without_material_delta(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    seeded = _seed_lima_formal_candidate(
+        db,
+        universe_status="weakened",
+        fracture_type="prior_art",
+    )
+    db.update_family_search_control(
+        problem_id=seeded["problem_id"],
+        family_key="strict_family",
+        search_action="cooldown",
+        reason_md="Repeated prior-art pressure requires a material delta.",
+        required_delta=["introduce a literature-distinct mathematical object"],
+        repeat_failure_count=3,
+        last_failure_type="prior_art",
+    )
+    before = len(db.list_handoffs(seeded["problem_id"], limit=100))
+    universe = LimaUniverseSpec(
+        title="Strict survivor repeat",
+        family_key="strict_family",
+        family_kind="adjacent",
+        branch_of_math="number theory",
+        core_story_md="Repeat the same formal target.",
+        formalization_targets=[
+            LimaObligationSpec(
+                obligation_kind="lean_goal",
+                title="Strict bridge lemma",
+                statement_md="Prove the strict survivor bridge.",
+                lean_goal="forall n : Nat, True",
+                status="queued_formal_review",
+                priority=5,
+                estimated_formalization_value=4.5,
+                estimated_execution_cost=4.0,
+            )
+        ],
+    )
+    run_id = db.commit_run(
+        problem_id=seeded["problem_id"],
+        trigger_kind="manual",
+        mode="forge",
+        run_summary_md="repeat",
+        frontier_snapshot={},
+        pressure_snapshot={},
+        policy_snapshot={},
+        response_obj={},
+        universes=[universe],
+        rupture_reports=[
+            {
+                "universe_title": "Strict survivor repeat",
+                "verdict": "weakened",
+                "summary_md": "repeated prior-art pressure",
+                "fractures": [
+                    {
+                        "failure_type": "prior_art",
+                        "breakpoint_md": "same prior art",
+                        "confidence": 0.7,
+                    }
+                ],
+            }
+        ],
+    )
+    after = len(db.list_handoffs(seeded["problem_id"], limit=100))
+    artifacts = db.list_artifacts(seeded["problem_id"], limit=20)
+
+    assert run_id
+    assert after == before
+    assert any(a["artifact_kind"] == "search_control_suppression" for a in artifacts)
 
 
 def test_lima_aristotle_auto_submit_accepts_strict_survivor(

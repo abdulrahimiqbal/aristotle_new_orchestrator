@@ -144,6 +144,11 @@ class LimaDatabase:
                     formal_win_count INTEGER NOT NULL DEFAULT 0,
                     last_seen_at TEXT,
                     status TEXT NOT NULL DEFAULT 'active',
+                    search_action TEXT NOT NULL DEFAULT 'exploit',
+                    search_reason_md TEXT NOT NULL DEFAULT '',
+                    required_delta_json TEXT NOT NULL DEFAULT '[]',
+                    repeat_failure_count INTEGER NOT NULL DEFAULT 0,
+                    last_failure_type TEXT NOT NULL DEFAULT '',
                     UNIQUE(problem_id, family_key)
                 );
                 CREATE INDEX IF NOT EXISTS idx_lima_family_problem ON lima_universe_family(problem_id);
@@ -446,6 +451,11 @@ class LimaDatabase:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         _ensure_column(conn, "lima_problem", "routing_policy_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_universe_family", "search_action", "TEXT NOT NULL DEFAULT 'exploit'")
+        _ensure_column(conn, "lima_universe_family", "search_reason_md", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_universe_family", "required_delta_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "lima_universe_family", "repeat_failure_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "lima_universe_family", "last_failure_type", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "why_exists_md", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "prove_or_kill_md", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "why_this_exists", "TEXT NOT NULL DEFAULT ''")
@@ -478,6 +488,7 @@ class LimaDatabase:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_obligation_backend ON lima_obligation(formal_backend)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_obligation_reviewed ON lima_obligation(reviewed_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_family_search_action ON lima_universe_family(search_action)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lima_formal_family ON lima_formal_review_queue(family_id)"
         )
@@ -787,12 +798,13 @@ class LimaDatabase:
             "SELECT * FROM lima_universe_family WHERE problem_id = ? AND family_key = ?",
             (problem_id, family_key),
         ).fetchone()
-        status = "active"
         survival_inc = 1 if verdict in {"survived"} else 0
         failure_inc = 1 if verdict in {"collapsed", "weakened"} else 0
         thesis = universe.core_story_md or universe.solved_world or universe.title
         if row:
             family_id = str(row["id"])
+            current_status = str(row["status"] or "active")
+            status = "active" if verdict == "survived" else current_status
             conn.execute(
                 """
                 UPDATE lima_universe_family
@@ -815,15 +827,18 @@ class LimaDatabase:
             )
             return family_id
         family_id = _new_id()
+        status = "active"
         novelty_prior = universe.score("novelty_score", 3)
         conn.execute(
             """
             INSERT INTO lima_universe_family (
                 id, problem_id, family_key, family_kind, parent_family_id, thesis_md,
                 novelty_prior, saturation_penalty, survival_count, failure_count,
-                formal_win_count, last_seen_at, status
+                formal_win_count, last_seen_at, status, search_action,
+                search_reason_md, required_delta_json, repeat_failure_count,
+                last_failure_type
             )
-            VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, 0, ?, ?, 'exploit', '', '[]', 0, '')
             """,
             (
                 family_id,
@@ -839,6 +854,86 @@ class LimaDatabase:
             ),
         )
         return family_id
+
+    def update_family_search_control(
+        self,
+        *,
+        problem_id: str,
+        family_key: str,
+        search_action: str,
+        reason_md: str,
+        required_delta: list[str],
+        repeat_failure_count: int,
+        last_failure_type: str,
+    ) -> tuple[bool, str]:
+        action = (search_action or "exploit").strip().lower()
+        if action not in {"exploit", "mutate", "cooldown", "retire"}:
+            action = "mutate"
+        status = {
+            "exploit": "active",
+            "mutate": "active",
+            "cooldown": "cooled_down",
+            "retire": "dead_zone",
+        }[action]
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                UPDATE lima_universe_family
+                SET search_action = ?,
+                    search_reason_md = ?,
+                    required_delta_json = ?,
+                    repeat_failure_count = ?,
+                    last_failure_type = ?,
+                    status = ?,
+                    saturation_penalty = CASE
+                      WHEN ? IN ('cooldown', 'retire') THEN MAX(saturation_penalty, 1.0)
+                      WHEN ? = 'mutate' THEN MAX(saturation_penalty, 0.35)
+                      ELSE saturation_penalty
+                    END,
+                    last_seen_at = COALESCE(last_seen_at, ?)
+                WHERE problem_id = ? AND family_key = ?
+                """,
+                (
+                    action,
+                    reason_md[:4000],
+                    _json(required_delta),
+                    int(repeat_failure_count),
+                    last_failure_type[:80],
+                    status,
+                    action,
+                    action,
+                    _now(),
+                    problem_id,
+                    family_key,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount <= 0:
+                return False, "unknown family"
+            return True, f"family {action}"
+        finally:
+            conn.close()
+
+    def list_family_search_constraints(
+        self, problem_id: str, *, limit: int = 12
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM lima_universe_family
+                WHERE problem_id = ?
+                  AND search_action IN ('mutate', 'cooldown', 'retire')
+                ORDER BY repeat_failure_count DESC, saturation_penalty DESC, last_seen_at DESC
+                LIMIT ?
+                """,
+                (problem_id, min(limit, 100)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
 
     def commit_run(
         self,
@@ -890,6 +985,15 @@ class LimaDatabase:
                 rupture = rupture_by_title.get(universe.title, {})
                 verdict = str(rupture.get("verdict") or "inconclusive")
                 family_id = self._upsert_family(conn, problem_id, universe, verdict=verdict)
+                family_row = conn.execute(
+                    "SELECT * FROM lima_universe_family WHERE id = ?",
+                    (family_id,),
+                ).fetchone()
+                family_search_action = (
+                    str(family_row["search_action"] or "exploit")
+                    if family_row and "search_action" in family_row.keys()
+                    else "exploit"
+                )
                 status = {
                     "collapsed": "dead",
                     "weakened": "weakened",
@@ -995,6 +1099,7 @@ class LimaDatabase:
                                 (_new_id(), from_id, to_id),
                             )
                 inserted_obligation_ids: list[str] = []
+                new_obligation_ids: list[str] = []
                 for obligation in universe.formalization_targets[
                     : int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN)
                 ]:
@@ -1110,6 +1215,7 @@ class LimaDatabase:
                         ),
                     )
                     inserted_obligation_ids.append(obligation_id)
+                    new_obligation_ids.append(obligation_id)
                 if rupture:
                     rupture_id = _new_id()
                     conn.execute(
@@ -1159,7 +1265,49 @@ class LimaDatabase:
                                 now,
                             ),
                         )
-                if status in {"promising", "weakened"} and universe.formalization_targets:
+                suppress_handoff = (
+                    status == "weakened"
+                    and family_search_action in {"cooldown", "retire"}
+                    and not new_obligation_ids
+                )
+                if suppress_handoff:
+                    conn.execute(
+                        """
+                        INSERT INTO lima_artifact (
+                            id, problem_id, universe_id, artifact_kind, content_json,
+                            content_hash, created_at
+                        )
+                        VALUES (?, ?, ?, 'search_control_suppression', ?, ?, ?)
+                        """,
+                        (
+                            _new_id(),
+                            problem_id,
+                            universe_id,
+                            _json(
+                                {
+                                    "family_id": family_id,
+                                    "family_key": universe.family_key,
+                                    "search_action": family_search_action,
+                                    "status": status,
+                                    "reason": "Suppressed repeated weakened handoff with no new canonical obligations.",
+                                    "required_delta": safe_json_loads(
+                                        family_row["required_delta_json"]
+                                        if family_row and "required_delta_json" in family_row.keys()
+                                        else "[]",
+                                        [],
+                                    ),
+                                    "zero_live_authority": True,
+                                }
+                            ),
+                            _canonical_hash([problem_id, universe_id, "search_control_suppression"]),
+                            now,
+                        ),
+                    )
+                if (
+                    status in {"promising", "weakened"}
+                    and universe.formalization_targets
+                    and not suppress_handoff
+                ):
                     payload = {
                         "source": "lima",
                         "universe_id": universe_id,

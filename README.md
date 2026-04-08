@@ -365,10 +365,12 @@ The Lima loop is:
 1. Generate problem-aware universes, objects, claims, and obligations.
 2. Run deterministic rupture checks: vacuity, bridgeability, prior art, residue/counterexample scans, symbolic normalization where available, and graph consistency where available.
 3. Persist fractures, artifacts, literature links, policy revisions, and handoff packets.
-4. Run bounded local obligations (`finite_check`, `counterexample_search`, and cheap consistency checks) inside Lima.
-5. Queue formal obligations (`lean_goal`, `bridge_lemma`, `equivalence`, and novelty crosschecks) for human formal review.
-6. Only after review can a packet be marked approved for formal work or Shadow incubation. The default `local_stub` backend records a packet and never submits live Aristotle jobs.
-7. If `LIMA_FORMAL_AUTO_SUBMIT=1` and `LIMA_ARISTOTLE_AUTO_SUBMIT=1`, Lima may submit only strict-survivor formal obligations to a dedicated Lima Aristotle campaign, subject to `LIMA_ARISTOTLE_MAX_ACTIVE` and `LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS`. Weakened or prior-art-fractured candidates remain review-only unless an operator explicitly uses the manual override.
+4. Convert repeated family fractures into search controls (`exploit`, `mutate`, `cooldown`, `retire`) so repeated prior-art, vacuity, counterexample, or formal-blocker failures force a material change in object, invariant, bridge lemma, falsifier, or literature tool.
+5. Suppress unchanged weakened handoffs from cooled-down/retired families and store `search_control_suppression` artifacts instead of treating them as fresh review work.
+6. Run bounded local obligations (`finite_check`, `counterexample_search`, and cheap consistency checks) inside Lima.
+7. Queue formal obligations (`lean_goal`, `bridge_lemma`, `equivalence`, and novelty crosschecks) for human formal review.
+8. Only after review can a packet be marked approved for formal work or Shadow incubation. The default `local_stub` backend records a packet and never submits live Aristotle jobs.
+9. If `LIMA_FORMAL_AUTO_SUBMIT=1` and `LIMA_ARISTOTLE_AUTO_SUBMIT=1`, Lima may submit only strict-survivor formal obligations to a dedicated Lima Aristotle campaign, subject to `LIMA_ARISTOTLE_MAX_ACTIVE` and `LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS`. Weakened or prior-art-fractured candidates remain review-only unless an operator explicitly uses the manual override.
 
 Literature backends are pluggable. `local` is deterministic and always available. `localfile`/`local_file` reads notes from `LIMA_LITERATURE_LOCALFILE_DIR`. arXiv, Semantic Scholar, and Crossref adapters are present but disabled unless explicitly enabled so runtime does not require internet access.
 

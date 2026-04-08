@@ -6,6 +6,87 @@ from orchestrator import config as app_config
 from orchestrator.lima_db import LimaDatabase
 
 
+REQUIRED_DELTA_BY_FAILURE = {
+    "prior_art": [
+        "introduce a literature-distinct mathematical object",
+        "replace the bridge lemma with a non-prior-art bridge",
+        "use a cited tool as support rather than claiming novelty",
+        "add a falsifier that distinguishes the family from known work",
+    ],
+    "vacuity": [
+        "state a non-vacuous witness or counterexample boundary",
+        "remove assumptions equivalent to the target theorem",
+        "add an independent bounded test",
+    ],
+    "counterexample": [
+        "change the boundary assumptions",
+        "isolate the smallest counterexample region",
+        "weaken the claim into a surviving fragment",
+    ],
+    "formal_blocker": [
+        "split the claim into a smaller bridge lemma",
+        "replace informal definitions with typed objects",
+        "add a Lean-shaped statement with explicit hypotheses",
+    ],
+    "weak_explanation": [
+        "add a concrete object, invariant, or operator",
+        "state what would make the family false",
+        "provide a bridge back to the original problem",
+    ],
+}
+
+
+def _search_action_for_family(
+    family: dict[str, Any],
+    family_fractures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    histogram: dict[str, int] = {}
+    for fracture in family_fractures:
+        failure_type = str(fracture.get("failure_type") or "weak_explanation")
+        histogram[failure_type] = histogram.get(failure_type, 0) + 1
+    if not histogram:
+        return {
+            "family_key": str(family.get("family_key") or ""),
+            "search_action": "exploit",
+            "repeat_failure_count": 0,
+            "last_failure_type": "",
+            "required_delta": [],
+            "reason_md": "No repeated fracture pressure.",
+        }
+
+    failure_type, repeat_count = sorted(
+        histogram.items(), key=lambda kv: kv[1], reverse=True
+    )[0]
+    formal_wins = int(family.get("formal_win_count") or 0)
+    survival_count = int(family.get("survival_count") or 0)
+    required_delta = REQUIRED_DELTA_BY_FAILURE.get(
+        failure_type, REQUIRED_DELTA_BY_FAILURE["weak_explanation"]
+    )
+    if repeat_count >= 8 and formal_wins <= 0:
+        action = "retire"
+    elif repeat_count >= 3 and failure_type == "prior_art" and formal_wins <= 0:
+        action = "cooldown"
+    elif repeat_count >= 3 and formal_wins <= 0:
+        action = "mutate"
+    elif survival_count > 0 or formal_wins > 0:
+        action = "exploit"
+    else:
+        action = "mutate" if repeat_count >= 2 else "exploit"
+    reason = (
+        f"Family '{family.get('family_key')}' has {repeat_count} recent "
+        f"{failure_type} fracture(s), formal wins={formal_wins}, survivors={survival_count}."
+    )
+    return {
+        "family_key": str(family.get("family_key") or ""),
+        "search_action": action,
+        "repeat_failure_count": repeat_count,
+        "last_failure_type": failure_type,
+        "required_delta": required_delta if action != "exploit" else [],
+        "reason_md": reason,
+        "failure_histogram": histogram,
+    }
+
+
 def analyze_and_update_policy(
     lima_db: LimaDatabase,
     *,
@@ -42,6 +123,34 @@ def analyze_and_update_policy(
         if str(o.get("status")) in {"approved_for_formal", "submitted_formal", "verified_formal"}
     ]
     prior_art_hits = [f for f in fractures if str(f.get("failure_type")) == "prior_art"]
+    fractures_by_family: dict[str, list[dict[str, Any]]] = {}
+    for fracture in fractures:
+        family_key = str(fracture.get("family_key") or "")
+        if family_key:
+            fractures_by_family.setdefault(family_key, []).append(fracture)
+    search_controls = [
+        _search_action_for_family(
+            family,
+            fractures_by_family.get(str(family.get("family_key") or ""), []),
+        )
+        for family in families
+    ]
+    applied_controls = []
+    for control in search_controls:
+        family_key = str(control.get("family_key") or "")
+        if not family_key:
+            continue
+        ok, msg = lima_db.update_family_search_control(
+            problem_id=problem_id,
+            family_key=family_key,
+            search_action=str(control["search_action"]),
+            reason_md=str(control["reason_md"]),
+            required_delta=list(control.get("required_delta") or []),
+            repeat_failure_count=int(control.get("repeat_failure_count") or 0),
+            last_failure_type=str(control.get("last_failure_type") or ""),
+        )
+        if ok:
+            applied_controls.append({**control, "update": msg})
     policy_changes = {
         "mission_locked": True,
         "generation": {
@@ -49,6 +158,11 @@ def analyze_and_update_policy(
                 str(f.get("family_key")) for f in formalizable_families[:5]
             ],
             "avoid_empty_repetitions": True,
+            "family_search_controls": [
+                c
+                for c in search_controls
+                if str(c.get("search_action") or "") in {"mutate", "cooldown", "retire"}
+            ][:8],
             "max_universes_per_run": int(app_config.LIMA_MAX_UNIVERSES_PER_RUN),
         },
         "rupture": {
@@ -93,6 +207,7 @@ def analyze_and_update_policy(
             / max(1, sum(int(f.get("survival_count") or 0) + int(f.get("failure_count") or 0) for f in families))
         ),
         "failure_type_histogram": repeated_failures,
+        "family_search_controls": applied_controls[:12],
     }
     summary = (
         "Meta-Lima updated reversible strategy policy. "
@@ -122,4 +237,5 @@ def analyze_and_update_policy(
         "analysis_summary_md": summary,
         "policy_changes": policy_changes,
         "benchmark": benchmark,
+        "family_search_controls": applied_controls,
     }
