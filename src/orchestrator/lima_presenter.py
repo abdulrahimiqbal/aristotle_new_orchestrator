@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from orchestrator.lima_steward import build_lima_steward_view
+
 
 def _load_json(raw: Any, default: Any) -> Any:
     if isinstance(raw, (dict, list)):
@@ -868,9 +870,24 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         snapshot.get("literature_sources") or [], literature_links
     )
     governance_summary = _governance_summary(families, family_search_controls)
-    primary_cta = _primary_cta(pending_handoffs, obligation_groups)
     action_queue = _action_queue(pending_handoffs, obligation_groups, formal_reviews)
+    steward_view = build_lima_steward_view(
+        pending_handoffs=pending_handoffs,
+        obligations=obligations,
+        fractures=fractures,
+        top_candidate=top_candidate,
+        top_blocker=top_blocker,
+    )
+    primary_cta = _primary_cta(pending_handoffs, obligation_groups)
+    if steward_view["summary"]["escalated_count"] > 0:
+        primary_cta = {
+            "kind": "anchor",
+            "href": "#steward-review",
+            "label": f"Review escalations ({steward_view['summary']['escalated_count']})",
+            "summary": steward_view["summary"]["headline"],
+        }
     now_summary = _choice(
+        steward_view["summary"]["body"],
         decision_state.get("body"),
         latest_summary,
         fallback="Lima is ready for the next research checkpoint.",
@@ -919,6 +936,10 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_literature_summary": literature_summary,
         "lima_governance_summary": governance_summary,
         "lima_action_queue": action_queue,
+        "lima_steward_summary": steward_view["summary"],
+        "lima_steward_packets": steward_view["packets"],
+        "lima_handoff_bundles": steward_view["handoff_bundles"],
+        "lima_obligation_bundles": steward_view["obligation_bundles"],
         "lima_now_summary": now_summary,
         "lima_modes": [
             {
@@ -953,6 +974,9 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
             "pending_handoffs": len(pending_handoffs),
             "reviewed_handoffs": len(reviewed_handoffs),
             "formal_reviews": len(formal_reviews),
+            "steward_escalated": steward_view["summary"]["escalated_count"],
+            "steward_bundled": steward_view["summary"]["bundled_count"],
+            "steward_auto_managed": steward_view["summary"]["auto_managed_count"],
             "artifacts": len(artifacts),
             "literature_sources": len(snapshot.get("literature_sources") or []),
             "policy_layers": len(policy_layers),
