@@ -200,6 +200,21 @@ LIMA_ENABLE_AUTO_POLICY_UPDATES = _bool_env("LIMA_ENABLE_AUTO_POLICY_UPDATES", T
 LIMA_AUTO_LOCAL_OBLIGATION_CHECKS = _bool_env("LIMA_AUTO_LOCAL_OBLIGATION_CHECKS", True)
 LIMA_FORMAL_BACKEND = os.environ.get("LIMA_FORMAL_BACKEND", "local_stub").strip() or "local_stub"
 LIMA_FORMAL_AUTO_SUBMIT = _bool_env("LIMA_FORMAL_AUTO_SUBMIT", False)
+LIMA_ARISTOTLE_AUTO_SUBMIT = _bool_env("LIMA_ARISTOTLE_AUTO_SUBMIT", False)
+LIMA_ARISTOTLE_MAX_ACTIVE = _int_env("LIMA_ARISTOTLE_MAX_ACTIVE", 2)
+LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS = _int_env("LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS", 10)
+LIMA_ARISTOTLE_CAMPAIGN_SLUG = (
+    os.environ.get("LIMA_ARISTOTLE_CAMPAIGN_SLUG", "collatz-lima-formal").strip()
+    or "collatz-lima-formal"
+)
+LIMA_ARISTOTLE_THRESHOLD = (
+    os.environ.get("LIMA_ARISTOTLE_THRESHOLD", "strict_survivor").strip().lower()
+    or "strict_survivor"
+)
+LIMA_ARISTOTLE_WORKSPACE_TEMPLATE = (
+    os.environ.get("LIMA_ARISTOTLE_WORKSPACE_TEMPLATE", "minimal").strip().lower()
+    or "minimal"
+)
 LIMA_LITERATURE_BACKENDS = os.environ.get("LIMA_LITERATURE_BACKENDS", "local").strip() or "local"
 LIMA_LITERATURE_LOCALFILE_DIR = os.environ.get(
     "LIMA_LITERATURE_LOCALFILE_DIR",

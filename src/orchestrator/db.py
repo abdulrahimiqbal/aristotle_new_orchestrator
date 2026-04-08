@@ -615,6 +615,33 @@ class Database:
         finally:
             conn.close()
 
+    def get_campaign_row(self, campaign_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_campaign_by_prompt_prefix(self, prompt_prefix: str) -> dict[str, Any] | None:
+        prefix = (prompt_prefix or "").strip()
+        if not prefix:
+            return None
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT * FROM campaigns
+                WHERE prompt LIKE ?
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT 1
+                """,
+                (f"{prefix}%",),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def get_target_descriptions(self, campaign_id: str) -> list[str]:
         conn = self._connect()
         try:
@@ -990,6 +1017,59 @@ class Database:
             )
             row = cur.fetchone()
             return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_experiment_row(self, experiment_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT e.*, c.workspace_dir AS workspace_dir
+                FROM experiments e
+                JOIN campaigns c ON c.id = e.campaign_id
+                WHERE e.id = ?
+                """,
+                (experiment_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def count_campaign_experiments_by_statuses(
+        self, campaign_id: str, statuses: list[str]
+    ) -> int:
+        if not statuses:
+            return 0
+        placeholders = ",".join("?" * len(statuses))
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n
+                FROM experiments
+                WHERE campaign_id = ? AND status IN ({placeholders})
+                """,
+                [campaign_id, *statuses],
+            ).fetchone()
+            return int(row["n"] or 0) if row else 0
+        finally:
+            conn.close()
+
+    def count_campaign_submissions_since(self, campaign_id: str, since_iso: str) -> int:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM experiments
+                WHERE campaign_id = ?
+                  AND submitted_at IS NOT NULL
+                  AND datetime(submitted_at) >= datetime(?)
+                """,
+                (campaign_id, since_iso),
+            ).fetchone()
+            return int(row["n"] or 0) if row else 0
         finally:
             conn.close()
 

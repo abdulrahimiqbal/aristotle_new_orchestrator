@@ -147,6 +147,9 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
     for obligation in obligations:
         obligation["lineage"] = _load_json(obligation.get("lineage_json"), {})
         obligation["formal_payload"] = _load_json(obligation.get("formal_payload_json"), {})
+        obligation["formal_submission_ref"] = _load_json(
+            obligation.get("formal_submission_ref_json"), {}
+        )
         obligation["aristotle_ref"] = _load_json(obligation.get("aristotle_ref_json"), {})
     literature_extracts = [dict(e) for e in snapshot.get("literature_extracts") or []]
     literature_links = [dict(e) for e in snapshot.get("literature_links") or []]

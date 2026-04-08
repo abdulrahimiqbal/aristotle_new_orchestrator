@@ -190,6 +190,12 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `LIMA_AUTO_LOCAL_OBLIGATION_CHECKS` | Run bounded local Lima checks automatically after a Lima pass (`true` by default) |
 | `LIMA_FORMAL_BACKEND` | Formal review adapter (`local_stub` by default; records review packets without live submission) |
 | `LIMA_FORMAL_AUTO_SUBMIT` | Reserved approval gate for future formal backends; default `false` keeps zero-live-authority |
+| `LIMA_ARISTOTLE_AUTO_SUBMIT` | Enable Lima's dedicated Aristotle adapter for strict-survivor obligations only; default `false` |
+| `LIMA_ARISTOTLE_MAX_ACTIVE` | Lima-owned Aristotle active-work cap; default `2` |
+| `LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS` | Lima-owned Aristotle daily submission cap; default `10` |
+| `LIMA_ARISTOTLE_CAMPAIGN_SLUG` | Dedicated Lima formal campaign slug; default `collatz-lima-formal` |
+| `LIMA_ARISTOTLE_THRESHOLD` | Auto-submit threshold; default `strict_survivor`, which rejects weakened/prior-art candidates |
+| `LIMA_ARISTOTLE_WORKSPACE_TEMPLATE` | Workspace template for the Lima-owned formal campaign; default `minimal` |
 | `LIMA_LITERATURE_BACKENDS` | Comma-separated literature backends: `local`, `localfile`/`local_file`, `arxiv`, `semantic_scholar`, `crossref`; network backends require their enable flags |
 | `LIMA_LITERATURE_LOCALFILE_DIR` | Optional folder of local `.md`, `.txt`, or `.json` literature notes for the `local_file` backend; `LIMA_LITERATURE_LOCAL_DIR` remains accepted as a legacy alias |
 | `LIMA_ENABLE_LOCALFILE_LITERATURE` | Enable LocalFile note ingestion; defaults to `true` and degrades cleanly when the folder is absent |
@@ -362,6 +368,7 @@ The Lima loop is:
 4. Run bounded local obligations (`finite_check`, `counterexample_search`, and cheap consistency checks) inside Lima.
 5. Queue formal obligations (`lean_goal`, `bridge_lemma`, `equivalence`, and novelty crosschecks) for human formal review.
 6. Only after review can a packet be marked approved for formal work or Shadow incubation. The default `local_stub` backend records a packet and never submits live Aristotle jobs.
+7. If `LIMA_FORMAL_AUTO_SUBMIT=1` and `LIMA_ARISTOTLE_AUTO_SUBMIT=1`, Lima may submit only strict-survivor formal obligations to a dedicated Lima Aristotle campaign, subject to `LIMA_ARISTOTLE_MAX_ACTIVE` and `LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS`. Weakened or prior-art-fractured candidates remain review-only unless an operator explicitly uses the manual override.
 
 Literature backends are pluggable. `local` is deterministic and always available. `localfile`/`local_file` reads notes from `LIMA_LITERATURE_LOCALFILE_DIR`. arXiv, Semantic Scholar, and Crossref adapters are present but disabled unless explicitly enabled so runtime does not require internet access.
 
@@ -371,7 +378,20 @@ Run locally:
 DATABASE_PATH=./orchestrator.db LIMA_DATABASE_PATH=./lima.db ./.venv/bin/python -m uvicorn orchestrator.app:app --reload
 ```
 
-Then open `/lima`, choose a problem/mode, and run Lima manually. Set `LIMA_ENABLED=1` only when you want the background Lima loop.
+Then open `/lima`, choose a problem/mode, and run Lima manually. Set `LIMA_ENABLED=1` only when you want the background Lima loop. For autonomous Collatz research with bounded Aristotle escalation, use the safe caps explicitly:
+
+```bash
+LIMA_ENABLED=1
+LIMA_DEFAULT_PROBLEM=collatz
+LIMA_DEFAULT_MODE=forge
+LIMA_LOOP_INTERVAL_SEC=1800
+LIMA_AUTO_LOCAL_OBLIGATION_CHECKS=1
+LIMA_FORMAL_AUTO_SUBMIT=1
+LIMA_ARISTOTLE_AUTO_SUBMIT=1
+LIMA_ARISTOTLE_MAX_ACTIVE=2
+LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS=10
+LIMA_ARISTOTLE_THRESHOLD=strict_survivor
+```
 
 ### Aristotle CLI and Lean workspace in the container
 

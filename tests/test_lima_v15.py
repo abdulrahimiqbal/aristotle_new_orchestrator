@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 from orchestrator import config as app_config
+from orchestrator.db import Database
 from orchestrator.lima_agent import _build_reference_points
 from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
-from orchestrator.lima_models import LimaObligationSpec
+from orchestrator.lima_models import LimaObligationSpec, safe_json_loads
+import orchestrator.lima_obligations as lima_obligations_mod
 from orchestrator.lima_obligations import (
+    AristotleFormalBackend,
+    approve_formal_review_async,
     approve_formal_review,
     archive_obligation,
     queue_formal_review,
     rerun_local_obligation,
     run_queued_obligation_checks,
+    strict_aristotle_eligibility,
+    submit_promising_formal_obligations,
+    sync_lima_aristotle_results,
 )
 
 
@@ -319,3 +327,254 @@ def test_lima_reference_ingestion_uses_problem_routing_not_collatz_defaults() ->
     assert campaign_ids == {"c1"}
     assert fake.shadow_goal == "global_goldbach"
     assert fake.supershadow_goal == "global_goldbach_supershadow"
+
+
+def _seed_lima_formal_candidate(
+    db: LimaDatabase,
+    *,
+    universe_status: str = "promising",
+    fracture_type: str = "",
+    formal_status: str = "queued_formal_review",
+    formal_value: float = 4.5,
+) -> dict[str, str]:
+    problem = db.get_problem("collatz")
+    conn = sqlite3.connect(db.path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO lima_run (
+                id, problem_id, trigger_kind, mode, run_summary_md,
+                frontier_snapshot_json, pressure_snapshot_json, policy_snapshot_json,
+                response_json, created_at
+            )
+            VALUES ('run-strict', ?, 'manual', 'forge', 'strict test run', '{}', '{}', '{}', '{}', 'now')
+            """,
+            (problem["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO lima_universe_family (
+                id, problem_id, family_key, family_kind, thesis_md, last_seen_at
+            )
+            VALUES ('fam-strict', ?, 'strict_family', 'test', 'test family', 'now')
+            """,
+            (problem["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO lima_universe (
+                id, run_id, problem_id, family_id, title, universe_status,
+                branch_of_math, solved_world, why_problem_is_easy_here, core_story_md,
+                compression_score, fit_score, novelty_score, falsifiability_score,
+                bridgeability_score, formalizability_score, theorem_yield_score,
+                literature_novelty_score, created_at, updated_at
+            )
+            VALUES (
+                'univ-strict', 'run-strict', ?, 'fam-strict', 'Strict survivor',
+                ?, 'number theory', '', '', '',
+                4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 'now', 'now'
+            )
+            """,
+            (problem["id"], universe_status),
+        )
+        if fracture_type:
+            conn.execute(
+                """
+                INSERT INTO lima_fracture (
+                    id, problem_id, family_id, universe_id, failure_type,
+                    breakpoint_md, confidence, created_at
+                )
+                VALUES ('fracture-strict', ?, 'fam-strict', 'univ-strict', ?, 'prior art pressure', 0.7, 'now')
+                """,
+                (problem["id"], fracture_type),
+            )
+        conn.execute(
+            """
+            INSERT INTO lima_obligation (
+                id, problem_id, universe_id, obligation_kind, title, statement_md,
+                lean_goal, status, priority, source_run_id, source_universe_id,
+                canonical_hash, estimated_formalization_value, estimated_execution_cost,
+                estimated_value, estimated_cost, created_at, updated_at
+            )
+            VALUES (
+                'obl-local', ?, 'univ-strict', 'finite_check', 'Local residue check',
+                'Compute exact residue scan.', '', 'verified_local', 4,
+                'run-strict', 'univ-strict', 'local-hash', 3.0, 1.0, 3.0, 1.0, 'now', 'now'
+            )
+            """,
+            (problem["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO lima_obligation (
+                id, problem_id, universe_id, obligation_kind, title, statement_md,
+                lean_goal, status, priority, why_exists_md, prove_or_kill_md,
+                source_run_id, source_universe_id, canonical_hash,
+                estimated_formalization_value, estimated_execution_cost,
+                estimated_value, estimated_cost, created_at, updated_at
+            )
+            VALUES (
+                'obl-formal', ?, 'univ-strict', 'lean_goal', 'Strict bridge lemma',
+                'Prove the strict survivor bridge.', 'forall n : Nat, True',
+                ?, 5, 'formal survivor', 'failure kills bridge',
+                'run-strict', 'univ-strict', 'formal-hash', ?, 4.0, ?, 4.0, 'now', 'now'
+            )
+            """,
+            (problem["id"], formal_status, formal_value, formal_value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"problem_id": str(problem["id"]), "obligation_id": "obl-formal"}
+
+
+def test_lima_strict_threshold_rejects_weakened_prior_art_candidate(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    seeded = _seed_lima_formal_candidate(
+        db,
+        universe_status="weakened",
+        fracture_type="prior_art",
+    )
+
+    obligation = db.get_obligation(seeded["obligation_id"])
+    assert obligation is not None
+    eligibility = strict_aristotle_eligibility(db, obligation)
+
+    assert eligibility["eligible"] is False
+    assert any("not a strict survivor" in reason for reason in eligibility["reasons"])
+    assert any("prior-art fracture" in reason for reason in eligibility["reasons"])
+
+
+def test_lima_aristotle_auto_submit_accepts_strict_survivor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    lima = LimaDatabase(str(tmp_path / "lima.db"))
+    lima.initialize()
+    seeded = _seed_lima_formal_candidate(lima)
+    main_db = Database(str(tmp_path / "main.db"))
+    main_db.initialize()
+    monkeypatch.setattr(app_config, "LIMA_FORMAL_AUTO_SUBMIT", True)
+    monkeypatch.setattr(app_config, "LIMA_ARISTOTLE_AUTO_SUBMIT", True)
+    monkeypatch.setattr(app_config, "LIMA_ARISTOTLE_MAX_ACTIVE", 2)
+    monkeypatch.setattr(app_config, "LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS", 10)
+    monkeypatch.setattr(app_config, "WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+
+    async def fake_submit(objective: str, project_dir: str) -> tuple[str, str]:
+        assert "Strict bridge lemma" in objective
+        assert Path(project_dir).exists()
+        return "11111111-1111-1111-1111-111111111111", ""
+
+    monkeypatch.setattr(lima_obligations_mod, "submit", fake_submit)
+
+    result = asyncio.run(
+        submit_promising_formal_obligations(
+            lima,
+            main_db,
+            problem_id=seeded["problem_id"],
+        )
+    )
+    obligation = lima.get_obligation(seeded["obligation_id"])
+    ref = safe_json_loads(obligation["formal_submission_ref_json"], {})
+
+    assert result["submitted"] == [seeded["obligation_id"]]
+    assert obligation["status"] == "submitted_formal"
+    assert ref["backend"] == "aristotle_formal"
+    assert ref["campaign_id"]
+    assert ref["target_id"]
+    assert ref["aristotle_experiment_id"]
+    assert ref["aristotle_job_id"] == "11111111-1111-1111-1111-111111111111"
+    assert main_db.count_campaign_experiments_by_statuses(ref["campaign_id"], ["submitted"]) == 1
+
+
+def test_lima_aristotle_caps_and_duplicate_block_submission(
+    tmp_path: Path, monkeypatch
+) -> None:
+    lima = LimaDatabase(str(tmp_path / "lima.db"))
+    lima.initialize()
+    seeded = _seed_lima_formal_candidate(lima)
+    main_db = Database(str(tmp_path / "main.db"))
+    main_db.initialize()
+    monkeypatch.setattr(app_config, "LIMA_ARISTOTLE_MAX_ACTIVE", 0)
+    monkeypatch.setattr(app_config, "WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    backend = AristotleFormalBackend(lima_db=lima, main_db=main_db)
+
+    result = asyncio.run(
+        approve_formal_review_async(
+            lima,
+            obligation_id=seeded["obligation_id"],
+            backend=backend,
+            main_db=main_db,
+        )
+    )
+    assert result["ok"] is False
+    assert result["error"] == "budget_exhausted"
+    assert lima.get_obligation(seeded["obligation_id"])["status"] == "queued_formal_review"
+
+    monkeypatch.setattr(app_config, "LIMA_ARISTOTLE_MAX_ACTIVE", 2)
+    conn = sqlite3.connect(lima.path)
+    try:
+        conn.execute(
+            """
+            UPDATE lima_obligation
+            SET formal_submission_ref_json = '{"aristotle_experiment_id":"existing"}'
+            WHERE id = 'obl-formal'
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    duplicate = strict_aristotle_eligibility(lima, lima.get_obligation("obl-formal"))
+    assert duplicate["eligible"] is False
+    assert "obligation already has a Lima Aristotle submission reference" in duplicate["reasons"]
+
+
+def test_lima_aristotle_result_sync_maps_verdicts(tmp_path: Path) -> None:
+    lima = LimaDatabase(str(tmp_path / "lima.db"))
+    lima.initialize()
+    seeded = _seed_lima_formal_candidate(lima, formal_status="submitted_formal")
+    main_db = Database(str(tmp_path / "main.db"))
+    main_db.initialize()
+    campaign_id = main_db.create_campaign("sync campaign", workspace_root=str(tmp_path / "ws"))
+    target_id = main_db.add_targets(campaign_id, ["sync target"])[0]
+    experiment_id = main_db.create_experiment(campaign_id, target_id, "sync objective")
+    main_db.update_experiment_submitted(experiment_id, "22222222-2222-2222-2222-222222222222")
+    main_db.update_experiment_completed(
+        experiment_id,
+        result_raw="raw",
+        result_summary="proved bridge lemma",
+        verdict="proved",
+        parsed_proved_lemmas=["strict_bridge"],
+        parsed_generated_lemmas=[],
+        parsed_unsolved_goals=[],
+        parsed_blockers=[],
+        parsed_counterexamples=[],
+        parsed_error_message="",
+        parse_warnings=[],
+    )
+    conn = sqlite3.connect(lima.path)
+    try:
+        conn.execute(
+            """
+            UPDATE lima_obligation
+            SET formal_submission_ref_json = ?
+            WHERE id = 'obl-formal'
+            """,
+            (
+                '{"backend":"aristotle_formal","aristotle_experiment_id":"'
+                + experiment_id
+                + '","aristotle_job_id":"22222222-2222-2222-2222-222222222222"}',
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = sync_lima_aristotle_results(lima, main_db, problem_id=seeded["problem_id"])
+    obligation = lima.get_obligation(seeded["obligation_id"])
+    ref = safe_json_loads(obligation["formal_submission_ref_json"], {})
+
+    assert result["synced"] == [seeded["obligation_id"]]
+    assert obligation["status"] == "verified_formal"
+    assert ref["verdict"] == "proved"
+    assert ref["parsed_proved_lemmas"] == ["strict_bridge"]

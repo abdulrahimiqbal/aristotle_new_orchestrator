@@ -36,6 +36,8 @@ from orchestrator.lima_models import (
 from orchestrator.lima_obligations import (
     compile_obligations_for_universe,
     run_queued_obligation_checks,
+    submit_promising_formal_obligations,
+    sync_lima_aristotle_results,
 )
 from orchestrator.lima_rupture import rupture_universes
 from orchestrator.llm import invoke_llm
@@ -642,6 +644,7 @@ async def run_lima(
         lima_db.initialize()
         problem = lima_db.get_problem(problem_slug)
         problem_id = str(problem["id"])
+        sync_result = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
         state = lima_db.get_state(problem_id)
         reference_points = _build_reference_points(main_db, problem)
         fractures = lima_db.list_fractures(problem_id, limit=24)
@@ -789,6 +792,13 @@ async def run_lima(
                 problem_id=problem_id,
                 limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
             )
+        formal_submit_result = await submit_promising_formal_obligations(
+            lima_db,
+            main_db,
+            problem_id=problem_id,
+            limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
+        )
+        sync_after_submit = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
         meta_result = None
         if app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES:
             meta_result = analyze_and_update_policy(
@@ -806,6 +816,11 @@ async def run_lima(
             "summary": generated.run_summary_md,
             "validation_warnings": json_warnings,
             "obligation_checks": obligation_result,
+            "formal_submit": formal_submit_result,
+            "formal_sync": {
+                "before_run": sync_result,
+                "after_submit": sync_after_submit,
+            },
             "meta": meta_result,
         }
     finally:

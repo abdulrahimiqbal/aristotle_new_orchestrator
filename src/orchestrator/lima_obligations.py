@@ -1,17 +1,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+import json
 import re
+from pathlib import Path
 from typing import Any, Protocol
 
 from orchestrator import config as app_config
+from orchestrator.aristotle import submit
+from orchestrator.db import Database
 from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, safe_json_loads, slugify
 from orchestrator.lima_rupture import collatz_step, residue_pattern_summary
+from orchestrator.models import ExperimentStatus, Verdict
+from orchestrator.workspace_seed import ensure_workspace
 
 
 LOCAL_CHECK_KINDS = {"finite_check", "counterexample_search", "invariant_check", "consistency"}
 FORMAL_REVIEW_KINDS = {"lean_goal", "bridge_lemma", "equivalence"}
+LIMA_ARISTOTLE_PROMPT_PREFIX = "[Lima Formal] Collatz strict-survivor obligations"
+LIMA_ARISTOTLE_ACTIVE_STATUSES = [
+    ExperimentStatus.PENDING.value,
+    ExperimentStatus.SUBMITTED.value,
+    ExperimentStatus.RUNNING.value,
+]
+LIMA_FORMAL_SYNC_STATUSES = {
+    "pending": "submitted_formal",
+    "submitted": "submitted_formal",
+    "running": "submitted_formal",
+}
 
 
 def _parse_modulus(text: str, *, default: int = 16) -> int:
@@ -300,11 +318,280 @@ class FutureAristotleLeanFormalBackend(LocalStubFormalBackend):
         return result
 
 
-def make_formal_backend(kind: str | None = None) -> FormalBackend:
+def _lima_aristotle_prompt_prefix() -> str:
+    slug = (app_config.LIMA_ARISTOTLE_CAMPAIGN_SLUG or "collatz-lima-formal").strip()
+    threshold = (app_config.LIMA_ARISTOTLE_THRESHOLD or "strict_survivor").strip()
+    return f"{LIMA_ARISTOTLE_PROMPT_PREFIX} [{slug}; threshold={threshold}]"
+
+
+def _parse_submission_ref(obligation: dict[str, Any]) -> dict[str, Any]:
+    parsed = safe_json_loads(obligation.get("formal_submission_ref_json"), {})
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _has_lima_aristotle_submission(obligation: dict[str, Any]) -> bool:
+    ref = _parse_submission_ref(obligation)
+    return bool(
+        ref.get("aristotle_experiment_id")
+        or ref.get("aristotle_job_id")
+        or ref.get("campaign_id")
+    )
+
+
+def strict_aristotle_eligibility(
+    lima_db: LimaDatabase,
+    obligation: dict[str, Any],
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Return the strict auto-submit decision for a Lima obligation."""
+
+    reasons: list[str] = []
+    warnings: list[str] = []
+    kind = str(obligation.get("obligation_kind") or "")
+    universe_id = str(obligation.get("universe_id") or obligation.get("source_universe_id") or "")
+    universe = lima_db.get_universe(universe_id) if universe_id else None
+    universe_status = str((universe or {}).get("universe_status") or "").lower()
+    if kind not in FORMAL_REVIEW_KINDS:
+        reasons.append(f"kind {kind or 'unknown'} is not a formal Aristotle kind")
+    if _has_lima_aristotle_submission(obligation):
+        reasons.append("obligation already has a Lima Aristotle submission reference")
+    canonical_hash = str(obligation.get("canonical_hash") or "")
+    problem_id = str(obligation.get("problem_id") or "")
+    if canonical_hash and problem_id:
+        for peer in lima_db.list_obligations(problem_id, limit=200):
+            if str(peer.get("id") or "") == str(obligation.get("id") or ""):
+                continue
+            if str(peer.get("canonical_hash") or "") == canonical_hash and _has_lima_aristotle_submission(peer):
+                reasons.append("canonical duplicate already has a Lima Aristotle submission reference")
+                break
+    if not force:
+        threshold = (app_config.LIMA_ARISTOTLE_THRESHOLD or "strict_survivor").strip().lower()
+        if threshold == "strict_survivor":
+            if universe_status not in {"promising", "formalized", "handed_off"}:
+                reasons.append(f"universe status {universe_status or 'unknown'} is not a strict survivor")
+            fractures = lima_db.list_fractures_for_universe(universe_id, limit=50) if universe_id else []
+            prior_art = [
+                f
+                for f in fractures
+                if str(f.get("failure_type") or "").lower() == "prior_art"
+                and float(f.get("confidence") or 0) >= 0.25
+            ]
+            if prior_art:
+                reasons.append("universe has active prior-art fracture pressure")
+                warnings.extend(str(f.get("breakpoint_md") or "") for f in prior_art[:3])
+            local_siblings = lima_db.list_obligations_for_universe(universe_id, limit=100) if universe_id else []
+            has_verified_local = any(str(o.get("status") or "") == "verified_local" for o in local_siblings)
+            has_refuted_local = any(str(o.get("status") or "") == "refuted_local" for o in local_siblings)
+            if not has_verified_local:
+                reasons.append("no linked local check is verified_local")
+            if has_refuted_local:
+                reasons.append("a linked local check is refuted_local")
+            try:
+                value = float(
+                    obligation.get("estimated_formalization_value")
+                    or obligation.get("estimated_value")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                value = 0.0
+            if value < 4.0:
+                reasons.append(f"estimated formalization value {value:.2f} is below strict threshold")
+    return {
+        "eligible": not reasons,
+        "force": force,
+        "threshold": app_config.LIMA_ARISTOTLE_THRESHOLD,
+        "universe_status": universe_status,
+        "reasons": reasons,
+        "warnings": [w for w in warnings if w],
+    }
+
+
+def _lima_aristotle_objective(obligation: dict[str, Any], packet: FormalReviewPacket) -> str:
+    lines = [
+        "Lima formal obligation. Work only on this narrow candidate; do not broaden the campaign.",
+        f"Obligation: {obligation.get('title') or packet.obligation_id}",
+        f"Kind: {obligation.get('obligation_kind') or 'formal'}",
+        "",
+        "Statement:",
+        str(obligation.get("statement_md") or "").strip(),
+    ]
+    if str(obligation.get("lean_goal") or "").strip():
+        lines.extend(["", "Lean goal:", str(obligation.get("lean_goal") or "").strip()])
+    if str(obligation.get("why_exists_md") or "").strip():
+        lines.extend(["", "Why Lima created this:", str(obligation.get("why_exists_md") or "").strip()])
+    if str(obligation.get("prove_or_kill_md") or "").strip():
+        lines.extend(["", "What success/failure means:", str(obligation.get("prove_or_kill_md") or "").strip()])
+    lines.extend(
+        [
+            "",
+            "Return a narrow verdict: proved, disproved, partial, or inconclusive. Preserve blockers, unsolved goals, and any counterexample signal.",
+        ]
+    )
+    return "\n".join(line for line in lines if line is not None)[:12000]
+
+
+def _campaign_budget(main_db: Database, campaign_id: str) -> dict[str, Any]:
+    active = main_db.count_campaign_experiments_by_statuses(
+        campaign_id, LIMA_ARISTOTLE_ACTIVE_STATUSES
+    )
+    since = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    daily = main_db.count_campaign_submissions_since(campaign_id, since)
+    return {
+        "active": active,
+        "daily_submissions": daily,
+        "max_active": int(app_config.LIMA_ARISTOTLE_MAX_ACTIVE),
+        "max_daily_submissions": int(app_config.LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS),
+        "within_budget": active < int(app_config.LIMA_ARISTOTLE_MAX_ACTIVE)
+        and daily < int(app_config.LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS),
+    }
+
+
+class AristotleFormalBackend(LocalStubFormalBackend):
+    backend_kind = "aristotle_formal"
+
+    def __init__(
+        self,
+        *,
+        lima_db: LimaDatabase,
+        main_db: Database,
+        force: bool = False,
+    ) -> None:
+        self.lima_db = lima_db
+        self.main_db = main_db
+        self.force = force
+
+    def _campaign(self, obligation: dict[str, Any], packet: FormalReviewPacket) -> dict[str, Any]:
+        prefix = _lima_aristotle_prompt_prefix()
+        existing = self.main_db.get_campaign_by_prompt_prefix(prefix)
+        if existing and str(existing.get("status") or "") == "active":
+            workspace_dir = str(
+                existing.get("workspace_dir")
+                or (Path(app_config.WORKSPACE_ROOT).resolve() / str(existing["id"]))
+            )
+            ensure_workspace(workspace_dir, app_config.LIMA_ARISTOTLE_WORKSPACE_TEMPLATE)
+            return {**existing, "workspace_dir": workspace_dir}
+        research_packet = {
+            "source": "lima",
+            "threshold": app_config.LIMA_ARISTOTLE_THRESHOLD,
+            "campaign_slug": app_config.LIMA_ARISTOTLE_CAMPAIGN_SLUG,
+            "zero_live_authority": False,
+            "operator_approved_escalation_required": True,
+            "packet": packet.payload,
+        }
+        campaign_id = self.main_db.create_campaign(
+            prefix,
+            workspace_root=app_config.WORKSPACE_ROOT,
+            workspace_template=app_config.LIMA_ARISTOTLE_WORKSPACE_TEMPLATE,
+            problem_refs_json=json.dumps({"source": "lima", "problem_id": obligation.get("problem_id")}),
+            research_packet_json=json.dumps(research_packet),
+            mathlib_knowledge=True,
+        )
+        campaign = self.main_db.get_campaign_row(campaign_id) or {"id": campaign_id}
+        workspace_dir = str(
+            campaign.get("workspace_dir")
+            or (Path(app_config.WORKSPACE_ROOT).resolve() / campaign_id)
+        )
+        ensure_workspace(workspace_dir, app_config.LIMA_ARISTOTLE_WORKSPACE_TEMPLATE)
+        return {**campaign, "workspace_dir": workspace_dir}
+
+    def _budget(self, campaign_id: str) -> dict[str, Any]:
+        return _campaign_budget(self.main_db, campaign_id)
+
+    async def submit_approved_async(self, packet: FormalReviewPacket) -> dict[str, Any]:
+        obligation = self.lima_db.get_obligation(packet.obligation_id)
+        if not obligation:
+            return {"ok": False, "error": "unknown_obligation", "submitted_formal": False}
+        eligibility = strict_aristotle_eligibility(self.lima_db, obligation, force=self.force)
+        if not eligibility["eligible"]:
+            return {
+                "ok": False,
+                "error": "not_eligible",
+                "backend": self.backend_kind,
+                "status": "blocked_by_strict_threshold",
+                "submitted_formal": False,
+                "live_aristotle_job_created": False,
+                "eligibility": eligibility,
+                "message": "Lima strict-survivor threshold blocked Aristotle submission.",
+            }
+        campaign = self._campaign(obligation, packet)
+        campaign_id = str(campaign["id"])
+        budget = self._budget(campaign_id)
+        if not budget["within_budget"]:
+            return {
+                "ok": False,
+                "error": "budget_exhausted",
+                "backend": self.backend_kind,
+                "status": "blocked_by_budget",
+                "submitted_formal": False,
+                "live_aristotle_job_created": False,
+                "budget": budget,
+                "eligibility": eligibility,
+                "message": "Lima Aristotle budget blocked submission.",
+            }
+        target_description = (
+            f"[Lima] {obligation.get('title') or packet.obligation_id}\n\n"
+            f"Universe: {obligation.get('universe_title') or obligation.get('universe_id') or 'unknown'}\n"
+            f"Lineage: run={obligation.get('source_run_id') or ''} universe={obligation.get('source_universe_id') or obligation.get('universe_id') or ''}"
+        )
+        target_id = self.main_db.add_targets(campaign_id, [target_description])[0]
+        objective = _lima_aristotle_objective(obligation, packet)
+        experiment_id = self.main_db.create_experiment(
+            campaign_id,
+            target_id,
+            objective,
+            move_kind="prove",
+            move_note=f"Lima obligation {packet.obligation_id}; threshold={app_config.LIMA_ARISTOTLE_THRESHOLD}",
+        )
+        workspace_dir = str(campaign.get("workspace_dir") or "")
+        ensure_workspace(workspace_dir, app_config.LIMA_ARISTOTLE_WORKSPACE_TEMPLATE)
+        job_id, error = await submit(objective, workspace_dir)
+        ref = {
+            "ok": not bool(error),
+            "backend": self.backend_kind,
+            "status": "submitted" if job_id else "submission_failed",
+            "submitted_formal": bool(job_id),
+            "live_aristotle_job_created": bool(job_id),
+            "campaign_id": campaign_id,
+            "target_id": target_id,
+            "aristotle_experiment_id": experiment_id,
+            "aristotle_job_id": job_id,
+            "campaign_slug": app_config.LIMA_ARISTOTLE_CAMPAIGN_SLUG,
+            "threshold": app_config.LIMA_ARISTOTLE_THRESHOLD,
+            "budget": self._budget(campaign_id),
+            "eligibility": eligibility,
+            "message": "Submitted Lima obligation to dedicated Aristotle campaign."
+            if job_id
+            else f"Aristotle submission failed: {error}",
+            "zero_live_authority": False,
+            "operator_approved_escalation_required": True,
+        }
+        if job_id:
+            self.main_db.update_experiment_submitted(experiment_id, job_id)
+        else:
+            self.main_db.update_experiment_failed(
+                experiment_id, error or "Lima Aristotle submission failed", verdict=Verdict.INCONCLUSIVE.value
+            )
+        return ref
+
+
+def make_formal_backend(
+    kind: str | None = None,
+    *,
+    lima_db: LimaDatabase | None = None,
+    main_db: Database | None = None,
+    force_aristotle: bool = False,
+) -> FormalBackend:
     selected = (kind or app_config.LIMA_FORMAL_BACKEND or "local_stub").strip().lower()
     # Future Aristotle/Lean/Mathlib adapters must preserve the same approval boundary.
     if selected in {"future_aristotle_lean_stub", "aristotle_lean_stub"}:
         return FutureAristotleLeanFormalBackend()
+    if selected in {"aristotle_formal", "aristotle", "lean_aristotle"} and lima_db and main_db:
+        return AristotleFormalBackend(
+            lima_db=lima_db,
+            main_db=main_db,
+            force=force_aristotle,
+        )
     return LocalStubFormalBackend()
 
 
@@ -313,11 +600,16 @@ def queue_formal_review(
     *,
     obligation_id: str,
     backend: FormalBackend | None = None,
+    main_db: Database | None = None,
 ) -> dict[str, Any]:
     obligation = lima_db.get_obligation(obligation_id)
     if not obligation:
         return {"ok": False, "error": "unknown_obligation"}
-    backend = backend or make_formal_backend(str(obligation.get("formal_backend") or ""))
+    backend = backend or make_formal_backend(
+        str(obligation.get("formal_backend") or ""),
+        lima_db=lima_db,
+        main_db=main_db,
+    )
     packet = backend.build_packet(obligation)
     problem_id = str(obligation["problem_id"])
     universe_id = str(obligation.get("universe_id") or "")
@@ -387,24 +679,43 @@ def queue_formal_review(
     }
 
 
-def approve_formal_review(
+def _record_formal_backend_result(
     lima_db: LimaDatabase,
     *,
-    obligation_id: str,
-    backend: FormalBackend | None = None,
+    obligation: dict[str, Any],
+    review_id: str,
+    packet: FormalReviewPacket,
+    backend_result: dict[str, Any],
 ) -> dict[str, Any]:
-    queued = queue_formal_review(lima_db, obligation_id=obligation_id, backend=backend)
-    if not queued.get("ok"):
-        return queued
-    obligation = lima_db.get_obligation(obligation_id)
-    if not obligation:
-        return {"ok": False, "error": "unknown_obligation"}
-    backend = backend or make_formal_backend(str(obligation.get("formal_backend") or ""))
-    packet = backend.build_packet(obligation)
-    backend_result = backend.submit_approved(packet)
+    if backend_result.get("ok", True) is False:
+        lima_db.set_obligation_status(
+            str(obligation["id"]),
+            str(obligation.get("status") or "queued_formal_review"),
+            review_status=str(obligation.get("review_status") or "pending"),
+            formal_backend=packet.backend_kind,
+            formal_payload=packet.payload,
+            formal_submission_ref=backend_result,
+            review_note=str(backend_result.get("message") or backend_result.get("error") or "Formal escalation blocked."),
+            result_summary_md=str(backend_result.get("message") or "Formal escalation blocked."),
+        )
+        lima_db.update_formal_review_item(
+            review_id,
+            status=str(obligation.get("status") or "queued_formal_review"),
+            review_decision=str(obligation.get("review_status") or "pending"),
+            backend_result=backend_result,
+        )
+        return {
+            "ok": False,
+            "review_id": review_id,
+            "obligation_id": str(obligation["id"]),
+            "status": str(obligation.get("status") or "queued_formal_review"),
+            "backend_result": backend_result,
+            "error": backend_result.get("error"),
+        }
+
     status = "submitted_formal" if backend_result.get("submitted_formal") else "approved_for_formal"
     lima_db.set_obligation_status(
-        obligation_id,
+        str(obligation["id"]),
         status,
         review_status="approved",
         formal_backend=packet.backend_kind,
@@ -414,7 +725,7 @@ def approve_formal_review(
         result_summary_md=str(backend_result.get("message") or "Approved for formal review."),
     )
     lima_db.update_formal_review_item(
-        str(queued["review_id"]),
+        review_id,
         status=status,
         review_decision="approved",
         backend_result=backend_result,
@@ -427,11 +738,85 @@ def approve_formal_review(
     )
     return {
         "ok": True,
-        "review_id": queued["review_id"],
-        "obligation_id": obligation_id,
+        "review_id": review_id,
+        "obligation_id": str(obligation["id"]),
         "status": status,
         "backend_result": backend_result,
     }
+
+
+def approve_formal_review(
+    lima_db: LimaDatabase,
+    *,
+    obligation_id: str,
+    backend: FormalBackend | None = None,
+    main_db: Database | None = None,
+) -> dict[str, Any]:
+    queued = queue_formal_review(
+        lima_db,
+        obligation_id=obligation_id,
+        backend=backend,
+        main_db=main_db,
+    )
+    if not queued.get("ok"):
+        return queued
+    obligation = lima_db.get_obligation(obligation_id)
+    if not obligation:
+        return {"ok": False, "error": "unknown_obligation"}
+    backend = backend or make_formal_backend(
+        str(obligation.get("formal_backend") or ""),
+        lima_db=lima_db,
+        main_db=main_db,
+    )
+    packet = backend.build_packet(obligation)
+    backend_result = backend.submit_approved(packet)
+    return _record_formal_backend_result(
+        lima_db,
+        obligation=obligation,
+        review_id=str(queued["review_id"]),
+        packet=packet,
+        backend_result=backend_result,
+    )
+
+
+async def approve_formal_review_async(
+    lima_db: LimaDatabase,
+    *,
+    obligation_id: str,
+    backend: FormalBackend | None = None,
+    main_db: Database | None = None,
+    force_aristotle: bool = False,
+) -> dict[str, Any]:
+    queued = queue_formal_review(
+        lima_db,
+        obligation_id=obligation_id,
+        backend=backend,
+        main_db=main_db,
+    )
+    if not queued.get("ok"):
+        return queued
+    obligation = lima_db.get_obligation(obligation_id)
+    if not obligation:
+        return {"ok": False, "error": "unknown_obligation"}
+    backend = backend or make_formal_backend(
+        str(obligation.get("formal_backend") or ""),
+        lima_db=lima_db,
+        main_db=main_db,
+        force_aristotle=force_aristotle,
+    )
+    packet = backend.build_packet(obligation)
+    async_submit = getattr(backend, "submit_approved_async", None)
+    if async_submit:
+        backend_result = await async_submit(packet)
+    else:
+        backend_result = backend.submit_approved(packet)
+    return _record_formal_backend_result(
+        lima_db,
+        obligation=obligation,
+        review_id=str(queued["review_id"]),
+        packet=packet,
+        backend_result=backend_result,
+    )
 
 
 def reject_formal_review(lima_db: LimaDatabase, *, obligation_id: str) -> dict[str, Any]:
@@ -587,3 +972,163 @@ def run_queued_obligation_checks(
         "skipped": skipped,
         "queued_seen": len(obligations),
     }
+
+
+def lima_aristotle_budget(main_db: Database) -> dict[str, Any]:
+    campaign = main_db.get_campaign_by_prompt_prefix(_lima_aristotle_prompt_prefix())
+    if not campaign or str(campaign.get("status") or "") != "active":
+        return {
+            "campaign_id": "",
+            "active": 0,
+            "daily_submissions": 0,
+            "max_active": int(app_config.LIMA_ARISTOTLE_MAX_ACTIVE),
+            "max_daily_submissions": int(app_config.LIMA_ARISTOTLE_MAX_DAILY_SUBMISSIONS),
+            "within_budget": True,
+        }
+    budget = _campaign_budget(main_db, str(campaign["id"]))
+    return {**budget, "campaign_id": str(campaign["id"])}
+
+
+async def submit_promising_formal_obligations(
+    lima_db: LimaDatabase,
+    main_db: Database,
+    *,
+    problem_id: str,
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Submit only strict-survivor Lima formal obligations to Aristotle."""
+
+    if not (app_config.LIMA_FORMAL_AUTO_SUBMIT and app_config.LIMA_ARISTOTLE_AUTO_SUBMIT):
+        return {"ok": True, "enabled": False, "submitted": [], "blocked": []}
+    obligations = lima_db.list_obligations_by_statuses(
+        problem_id,
+        ["queued_formal_review", "approved_for_formal"],
+        limit=limit,
+    )
+    submitted: list[str] = []
+    blocked: list[dict[str, Any]] = []
+    for obligation in obligations:
+        obligation_id = str(obligation.get("id") or "")
+        if not obligation_id or str(obligation.get("obligation_kind") or "") not in FORMAL_REVIEW_KINDS:
+            continue
+        if _has_lima_aristotle_submission(obligation):
+            blocked.append({"obligation_id": obligation_id, "reason": "duplicate_submission"})
+            continue
+        backend = AristotleFormalBackend(lima_db=lima_db, main_db=main_db)
+        result = await approve_formal_review_async(
+            lima_db,
+            obligation_id=obligation_id,
+            backend=backend,
+            main_db=main_db,
+        )
+        if result.get("ok") and result.get("status") == "submitted_formal":
+            submitted.append(obligation_id)
+        else:
+            blocked.append(
+                {
+                    "obligation_id": obligation_id,
+                    "reason": result.get("error") or result.get("status") or "not_submitted",
+                    "result": result,
+                }
+            )
+    return {
+        "ok": True,
+        "enabled": True,
+        "submitted": submitted,
+        "blocked": blocked,
+        "budget": lima_aristotle_budget(main_db),
+    }
+
+
+def _sync_status_from_experiment(experiment: dict[str, Any]) -> str:
+    status = str(experiment.get("status") or "").lower()
+    if status in LIMA_FORMAL_SYNC_STATUSES:
+        return LIMA_FORMAL_SYNC_STATUSES[status]
+    if status == ExperimentStatus.COMPLETED.value:
+        verdict = str(experiment.get("verdict") or "").lower()
+        if verdict == Verdict.PROVED.value:
+            return "verified_formal"
+        if verdict == Verdict.DISPROVED.value:
+            return "refuted_formal"
+        return "inconclusive"
+    if status == ExperimentStatus.FAILED.value:
+        return "inconclusive"
+    return "inconclusive"
+
+
+def sync_lima_aristotle_results(
+    lima_db: LimaDatabase,
+    main_db: Database,
+    *,
+    problem_id: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Ingest main Aristotle experiment rows back into Lima formal obligations."""
+
+    problems = [lima_db.get_problem(problem_id)] if problem_id else lima_db.list_problems()
+    synced: list[str] = []
+    skipped: list[str] = []
+    for problem in problems:
+        pid = str(problem.get("id") or "")
+        if not pid:
+            continue
+        obligations = lima_db.list_obligations_by_statuses(
+            pid,
+            ["submitted_formal", "approved_for_formal"],
+            limit=limit,
+        )
+        for obligation in obligations:
+            obligation_id = str(obligation.get("id") or "")
+            ref = _parse_submission_ref(obligation)
+            experiment_id = str(ref.get("aristotle_experiment_id") or "")
+            if not obligation_id or not experiment_id:
+                skipped.append(obligation_id)
+                continue
+            experiment = main_db.get_experiment_row(experiment_id)
+            if not experiment:
+                skipped.append(obligation_id)
+                continue
+            next_status = _sync_status_from_experiment(experiment)
+            merged_ref = {
+                **ref,
+                "last_sync_at": datetime.utcnow().isoformat(),
+                "main_experiment_status": experiment.get("status"),
+                "verdict": experiment.get("verdict"),
+                "result_summary": experiment.get("result_summary"),
+                "parsed_proved_lemmas": safe_json_loads(experiment.get("parsed_proved_lemmas_json"), []),
+                "parsed_blockers": safe_json_loads(experiment.get("parsed_blockers_json"), []),
+                "parsed_unsolved_goals": safe_json_loads(experiment.get("parsed_unsolved_goals_json"), []),
+                "parse_warnings": safe_json_loads(experiment.get("parse_warnings_json"), []),
+                "aristotle_job_id": experiment.get("aristotle_job_id") or ref.get("aristotle_job_id"),
+            }
+            summary = str(experiment.get("result_summary") or "")
+            if not summary:
+                summary = f"Synced Aristotle experiment {experiment_id}: {experiment.get('status') or 'unknown'}."
+            lima_db.update_obligation_result(
+                obligation_id,
+                status=next_status,
+                result_summary_md=summary[:8000],
+                aristotle_ref=merged_ref,
+            )
+            for review in lima_db.list_formal_reviews(pid, limit=100):
+                if str(review.get("obligation_id") or "") == obligation_id:
+                    lima_db.update_formal_review_item(
+                        str(review["id"]),
+                        status=next_status,
+                        review_decision="approved",
+                        backend_result=merged_ref,
+                    )
+                    break
+            lima_db.create_artifact(
+                problem_id=pid,
+                universe_id=str(obligation.get("universe_id") or ""),
+                artifact_kind="aristotle_result_sync",
+                content={
+                    "obligation_id": obligation_id,
+                    "aristotle_experiment_id": experiment_id,
+                    "status": next_status,
+                    "experiment": merged_ref,
+                },
+            )
+            synced.append(obligation_id)
+    return {"ok": True, "synced": synced, "skipped": skipped}

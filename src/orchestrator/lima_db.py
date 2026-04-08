@@ -1486,6 +1486,22 @@ class LimaDatabase:
         finally:
             conn.close()
 
+    def get_universe(self, universe_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT u.*, fam.family_key, fam.family_kind
+                FROM lima_universe u
+                LEFT JOIN lima_universe_family fam ON fam.id = u.family_id
+                WHERE u.id = ?
+                """,
+                (universe_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def list_family_leaderboard(self, problem_id: str, limit: int = 20) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
@@ -1517,6 +1533,27 @@ class LimaDatabase:
                 LIMIT ?
                 """,
                 (problem_id, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_fractures_for_universe(
+        self, universe_id: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT f.*, u.title AS universe_title, fam.family_key
+                FROM lima_fracture f
+                LEFT JOIN lima_universe u ON u.id = f.universe_id
+                LEFT JOIN lima_universe_family fam ON fam.id = f.family_id
+                WHERE f.universe_id = ?
+                ORDER BY f.confidence DESC, f.created_at DESC
+                LIMIT ?
+                """,
+                (universe_id, min(limit, 100)),
             )
             return [dict(r) for r in cur.fetchall()]
         finally:
@@ -1578,6 +1615,26 @@ class LimaDatabase:
         finally:
             conn.close()
 
+    def list_obligations_for_universe(
+        self, universe_id: str, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT o.*, u.title AS universe_title
+                FROM lima_obligation o
+                LEFT JOIN lima_universe u ON u.id = o.universe_id
+                WHERE o.universe_id = ?
+                ORDER BY o.priority DESC, o.created_at DESC
+                LIMIT ?
+                """,
+                (universe_id, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
     def get_obligation(self, obligation_id: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:
@@ -1609,7 +1666,7 @@ class LimaDatabase:
                 UPDATE lima_obligation
                 SET status = ?, result_summary_md = ?, aristotle_ref_json = ?,
                     formal_submission_ref_json = CASE
-                      WHEN ? IN ('submitted_formal', 'verified_formal', 'refuted_formal') THEN ?
+                      WHEN ? IN ('submitted_formal', 'verified_formal', 'refuted_formal', 'inconclusive') THEN ?
                       ELSE formal_submission_ref_json
                     END,
                     updated_at = ?
