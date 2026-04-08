@@ -24,7 +24,9 @@ from orchestrator.lima_models import (
     LimaObligationSpec,
     LimaUniverseSpec,
     coerce_lima_generation_response,
+    infer_ontology_class_from_universe,
 )
+from orchestrator.lima_obligations import compile_obligations_for_universe
 from orchestrator.lima_rupture import rupture_universe
 
 
@@ -62,6 +64,8 @@ def test_lima_db_initialization_and_schema(tmp_path: Path) -> None:
             "lima_universe_literature_link",
             "lima_meta_run",
             "lima_policy_revision",
+            "lima_policy_layer",
+            "lima_transfer_metric",
             "lima_handoff_request",
             "lima_artifact",
         ):
@@ -131,6 +135,127 @@ def test_lima_rupture_generates_verdict_and_fracture() -> None:
     failure_types = {f["failure_type"] for f in report["fractures"]}
     assert "vacuity" in failure_types
     assert "bounded_counterexample" in failure_types
+
+
+def test_lima_policy_layers_and_family_governance_are_scoped(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    problem = db.get_problem("collatz")
+    global_layer = db.set_policy_layer(
+        scope="global",
+        policy={"generation": {"habit": "prefer explicit bridges"}},
+        imposed_by="test",
+        reason_md="global research habit",
+    )
+    benchmark_layer = db.set_policy_layer(
+        scope="benchmark",
+        problem_id=problem["id"],
+        policy={"generation": {"hard_bans": ["stale_family"]}},
+        imposed_by="test",
+        reason_md="temporary benchmark lock",
+        meta_mutable=False,
+    )
+    assert global_layer != benchmark_layer
+    layers = db.list_policy_layers(problem["id"])
+    assert [layer["scope"] for layer in layers] == ["global", "benchmark"]
+
+    universe = LimaUniverseSpec(
+        title="Temporary stale family",
+        family_key="stale_family",
+        branch_of_math="symbolic dynamics",
+        core_story_md="A state space with no new bridge.",
+        core_objects=[LimaObjectSpec(object_kind="state_space", name="S")],
+    )
+    run_id = db.commit_run(
+        problem_id=problem["id"],
+        trigger_kind="test",
+        mode="balanced",
+        run_summary_md="seed stale family",
+        frontier_snapshot={},
+        pressure_snapshot={},
+        policy_snapshot={},
+        response_obj={},
+        universes=[universe],
+        rupture_reports=[{"universe_title": universe.title, "verdict": "weakened", "fractures": []}],
+    )
+    assert run_id
+    ok, _ = db.update_family_search_control(
+        problem_id=problem["id"],
+        family_key="stale_family",
+        search_action="hard_ban",
+        reason_md="benchmark-scoped hard ban",
+        required_delta=[],
+        repeat_failure_count=5,
+        last_failure_type="weak_explanation",
+        scope="benchmark",
+        imposed_by="test",
+        meta_mutable=False,
+    )
+    assert ok
+    analyze_and_update_policy(db, problem_id=problem["id"])
+    controls = db.list_family_search_constraints(problem["id"])
+    stale = next(row for row in controls if row["family_key"] == "stale_family")
+    assert stale["governance_state"] == "hard_ban"
+    assert stale["governance_scope"] == "benchmark"
+    assert stale["governance_meta_mutable"] == 0
+
+
+def test_lima_ontology_class_and_canonical_obligations() -> None:
+    universe = LimaUniverseSpec(
+        title="Coordinate lift proof ontology",
+        family_key="coordinate_lift_proof",
+        branch_of_math="dynamical systems",
+        solved_world="A lifted coordinate representation with two cases.",
+        core_story_md="Define a unique decomposition, derive transition laws by case, and prove an energy descent bridge.",
+        core_objects=[
+            LimaObjectSpec(object_kind="state_space", name="LiftedState"),
+            LimaObjectSpec(object_kind="operator", name="LiftedStep"),
+            LimaObjectSpec(object_kind="potential", name="Energy"),
+        ],
+        laws=[
+            LimaClaimSpec(
+                claim_kind="law",
+                title="case transitions",
+                statement_md="The operator has exact transition laws in two regimes.",
+            )
+        ],
+        backward_translation=["Project lifted termination to the surface system."],
+        bridge_lemmas=[
+            LimaClaimSpec(
+                claim_kind="bridge_lemma",
+                title="surface bridge",
+                statement_md="Lifted termination implies surface termination.",
+            )
+        ],
+    )
+    assert infer_ontology_class_from_universe(universe) == "coordinate_lift"
+    obligations = compile_obligations_for_universe(universe)
+    titles = {obligation.title for obligation in obligations}
+    assert "uniqueness_of_representation" in titles
+    assert "exact_transition_law_case_A" in titles
+    assert "exact_transition_law_case_B" in titles
+    assert "ranking_or_lexicographic_descent" in titles
+    assert "bridge_to_surface_system" in titles
+
+
+def test_lima_transfer_metric_persistence(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    problem = db.get_problem("collatz")
+    metric_id = db.record_transfer_metric(
+        problem_id=problem["id"],
+        run_id="run123",
+        benchmark_id="holdout_synthetic",
+        metric={
+            "duplicate_family_rate": 0.25,
+            "ontology_class_distribution": {"coordinate_lift": 1, "rewrite_system": 1},
+            "benchmark_leakage_risk": 0,
+        },
+    )
+    assert metric_id
+    rows = db.list_transfer_metrics(problem["id"])
+    assert rows[0]["benchmark_id"] == "holdout_synthetic"
+    assert "duplicate_family_rate" in rows[0]["metric_json"]
 
 
 def test_lima_literature_and_meta_policy_persistence(tmp_path: Path) -> None:
@@ -273,8 +398,23 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         assert resp.status_code == 200
         assert "Lima Lab" in resp.text
         assert "zero live authority" in resp.text
+        assert "Start a Lima problem" in resp.text
         assert "Add a new Lima problem" in resp.text
         assert "Aristotle auto-submit" in resp.text
+
+        start_resp = client.post(
+            "/api/lima/start",
+            data={
+                "prompt": "Twin prime conjecture\nExplore falsification-first ontologies for infinitely many prime gaps of 2.",
+                "title": "Twin prime conjecture",
+                "mode": "balanced",
+                "run_now": "1",
+            },
+        )
+        assert start_resp.status_code == 200
+        assert "Twin prime conjecture" in start_resp.text
+        assert "Start a Lima problem" in start_resp.text
+        assert app_mod.lima_db.get_problem("twin_prime_conjecture")["title"] == "Twin prime conjecture"
 
         create_resp = client.post(
             "/api/lima/problem",

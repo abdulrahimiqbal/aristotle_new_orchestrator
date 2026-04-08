@@ -68,6 +68,59 @@ These pieces support **serious open-problem** campaigns (cartography, mixed tact
 
 Tests: `tests/test_verdict_reconcile.py`, `tests/test_manager_policy.py`, `tests/test_problem_map_util.py` (obligations coercion).
 
+## Lima design: falsification-first ontology search
+
+### What Lima is
+
+Lima is a falsification-first ontology-search research engine. It is designed to hallucinate candidate mathematical worlds, break them, formalize the survivors, and learn from the fracture memory without acquiring live execution authority.
+
+### Design goal
+
+The goal is to make Lima a better hallucinating researcher across many problems, not a specialist on one benchmark, one hidden ontology, or one ontology class. A good Lima change improves general research habits: inventing useful state spaces, noticing missing structure, compiling proof-program obligations, remembering dead families, and preserving transfer across problem types.
+
+### Policy layers
+
+Lima policy is explicitly layered:
+
+- Global policy: durable research behavior shared across problems, such as zero-live-authority, falsification-first search, proof-oriented obligations, and anti-overfitting discipline.
+- Problem policy: behavior specific to one conjecture or problem, such as literature routing, source weighting, local terminology, and preferred ontology diversity.
+- Benchmark/session policy: temporary controls for a synthetic run, such as hard bans, frozen family governance, ontology quotas, local-file-only literature, and Meta-Lima disable/freeze settings.
+
+Benchmark/session policy overrides problem policy during the session, and problem policy overrides global policy for that problem. Benchmark controls must stay scoped: they expire or are explicitly closed, and they must not silently become global defaults.
+
+### Anti-overfitting design checklist
+
+- Does this patch teach a research skill rather than a benchmark answer?
+- Is the change scoped correctly (global vs problem vs benchmark)?
+- Could this change accidentally make Lima specialize in one ontology class?
+- Does it improve ontology diversity rather than collapse it?
+- Does it strengthen fracture reuse without hardcoding hidden evaluator content?
+- Does it encourage missing-structure search in a general way?
+- Does it improve proof-program obligation quality?
+- Does it preserve zero-live-authority behavior?
+- Has it been checked on at least one holdout synthetic benchmark?
+- Does it help transfer, not just local performance?
+
+### Synthetic benchmark protocol
+
+Synthetic benchmarks must separate the visible surface packet from the hidden evaluator packet. Lima may see the surface statement, bounded examples, and explicitly allowed local literature roots; it must not see hidden ontologies, rubrics, or evaluator notes during the run.
+
+Benchmark locks can set scoped family bans, ontology-class quotas, localfile-only literature, and Meta-Lima disable/freeze options. These locks are recorded as benchmark/session policy layers and family governance rows. Progress reports should log ontology-class distribution, family governance state, policy mutations, obligation quality, transfer-relevant metrics, and whether the run is benchmark-locked. Final reports should be evaluator audits that compare Lima output against hidden material after the run, without feeding hidden content back into global policy.
+
+### Acceptance criteria for Lima changes
+
+A Lima change is good only if it improves general research behavior, does not leak benchmark-specific answers into global policy, does not collapse ontology diversity, passes transfer checks, and remains interpretable in the UI and logs. It must preserve zero-live-authority behavior: Lima can emit obligations, review packets, and handoff-worthy incubations, but it cannot directly create live Aristotle jobs or main queue work without human approval.
+
+### Recommended evaluation metrics
+
+- Duplicate family rate
+- Ontology-class distribution
+- Fracture reuse rate
+- Useful obligation rate
+- Proof-program recovery rate
+- Manual steering required
+- Transfer score across synthetic benchmarks
+
 ## Global Shadow Manager (Collatz lab)
 
 The dashboard now includes a dedicated **Shadow manager** workspace (`/shadow`) separate from live campaign tabs.
@@ -353,6 +406,8 @@ The container listens on **`PORT`** (Railway sets this automatically). SQLite an
 | `ARISTOTLE_API_KEY` | Your Aristotle key |
 | `DATABASE_PATH` | `/data/orchestrator.db` (default in Docker image) |
 | `LIMA_DATABASE_PATH` | `/data/lima.db` (default in Docker image) |
+| `LIMA_BENCHMARK_LOCKED` | `1` marks Lima ops/reporting as benchmark-locked for the active process |
+| `LIMA_FREEZE_FAMILY_GOVERNANCE` | `1` disables Meta-Lima family governance mutation during a scoped session |
 | `WORKSPACE_ROOT` | `/data/workspaces` (default in Docker image) |
 | `WORKSPACE_LEGACY_DIR` | `/data/workspace` if upgrading from the old single-workspace layout |
 
@@ -365,8 +420,8 @@ The Lima loop is:
 1. Generate problem-aware universes, objects, claims, and obligations.
 2. Run deterministic rupture checks: vacuity, bridgeability, prior art, residue/counterexample scans, symbolic normalization where available, and graph consistency where available.
 3. Persist fractures, artifacts, literature links, policy revisions, and handoff packets.
-4. Convert repeated family fractures into search controls (`exploit`, `mutate`, `cooldown`, `retire`) so repeated prior-art, vacuity, counterexample, or formal-blocker failures force a material change in object, invariant, bridge lemma, falsifier, or literature tool.
-5. Suppress unchanged weakened handoffs from cooled-down/retired families and store `search_control_suppression` artifacts instead of treating them as fresh review work.
+4. Convert repeated family fractures into scoped governance states (`exploit`, `explore`, `cooldown`, `soft_ban`, `hard_ban`) so repeated prior-art, vacuity, counterexample, or formal-blocker failures force a material change in object, invariant, bridge lemma, falsifier, or literature tool.
+5. Suppress unchanged weakened handoffs from cooled-down or banned families and store `search_control_suppression` artifacts instead of treating them as fresh review work.
 6. Run bounded local obligations (`finite_check`, `counterexample_search`, and cheap consistency checks) inside Lima.
 7. Queue formal obligations (`lean_goal`, `bridge_lemma`, `equivalence`, and novelty crosschecks) for human formal review.
 8. Only after review can a packet be marked approved for formal work or Shadow incubation. The default `local_stub` backend records a packet and never submits live Aristotle jobs.

@@ -8,6 +8,28 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 LimaMode = Literal["wild", "stress", "forge", "balanced"]
+LimaPolicyScope = Literal["global", "problem", "benchmark", "session"]
+LimaFamilyGovernanceState = Literal[
+    "hard_ban",
+    "soft_ban",
+    "cooldown",
+    "explore",
+    "exploit",
+]
+LimaOntologyClass = Literal[
+    "coordinate_lift",
+    "rewrite_system",
+    "automaton",
+    "quotient",
+    "cocycle_or_skew_product",
+    "valuation_or_cofactor",
+    "symbolic_grammar",
+    "residue_finite_state",
+    "geometric_or_topological",
+    "algebraic_operator",
+    "probabilistic_or_measure",
+    "other",
+]
 LimaObligationStatus = Literal[
     "queued",
     "checked",
@@ -27,6 +49,31 @@ LimaObligationStatus = Literal[
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
+
+ONTOLOGY_CLASSES: tuple[str, ...] = (
+    "coordinate_lift",
+    "rewrite_system",
+    "automaton",
+    "quotient",
+    "cocycle_or_skew_product",
+    "valuation_or_cofactor",
+    "symbolic_grammar",
+    "residue_finite_state",
+    "geometric_or_topological",
+    "algebraic_operator",
+    "probabilistic_or_measure",
+    "other",
+)
+
+FAMILY_GOVERNANCE_STATES: tuple[str, ...] = (
+    "hard_ban",
+    "soft_ban",
+    "cooldown",
+    "explore",
+    "exploit",
+)
+
+POLICY_SCOPES: tuple[str, ...] = ("global", "problem", "benchmark", "session")
 
 
 def slugify(value: Any, *, fallback: str = "universe") -> str:
@@ -50,6 +97,63 @@ def safe_json_loads(raw: Any, default: Any) -> Any:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def normalize_policy_scope(value: Any) -> str:
+    v = slugify(value, fallback="problem")
+    return v if v in POLICY_SCOPES else "problem"
+
+
+def normalize_family_governance_state(value: Any) -> str:
+    v = slugify(value, fallback="exploit")
+    aliases = {
+        "retire": "hard_ban",
+        "ban": "hard_ban",
+        "hardban": "hard_ban",
+        "softban": "soft_ban",
+        "mutate": "explore",
+        "active": "exploit",
+    }
+    v = aliases.get(v, v)
+    return v if v in FAMILY_GOVERNANCE_STATES else "explore"
+
+
+def legacy_search_action_for_governance(state: Any) -> str:
+    normalized = normalize_family_governance_state(state)
+    return {
+        "hard_ban": "retire",
+        "soft_ban": "cooldown",
+        "cooldown": "cooldown",
+        "explore": "mutate",
+        "exploit": "exploit",
+    }[normalized]
+
+
+def infer_ontology_class_from_text(text: str) -> str:
+    blob = text.lower()
+    if any(marker in blob for marker in ("cofactor", "valuation", "v_p", "v2", "p-adic", "2-adic")):
+        return "valuation_or_cofactor"
+    if any(marker in blob for marker in ("skew product", "cocycle", "fiber", "fibre")):
+        return "cocycle_or_skew_product"
+    if any(marker in blob for marker in ("coordinate", "lift", "state space", "latent", "hidden state")):
+        return "coordinate_lift"
+    if any(marker in blob for marker in ("rewrite", "rewriting", "rewrite rule")):
+        return "rewrite_system"
+    if any(marker in blob for marker in ("automaton", "finite state", "finite-state")):
+        return "automaton"
+    if any(marker in blob for marker in ("residue", "mod ", "modulo", "congruence")):
+        return "residue_finite_state"
+    if any(marker in blob for marker in ("quotient", "factor system", "projection")):
+        return "quotient"
+    if any(marker in blob for marker in ("grammar", "symbolic", "word", "language")):
+        return "symbolic_grammar"
+    if any(marker in blob for marker in ("topolog", "geometric", "manifold", "graph complex")):
+        return "geometric_or_topological"
+    if any(marker in blob for marker in ("operator", "algebra", "module", "ring", "semigroup")):
+        return "algebraic_operator"
+    if any(marker in blob for marker in ("measure", "probabil", "random", "martingale")):
+        return "probabilistic_or_measure"
+    return "other"
 
 
 class LimaObjectSpec(BaseModel):
@@ -232,6 +336,34 @@ class LimaUniverseSpec(BaseModel):
             claims.append(self.conditional_theorem)
         claims.extend(self.kill_tests)
         return claims
+
+    def ontology_class(self) -> str:
+        return infer_ontology_class_from_universe(self)
+
+
+def infer_ontology_class_from_universe(universe: LimaUniverseSpec) -> str:
+    object_kinds = {slugify(obj.object_kind) for obj in universe.core_objects}
+    if "automaton" in object_kinds:
+        return "automaton"
+    if "grammar" in object_kinds:
+        return "symbolic_grammar"
+    if "quotient" in object_kinds:
+        return "quotient"
+    if "measure" in object_kinds:
+        return "probabilistic_or_measure"
+    blob = " ".join(
+        [
+            universe.title,
+            universe.family_key,
+            universe.branch_of_math,
+            universe.solved_world,
+            universe.why_problem_is_easy_here,
+            universe.core_story_md,
+            " ".join(obj.name + " " + obj.description_md for obj in universe.core_objects),
+            " ".join(c.title + " " + c.statement_md for c in universe.all_claim_specs()),
+        ]
+    )
+    return infer_ontology_class_from_text(blob)
 
 
 class LimaGenerationResponse(BaseModel):

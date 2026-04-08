@@ -18,6 +18,7 @@ from orchestrator.db import Database
 from orchestrator.lima_agent import lima_loop, run_lima
 from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_literature import refresh_literature
+from orchestrator.lima_models import slugify
 from orchestrator.lima_obligations import (
     AristotleFormalBackend,
     approve_formal_review_async,
@@ -918,6 +919,8 @@ async def lima_ops(problem: str | None = None):
         "auto_interval_sec": int(app_config.LIMA_LOOP_INTERVAL_SEC),
         "database_path": app_config.LIMA_DATABASE_PATH,
         "default_mode": app_config.LIMA_DEFAULT_MODE,
+        "benchmark_locked": bool(app_config.LIMA_BENCHMARK_LOCKED),
+        "family_governance_frozen": bool(app_config.LIMA_FREEZE_FAMILY_GOVERNANCE),
         "zero_live_authority": not bool(app_config.LIMA_ARISTOTLE_AUTO_SUBMIT),
         "zero_live_authority_default": True,
         "live_aristotle_submission_enabled": bool(app_config.LIMA_ARISTOTLE_AUTO_SUBMIT),
@@ -1021,6 +1024,72 @@ async def lima_problem_create_fragment(
         request,
         "lima_panel.html",
         _lima_panel_context(problem=str(problem.get("slug") or problem_id), lima_flash=flash),
+    )
+
+
+@app.post("/api/lima/start", response_class=HTMLResponse)
+async def lima_start_from_prompt_fragment(
+    request: Request,
+    _auth: OperatorWriteAuth,
+    prompt: str = Form(...),
+    title: str = Form(""),
+    slug: str = Form(""),
+    domain: str = Form("unspecified"),
+    mode: str = Form(""),
+    run_now: str = Form(""),
+):
+    prompt_text = prompt.strip()
+    if not prompt_text:
+        flash = {"ok": False, "error": "prompt_required"}
+        return templates.TemplateResponse(
+            request,
+            "lima_panel.html",
+            _lima_panel_context(lima_flash=flash),
+        )
+    first_line = next((line.strip() for line in prompt_text.splitlines() if line.strip()), "New Lima problem")
+    problem_title = (title.strip() or first_line)[:120]
+    problem_slug = slugify(slug or problem_title, fallback="lima_problem")
+    seed_payload = {
+        "operator_prompt": prompt_text,
+        "known_frontier": [],
+        "routing_policy": {
+            "retrieval_keywords": [problem_title],
+            "campaign_tags": [problem_slug],
+            "literature_defaults": ["local", "local_file"],
+        },
+    }
+    default_goal_text = (
+        "Treat the operator prompt as the visible problem packet. Invent candidate ontologies, "
+        "attack repeated bad families, compile proof-oriented obligations, and preserve scoped fracture memory."
+    )
+    problem_id, created = lima_db.create_problem(
+        slug=problem_slug,
+        title=problem_title,
+        statement_md=prompt_text,
+        domain=domain.strip() or "unspecified",
+        default_goal_text=default_goal_text,
+        seed_packet_json=seed_payload,
+    )
+    problem_row = lima_db.get_problem(problem_id)
+    selected_problem = str(problem_row.get("slug") or problem_id)
+    flash: dict[str, Any] = {
+        "ok": True,
+        "problem": "created" if created else "updated",
+        "problem_title": problem_row.get("title"),
+    }
+    if run_now:
+        run_flash = await run_lima(
+            lima_db,
+            db,
+            problem_slug=selected_problem,
+            trigger_kind="manual",
+            mode=mode or app_config.LIMA_DEFAULT_MODE,
+        )
+        flash = {**run_flash, "problem": flash["problem"], "problem_title": flash["problem_title"]}
+    return templates.TemplateResponse(
+        request,
+        "lima_panel.html",
+        _lima_panel_context(problem=selected_problem, lima_flash=flash),
     )
 
 

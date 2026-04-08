@@ -227,6 +227,48 @@ def _claim_graph_attack(universe: LimaUniverseSpec) -> dict[str, Any]:
     }
 
 
+def _underparameterized_scalar_attack(universe: LimaUniverseSpec) -> dict[str, Any]:
+    blob = " ".join(
+        [
+            universe.title,
+            universe.branch_of_math,
+            universe.solved_world,
+            universe.why_problem_is_easy_here,
+            universe.core_story_md,
+            " ".join(obj.name + " " + obj.description_md for obj in universe.core_objects),
+            " ".join(claim.title + " " + claim.statement_md for claim in universe.all_claim_specs()),
+        ]
+    ).lower()
+    scalar_markers = ("scalar", "rank", "norm", "height", "potential", "energy", "invariant")
+    companion_markers = (
+        "companion",
+        "latent",
+        "coordinate",
+        "memory",
+        "carry",
+        "cocycle",
+        "context",
+        "defect",
+        "cofactor",
+        "quotient label",
+        "hidden state",
+    )
+    if any(marker in blob for marker in scalar_markers) and not any(
+        marker in blob for marker in companion_markers
+    ):
+        return {
+            "attack": "missing_companion_object",
+            "result": "warning",
+            "failure_type": "underparameterized_state",
+            "breakpoint_md": (
+                "The universe leans on a scalar progress signal without an explicit companion structure "
+                "to repair known state loss."
+            ),
+            "confidence": 0.66,
+        }
+    return {"attack": "missing_companion_object", "result": "survived", "confidence": 0.55}
+
+
 def _bounded_counterexample_attack(universe: LimaUniverseSpec) -> dict[str, Any]:
     blob = " ".join(
         [
@@ -344,6 +386,7 @@ def rupture_universe(
         _vacuity_attack(universe),
         _compression_attack(universe),
         _bounded_counterexample_attack(universe),
+        _underparameterized_scalar_attack(universe),
         _claim_graph_attack(universe),
         _formalizability_attack(universe),
     ]

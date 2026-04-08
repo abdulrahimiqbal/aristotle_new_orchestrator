@@ -9,7 +9,15 @@ from typing import Any
 from uuid import uuid4
 
 from orchestrator import config as app_config
-from orchestrator.lima_models import LimaUniverseSpec, safe_json_loads, slugify
+from orchestrator.lima_models import (
+    LimaUniverseSpec,
+    infer_ontology_class_from_universe,
+    legacy_search_action_for_governance,
+    normalize_family_governance_state,
+    normalize_policy_scope,
+    safe_json_loads,
+    slugify,
+)
 
 
 def _new_id() -> str:
@@ -149,6 +157,14 @@ class LimaDatabase:
                     required_delta_json TEXT NOT NULL DEFAULT '[]',
                     repeat_failure_count INTEGER NOT NULL DEFAULT 0,
                     last_failure_type TEXT NOT NULL DEFAULT '',
+                    governance_state TEXT NOT NULL DEFAULT 'exploit',
+                    governance_scope TEXT NOT NULL DEFAULT 'problem',
+                    governance_imposed_by TEXT NOT NULL DEFAULT 'system',
+                    governance_reason_md TEXT NOT NULL DEFAULT '',
+                    governance_evidence_json TEXT NOT NULL DEFAULT '{}',
+                    governance_expires_at TEXT,
+                    governance_meta_mutable INTEGER NOT NULL DEFAULT 1,
+                    ontology_class TEXT NOT NULL DEFAULT 'other',
                     UNIQUE(problem_id, family_key)
                 );
                 CREATE INDEX IF NOT EXISTS idx_lima_family_problem ON lima_universe_family(problem_id);
@@ -166,6 +182,7 @@ class LimaDatabase:
                     solved_world TEXT NOT NULL DEFAULT '',
                     why_problem_is_easy_here TEXT NOT NULL DEFAULT '',
                     core_story_md TEXT NOT NULL DEFAULT '',
+                    ontology_class TEXT NOT NULL DEFAULT 'other',
                     universe_status TEXT NOT NULL DEFAULT 'proposed',
                     compression_score REAL NOT NULL DEFAULT 0,
                     fit_score REAL NOT NULL DEFAULT 0,
@@ -441,6 +458,34 @@ class LimaDatabase:
                 CREATE INDEX IF NOT EXISTS idx_lima_artifact_universe ON lima_artifact(universe_id);
                 CREATE INDEX IF NOT EXISTS idx_lima_artifact_kind ON lima_artifact(artifact_kind);
                 CREATE INDEX IF NOT EXISTS idx_lima_artifact_hash ON lima_artifact(content_hash);
+
+                CREATE TABLE IF NOT EXISTS lima_policy_layer (
+                    id TEXT PRIMARY KEY,
+                    problem_id TEXT,
+                    scope TEXT NOT NULL DEFAULT 'problem',
+                    policy_json TEXT NOT NULL DEFAULT '{}',
+                    imposed_by TEXT NOT NULL DEFAULT 'system',
+                    reason_md TEXT NOT NULL DEFAULT '',
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    expires_at TEXT,
+                    meta_mutable INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_lima_policy_layer_problem ON lima_policy_layer(problem_id, scope, status);
+                CREATE INDEX IF NOT EXISTS idx_lima_policy_layer_scope ON lima_policy_layer(scope, status);
+
+                CREATE TABLE IF NOT EXISTS lima_transfer_metric (
+                    id TEXT PRIMARY KEY,
+                    problem_id TEXT NOT NULL,
+                    run_id TEXT,
+                    benchmark_id TEXT NOT NULL DEFAULT '',
+                    metric_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_lima_transfer_metric_problem ON lima_transfer_metric(problem_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_lima_transfer_metric_run ON lima_transfer_metric(run_id);
                 """
             )
             self._migrate_schema(conn)
@@ -456,6 +501,15 @@ class LimaDatabase:
         _ensure_column(conn, "lima_universe_family", "required_delta_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "lima_universe_family", "repeat_failure_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "lima_universe_family", "last_failure_type", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_universe_family", "governance_state", "TEXT NOT NULL DEFAULT 'exploit'")
+        _ensure_column(conn, "lima_universe_family", "governance_scope", "TEXT NOT NULL DEFAULT 'problem'")
+        _ensure_column(conn, "lima_universe_family", "governance_imposed_by", "TEXT NOT NULL DEFAULT 'system'")
+        _ensure_column(conn, "lima_universe_family", "governance_reason_md", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "lima_universe_family", "governance_evidence_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_universe_family", "governance_expires_at", "TEXT")
+        _ensure_column(conn, "lima_universe_family", "governance_meta_mutable", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "lima_universe_family", "ontology_class", "TEXT NOT NULL DEFAULT 'other'")
+        _ensure_column(conn, "lima_universe", "ontology_class", "TEXT NOT NULL DEFAULT 'other'")
         _ensure_column(conn, "lima_obligation", "why_exists_md", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "prove_or_kill_md", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "why_this_exists", "TEXT NOT NULL DEFAULT ''")
@@ -489,6 +543,8 @@ class LimaDatabase:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_obligation_backend ON lima_obligation(formal_backend)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_obligation_reviewed ON lima_obligation(reviewed_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_family_search_action ON lima_universe_family(search_action)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_family_governance ON lima_universe_family(governance_state, governance_scope)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lima_universe_ontology_class ON lima_universe(ontology_class)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lima_formal_family ON lima_formal_review_queue(family_id)"
         )
@@ -801,10 +857,15 @@ class LimaDatabase:
         survival_inc = 1 if verdict in {"survived"} else 0
         failure_inc = 1 if verdict in {"collapsed", "weakened"} else 0
         thesis = universe.core_story_md or universe.solved_world or universe.title
+        ontology_class = infer_ontology_class_from_universe(universe)
         if row:
             family_id = str(row["id"])
             current_status = str(row["status"] or "active")
-            status = "active" if verdict == "survived" else current_status
+            governance_state = str(row["governance_state"] or row["search_action"] or "exploit")
+            if normalize_family_governance_state(governance_state) in {"hard_ban", "soft_ban", "cooldown"}:
+                status = current_status
+            else:
+                status = "active" if verdict == "survived" else current_status
             conn.execute(
                 """
                 UPDATE lima_universe_family
@@ -812,7 +873,8 @@ class LimaDatabase:
                     survival_count = survival_count + ?,
                     failure_count = failure_count + ?,
                     saturation_penalty = saturation_penalty + 0.05,
-                    last_seen_at = ?, status = ?
+                    last_seen_at = ?, status = ?,
+                    ontology_class = CASE WHEN ontology_class = 'other' THEN ? ELSE ontology_class END
                 WHERE id = ?
                 """,
                 (
@@ -822,6 +884,7 @@ class LimaDatabase:
                     failure_inc,
                     now,
                     status,
+                    ontology_class,
                     family_id,
                 ),
             )
@@ -836,9 +899,13 @@ class LimaDatabase:
                 novelty_prior, saturation_penalty, survival_count, failure_count,
                 formal_win_count, last_seen_at, status, search_action,
                 search_reason_md, required_delta_json, repeat_failure_count,
-                last_failure_type
+                last_failure_type, governance_state, governance_scope,
+                governance_imposed_by, governance_reason_md,
+                governance_evidence_json, governance_expires_at,
+                governance_meta_mutable, ontology_class
             )
-            VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, 0, ?, ?, 'exploit', '', '[]', 0, '')
+            VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, 0, ?, ?, 'exploit', '', '[]', 0, '',
+                    'exploit', 'problem', 'system', '', '{}', NULL, 1, ?)
             """,
             (
                 family_id,
@@ -851,6 +918,7 @@ class LimaDatabase:
                 failure_inc,
                 now,
                 status,
+                ontology_class,
             ),
         )
         return family_id
@@ -865,16 +933,24 @@ class LimaDatabase:
         required_delta: list[str],
         repeat_failure_count: int,
         last_failure_type: str,
+        scope: str = "problem",
+        imposed_by: str = "meta_lima",
+        evidence: dict[str, Any] | None = None,
+        expires_at: str | None = None,
+        meta_mutable: bool | None = None,
     ) -> tuple[bool, str]:
-        action = (search_action or "exploit").strip().lower()
-        if action not in {"exploit", "mutate", "cooldown", "retire"}:
-            action = "mutate"
+        governance_state = normalize_family_governance_state(search_action)
+        action = legacy_search_action_for_governance(governance_state)
         status = {
             "exploit": "active",
             "mutate": "active",
             "cooldown": "cooled_down",
             "retire": "dead_zone",
         }[action]
+        governance_scope = normalize_policy_scope(scope)
+        meta_mutable_value = int(
+            (governance_state != "hard_ban") if meta_mutable is None else bool(meta_mutable)
+        )
         conn = self._connect()
         try:
             cur = conn.execute(
@@ -886,6 +962,13 @@ class LimaDatabase:
                     repeat_failure_count = ?,
                     last_failure_type = ?,
                     status = ?,
+                    governance_state = ?,
+                    governance_scope = ?,
+                    governance_imposed_by = ?,
+                    governance_reason_md = ?,
+                    governance_evidence_json = ?,
+                    governance_expires_at = ?,
+                    governance_meta_mutable = ?,
                     saturation_penalty = CASE
                       WHEN ? IN ('cooldown', 'retire') THEN MAX(saturation_penalty, 1.0)
                       WHEN ? = 'mutate' THEN MAX(saturation_penalty, 0.35)
@@ -901,6 +984,13 @@ class LimaDatabase:
                     int(repeat_failure_count),
                     last_failure_type[:80],
                     status,
+                    governance_state,
+                    governance_scope,
+                    imposed_by[:120],
+                    reason_md[:4000],
+                    _json(evidence or {}),
+                    expires_at,
+                    meta_mutable_value,
                     action,
                     action,
                     _now(),
@@ -911,7 +1001,7 @@ class LimaDatabase:
             conn.commit()
             if cur.rowcount <= 0:
                 return False, "unknown family"
-            return True, f"family {action}"
+            return True, f"family {governance_state}"
         finally:
             conn.close()
 
@@ -925,11 +1015,144 @@ class LimaDatabase:
                 SELECT *
                 FROM lima_universe_family
                 WHERE problem_id = ?
-                  AND search_action IN ('mutate', 'cooldown', 'retire')
+                  AND (
+                    search_action IN ('mutate', 'cooldown', 'retire')
+                    OR governance_state IN ('hard_ban', 'soft_ban', 'cooldown', 'explore')
+                  )
+                  AND (
+                    governance_expires_at IS NULL OR governance_expires_at = '' OR governance_expires_at > ?
+                  )
                 ORDER BY repeat_failure_count DESC, saturation_penalty DESC, last_seen_at DESC
                 LIMIT ?
                 """,
-                (problem_id, min(limit, 100)),
+                (problem_id, _now(), min(limit, 100)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def set_policy_layer(
+        self,
+        *,
+        scope: str,
+        policy: dict[str, Any],
+        problem_id: str | None = None,
+        imposed_by: str = "operator",
+        reason_md: str = "",
+        evidence: dict[str, Any] | None = None,
+        expires_at: str | None = None,
+        meta_mutable: bool = True,
+        status: str = "active",
+    ) -> str:
+        now = _now()
+        layer_id = _new_id()
+        normalized_scope = normalize_policy_scope(scope)
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO lima_policy_layer (
+                    id, problem_id, scope, policy_json, imposed_by, reason_md,
+                    evidence_json, expires_at, meta_mutable, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    layer_id,
+                    problem_id,
+                    normalized_scope,
+                    _json(policy),
+                    imposed_by[:120],
+                    reason_md[:4000],
+                    _json(evidence or {}),
+                    expires_at,
+                    int(bool(meta_mutable)),
+                    status[:40],
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return layer_id
+        finally:
+            conn.close()
+
+    def list_policy_layers(
+        self,
+        problem_id: str | None = None,
+        *,
+        include_expired: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            clauses = ["status = 'active'"]
+            params: list[Any] = []
+            if problem_id:
+                clauses.append("(problem_id IS NULL OR problem_id = ?)")
+                params.append(problem_id)
+            if not include_expired:
+                clauses.append("(expires_at IS NULL OR expires_at = '' OR expires_at > ?)")
+                params.append(_now())
+            cur = conn.execute(
+                f"""
+                SELECT *
+                FROM lima_policy_layer
+                WHERE {' AND '.join(clauses)}
+                ORDER BY
+                  CASE scope
+                    WHEN 'global' THEN 1
+                    WHEN 'problem' THEN 2
+                    WHEN 'benchmark' THEN 3
+                    WHEN 'session' THEN 4
+                    ELSE 0
+                  END ASC,
+                  created_at ASC
+                LIMIT ?
+                """,
+                (*params, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def record_transfer_metric(
+        self,
+        *,
+        problem_id: str,
+        metric: dict[str, Any],
+        run_id: str | None = None,
+        benchmark_id: str = "",
+    ) -> str:
+        metric_id = _new_id()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO lima_transfer_metric (
+                    id, problem_id, run_id, benchmark_id, metric_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (metric_id, problem_id, run_id, benchmark_id[:200], _json(metric), _now()),
+            )
+            conn.commit()
+            return metric_id
+        finally:
+            conn.close()
+
+    def list_transfer_metrics(self, problem_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                SELECT *
+                FROM lima_transfer_metric
+                WHERE problem_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (problem_id, min(limit, 200)),
             )
             return [dict(r) for r in cur.fetchall()]
         finally:
@@ -999,6 +1222,7 @@ class LimaDatabase:
                     "weakened": "weakened",
                     "survived": "promising",
                 }.get(verdict, "proposed")
+                ontology_class = infer_ontology_class_from_universe(universe)
                 universe_id = _new_id()
                 universe_id_by_title[universe.title] = universe_id
                 conn.execute(
@@ -1006,12 +1230,12 @@ class LimaDatabase:
                     INSERT INTO lima_universe (
                         id, run_id, problem_id, family_id, parent_universe_id, title,
                         branch_of_math, solved_world, why_problem_is_easy_here,
-                        core_story_md, universe_status, compression_score, fit_score,
+                        core_story_md, ontology_class, universe_status, compression_score, fit_score,
                         novelty_score, falsifiability_score, bridgeability_score,
                         formalizability_score, theorem_yield_score,
                         literature_novelty_score, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         universe_id,
@@ -1023,6 +1247,7 @@ class LimaDatabase:
                         universe.solved_world[:4000],
                         universe.why_problem_is_easy_here[:4000],
                         universe.core_story_md[:8000],
+                        ontology_class,
                         status,
                         universe.score("compression_score"),
                         universe.score("fit_score"),
@@ -2233,6 +2458,8 @@ class LimaDatabase:
             "formal_reviews": self.list_formal_reviews(problem_id, limit=20),
             "artifacts": self.list_artifacts(problem_id, limit=30),
             "policy_revisions": self.list_policy_revisions(problem_id, limit=8),
+            "policy_layers": self.list_policy_layers(problem_id, limit=20),
+            "transfer_metrics": self.list_transfer_metrics(problem_id, limit=12),
         }
 
 

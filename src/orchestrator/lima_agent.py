@@ -21,7 +21,7 @@ from orchestrator.lima_literature import (
     refresh_literature,
     score_literature_novelty,
 )
-from orchestrator.lima_meta import analyze_and_update_policy
+from orchestrator.lima_meta import analyze_and_update_policy, compute_transfer_metrics
 from orchestrator.lima_models import (
     LimaClaimSpec,
     LimaGenerationResponse,
@@ -30,6 +30,7 @@ from orchestrator.lima_models import (
     LimaObligationSpec,
     LimaUniverseSpec,
     coerce_lima_generation_response,
+    normalize_family_governance_state,
     safe_json_loads,
     slugify,
 )
@@ -51,11 +52,16 @@ Role:
 - Lima compiles claim graphs and formalizable obligations.
 - Lima cites and checks literature to avoid fake novelty.
 - Lima remembers fractures and updates strategy policy over time.
+- Lima treats policy as layered: global research habits, problem policy, then temporary benchmark/session locks. Temporary controls never become global defaults unless explicitly promoted by a human.
+- Lima tracks ontology classes and avoids collapsing into one style when the problem has not earned that collapse.
+- When a scalar signal is useful but insufficient, Lima searches for a companion object: latent coordinate, memory/carry term, quotient label, cocycle, rewrite context, hidden automaton state, defect variable, or complementary coordinate.
+- Mature universes should emit proof-program obligations: uniqueness of representation, exact case transitions, ranking or lexicographic descent, bridge to the surface system, invariant validity, rewrite correctness, or quotient soundness.
 
 Authority boundary:
 - Lima has zero direct live execution authority.
 - Do not enqueue experiments, targets, Aristotle jobs, or main queue work.
 - Emit only bounded outputs: dead universe, weakened universe, interesting informal fragment, formalizable obligation, or handoff-worthy incubation.
+- Never encode hidden benchmark answers or benchmark-scoped bans into global policy.
 
 Output strict JSON:
 {
@@ -157,8 +163,8 @@ Rules:
 - Prefer exact integer/rational reasoning.
 - Name prior-art risks instead of claiming novelty when a literature query suggests overlap.
 - Obey search_constraints: repeated fracture memory must change the next experiment design.
-  If a family is mutate/cooldown/retire, do not emit another member unless a core object,
-  invariant, bridge lemma, falsifier, or literature tool changes materially.
+  If a family is explore/cooldown/soft_ban/hard_ban, obey its active scope and do not
+  emit another member unless the constraint explicitly permits a material structural delta.
 - No live execution fields such as campaign_id, target_id, objective, new_experiment, or aristotle_job_id."""
 
 _GLOBAL_LIMA_RUN_LOCK = False
@@ -283,13 +289,15 @@ def build_pressure_map(
     reference_points: list[dict[str, Any]],
     fractures: list[dict[str, Any]],
     family_search_constraints: list[dict[str, Any]] | None = None,
+    families: list[dict[str, Any]] | None = None,
+    policy_layers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     seed = safe_json_loads(problem.get("seed_packet_json"), {})
     frontier = safe_json_loads(state.get("frontier_json"), {})
     tensions = [
-        "Odd/even induced dynamics has strong local structure but no global descent bridge.",
-        "Residue-class regularity can overfit finite data unless a quotient or invariant explains it.",
-        "2-adic/completion languages are expressive but can become non-bridgeable to positive integers.",
+        "Local regularity can overfit finite data unless a bridge or invariant explains it.",
+        "Expressive ambient languages are useful only when they remain bridgeable to the surface system.",
+        "A strong scalar signal that fails as a proof often needs a companion object or hidden context.",
     ]
     failed = [
         str(f.get("failure_type") or "") for f in fractures[:8] if f.get("failure_type")
@@ -299,21 +307,46 @@ def build_pressure_map(
     search_constraints = []
     for row in family_search_constraints or []:
         required_delta = safe_json_loads(row.get("required_delta_json"), [])
+        governance_state = normalize_family_governance_state(
+            row.get("governance_state") or row.get("search_action") or "explore"
+        )
         search_constraints.append(
             {
                 "family_key": row.get("family_key"),
                 "search_action": row.get("search_action"),
+                "governance_state": governance_state,
+                "governance_scope": row.get("governance_scope") or "problem",
+                "governance_imposed_by": row.get("governance_imposed_by") or "",
+                "governance_meta_mutable": bool(row.get("governance_meta_mutable", 1)),
                 "status": row.get("status"),
                 "last_failure_type": row.get("last_failure_type"),
                 "repeat_failure_count": row.get("repeat_failure_count"),
-                "reason": row.get("search_reason_md"),
+                "reason": row.get("governance_reason_md") or row.get("search_reason_md"),
+                "evidence": safe_json_loads(row.get("governance_evidence_json"), {}),
                 "required_delta": required_delta if isinstance(required_delta, list) else [],
                 "instruction": (
-                    "Do not re-emit this family unless the next universe materially changes "
+                    "Do not re-emit this family inside the active scope."
+                    if governance_state == "hard_ban"
+                    else "Do not re-emit this family unless the next universe materially changes "
                     "a core object, invariant, bridge lemma, falsifier, or literature tool."
                 ),
             }
         )
+    ontology_class_distribution: dict[str, int] = {}
+    for family in families or []:
+        cls = str(family.get("ontology_class") or "other")
+        ontology_class_distribution[cls] = ontology_class_distribution.get(cls, 0) + 1
+    active_policy_layers = [
+        {
+            "scope": row.get("scope"),
+            "problem_id": row.get("problem_id"),
+            "imposed_by": row.get("imposed_by"),
+            "reason": row.get("reason_md"),
+            "meta_mutable": bool(row.get("meta_mutable", 1)),
+            "policy": safe_json_loads(row.get("policy_json"), {}),
+        }
+        for row in policy_layers or []
+    ]
     return {
         "problem_slug": problem.get("slug"),
         "seed_frontier": seed.get("known_frontier") or [],
@@ -326,7 +359,49 @@ def build_pressure_map(
         },
         "tensions": tensions,
         "search_constraints": search_constraints,
-        "failed_invariants": ["naive global height descent", *failed[:4]],
+        "policy_layers": active_policy_layers,
+        "ontology_class_distribution": ontology_class_distribution,
+        "ontology_class_balancing": {
+            "goal": "avoid premature collapse into one ontology class unless repeated obligations justify it",
+            "classes": [
+                "coordinate_lift",
+                "rewrite_system",
+                "automaton",
+                "quotient",
+                "cocycle_or_skew_product",
+                "valuation_or_cofactor",
+                "symbolic_grammar",
+                "residue_finite_state",
+                "geometric_or_topological",
+                "algebraic_operator",
+                "probabilistic_or_measure",
+                "other",
+            ],
+        },
+        "missing_structure_search": {
+            "trigger": "a scalar invariant, quotient, grammar statistic, norm, or rank is useful but underparameterized",
+            "candidate_companions": [
+                "latent coordinate",
+                "complementary coordinate",
+                "carry or memory term",
+                "cocycle term",
+                "hidden automaton state",
+                "quotient label",
+                "rewrite context",
+                "defect variable",
+            ],
+        },
+        "canonical_obligation_templates": [
+            "uniqueness_of_representation",
+            "exact_transition_law_case_A",
+            "exact_transition_law_case_B",
+            "ranking_or_lexicographic_descent",
+            "bridge_to_surface_system",
+            "invariant_or_monovariant_validity",
+            "local_rewrite_correctness",
+            "quotient_soundness",
+        ],
+        "failed_invariants": ["naive global monotone descent", *failed[:4]],
         "known_constraints": [
             "No live Aristotle or main experiment queue mutations without human approval.",
             "Formal obligations must stay narrow enough for Lean/Mathlib review.",
@@ -345,7 +420,9 @@ def _family_constraint_action(pressure_map: dict[str, Any], family_key: str) -> 
         if not isinstance(row, dict):
             continue
         if str(row.get("family_key") or "") == family_key:
-            return str(row.get("search_action") or "")
+            return normalize_family_governance_state(
+                row.get("governance_state") or row.get("search_action") or ""
+            )
     return ""
 
 
@@ -475,7 +552,7 @@ def _local_generation(
         "forge": "odd_state_quotient_bridge",
         "balanced": "odd_state_quotient_bridge",
     }[mode]
-    if _family_constraint_action(pressure_map, family_key) in {"mutate", "cooldown", "retire"}:
+    if _family_constraint_action(pressure_map, family_key) in {"explore", "cooldown", "soft_ban", "hard_ban"}:
         family_key = "accelerated_drift_certificate"
         title = "Accelerated drift certificate atlas"
         theorem = LimaClaimSpec(
@@ -808,12 +885,15 @@ async def run_lima(
         fractures = lima_db.list_fractures(problem_id, limit=24)
         families = lima_db.list_family_leaderboard(problem_id, limit=16)
         family_search_constraints = lima_db.list_family_search_constraints(problem_id, limit=12)
+        policy_layers = lima_db.list_policy_layers(problem_id, limit=16)
         pressure_map = build_pressure_map(
             problem,
             state,
             reference_points,
             fractures,
             family_search_constraints=family_search_constraints,
+            families=families,
+            policy_layers=policy_layers,
         )
         literature_refresh = refresh_literature(
             lima_db,
@@ -887,6 +967,22 @@ async def run_lima(
             "json_warnings": json_warnings,
             "literature_refresh": literature_refresh,
             "universe_literature_refresh": universe_lit_refresh,
+            "policy_layers": [
+                {
+                    "scope": row.get("scope"),
+                    "imposed_by": row.get("imposed_by"),
+                    "reason": row.get("reason_md"),
+                    "meta_mutable": bool(row.get("meta_mutable", 1)),
+                }
+                for row in policy_layers
+            ],
+            "benchmark_locked": any(
+                str(row.get("scope") or "") in {"benchmark", "session"} for row in policy_layers
+            ) or bool(app_config.LIMA_BENCHMARK_LOCKED),
+            "anti_overfitting": {
+                "benchmark_scoped_controls_stay_scoped": True,
+                "zero_live_authority": True,
+            },
         }
         response_obj = {
             "output": generated.model_dump(mode="json"),
@@ -940,6 +1036,18 @@ async def run_lima(
             artifacts=artifacts,
         )
         created_universes = lima_db.list_universes_for_run(run_id)
+        transfer_metric = compute_transfer_metrics(
+            families=lima_db.list_family_leaderboard(problem_id, limit=100),
+            fractures=lima_db.list_fractures(problem_id, limit=200),
+            obligations=lima_db.list_obligations(problem_id, limit=200),
+            runs=lima_db.list_runs(problem_id, limit=50),
+        )
+        lima_db.record_transfer_metric(
+            problem_id=problem_id,
+            run_id=run_id,
+            benchmark_id=str(problem.get("slug") or ""),
+            metric=transfer_metric,
+        )
         sources = lima_db.list_literature_sources(problem_id, limit=6)
         for row, universe in zip(created_universes, universes):
             for source in sources[:2]:
@@ -965,7 +1073,7 @@ async def run_lima(
         )
         sync_after_submit = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
         meta_result = None
-        if app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES:
+        if app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES and not app_config.LIMA_FREEZE_FAMILY_GOVERNANCE:
             meta_result = analyze_and_update_policy(
                 lima_db, problem_id=problem_id, from_run_id=run_id
             )

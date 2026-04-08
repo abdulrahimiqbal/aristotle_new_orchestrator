@@ -123,12 +123,56 @@
         {% endif %}
       </div>
 
-      <form hx-post="/api/lima/run"
-            hx-target="#campaign-panel"
-            hx-swap="innerHTML"
-            hx-disabled-elt="button"
-            class="w-full max-w-xl rounded-2xl border border-zinc-800/90 bg-zinc-950/40 p-4 lg:w-[28rem]">
-        <div class="grid gap-3">
+      <div class="grid w-full max-w-xl gap-4 lg:w-[28rem]">
+        <form hx-post="/api/lima/start"
+              hx-target="#campaign-panel"
+              hx-swap="innerHTML"
+              hx-disabled-elt="button"
+              class="rounded-2xl border border-emerald-500/25 bg-emerald-950/10 p-4">
+          <div class="grid gap-3">
+            <div>
+              <p class="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/90">Start a Lima problem</p>
+              <p class="mt-1 text-xs leading-relaxed text-emerald-100/75">Paste your own research prompt. Lima will create a scoped problem and run a first pass if you leave the box checked.</p>
+            </div>
+            <label>
+              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Prompt</span>
+              <textarea name="prompt" required rows="4" placeholder="State the conjecture, goal, and any local constraints..."
+                        class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"></textarea>
+            </label>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Title optional</span>
+                <input name="title" placeholder="Auto from first line"
+                       class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
+              </label>
+              <label>
+                <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Mode</span>
+                <select name="mode" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+                  {% for mode in lima_modes %}
+                  <option value="{{ mode.value }}" {% if mode.value == operator.lima_default_mode %}selected{% endif %}>{{ mode.label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+            </div>
+            <label class="flex items-center gap-2 text-xs text-zinc-300">
+              <input type="checkbox" name="run_now" value="1" checked class="rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500/50" />
+              Run first Lima pass after creating it
+            </label>
+            <button type="submit"
+                    class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70">
+              <span class="htmx-hide-while-loading">Start from prompt</span>
+              <span class="htmx-indicator items-center gap-2">Starting...</span>
+            </button>
+          </div>
+        </form>
+
+        <form hx-post="/api/lima/run"
+              hx-target="#campaign-panel"
+              hx-swap="innerHTML"
+              hx-disabled-elt="button"
+              class="rounded-2xl border border-zinc-800/90 bg-zinc-950/40 p-4">
+          <div class="grid gap-3">
+            <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Run an existing problem</p>
           <label>
             <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Problem</span>
             <select name="problem_slug" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
@@ -150,8 +194,9 @@
             <span class="htmx-hide-while-loading">{{ lima_primary_cta }}</span>
             <span class="htmx-indicator items-center gap-2">Breaking universes...</span>
           </button>
-        </div>
-      </form>
+          </div>
+        </form>
+      </div>
     </div>
 
     <div class="mt-4 grid gap-3 sm:grid-cols-4">
@@ -320,7 +365,7 @@
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 class="font-display text-sm font-semibold uppercase tracking-widest text-amber-100">Search controls</h2>
-          <p class="mt-1 text-xs text-amber-100/70">Fracture memory is shaping the next experiments. Repeatedly broken families must mutate before Lima treats them as fresh.</p>
+          <p class="mt-1 text-xs text-amber-100/70">Fracture memory is shaping the next experiments. Scoped governance prevents repeated families from returning without new structure.</p>
         </div>
         <span class="rounded-full bg-amber-500/15 px-2.5 py-1 text-[10px] font-mono uppercase text-amber-100 ring-1 ring-amber-500/30">fracture-to-pressure</span>
       </div>
@@ -328,11 +373,12 @@
         {% for family in lima_family_search_controls %}
         <div class="rounded-xl border border-amber-500/20 bg-zinc-950/50 p-3">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-100 ring-1 ring-amber-500/30">{{ family.search_action }}</span>
+            <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-100 ring-1 ring-amber-500/30">{{ family.governance_state or family.search_action }}</span>
             <span class="font-mono text-[11px] text-zinc-400">{{ family.family_key }}</span>
+            <span class="text-[10px] font-mono text-zinc-600">{{ family.governance_scope or "problem" }}</span>
             <span class="text-[10px] font-mono text-zinc-600">{{ family.repeat_failure_count }}x {{ family.last_failure_type }}</span>
           </div>
-          <p class="mt-2 text-xs leading-relaxed text-zinc-400">{{ family.search_reason_md }}</p>
+          <p class="mt-2 text-xs leading-relaxed text-zinc-400">{{ family.governance_reason_md or family.search_reason_md }}</p>
           {% if family.required_delta %}
           <ul class="mt-2 space-y-1 text-[11px] leading-relaxed text-zinc-500">
             {% for delta in family.required_delta[:3] %}

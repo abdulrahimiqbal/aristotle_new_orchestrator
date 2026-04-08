@@ -158,11 +158,20 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
     families = [dict(f) for f in snapshot.get("families") or []]
     for family in families:
         family["required_delta"] = _load_json(family.get("required_delta_json"), [])
+        family["governance_evidence"] = _load_json(family.get("governance_evidence_json"), {})
     family_search_controls = [
         f
         for f in families
         if str(f.get("search_action") or "") in {"mutate", "cooldown", "retire"}
+        or str(f.get("governance_state") or "") in {"hard_ban", "soft_ban", "cooldown", "explore"}
     ]
+    policy_layers = [dict(layer) for layer in snapshot.get("policy_layers") or []]
+    for layer in policy_layers:
+        layer["policy"] = _load_json(layer.get("policy_json"), {})
+        layer["evidence"] = _load_json(layer.get("evidence_json"), {})
+    transfer_metrics = [dict(metric) for metric in snapshot.get("transfer_metrics") or []]
+    for metric in transfer_metrics:
+        metric["metric"] = _load_json(metric.get("metric_json"), {})
     artifact_counts: dict[str, int] = {}
     for artifact in artifacts:
         kind = str(artifact.get("artifact_kind") or "artifact")
@@ -230,6 +239,8 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_pending_handoffs": pending_handoffs,
         "lima_reviewed_handoffs": reviewed_handoffs,
         "lima_policy_revisions": snapshot.get("policy_revisions") or [],
+        "lima_policy_layers": policy_layers,
+        "lima_transfer_metrics": transfer_metrics,
         "lima_flash": lima_flash,
         "lima_primary_cta": "Run Lima",
         "lima_decision_state": decision_state,
@@ -269,5 +280,7 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
             "formal_reviews": len(formal_reviews),
             "artifacts": len(artifacts),
             "literature_sources": len(snapshot.get("literature_sources") or []),
+            "policy_layers": len(policy_layers),
+            "transfer_metrics": len(transfer_metrics),
         },
     }

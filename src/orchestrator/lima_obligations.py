@@ -96,6 +96,103 @@ def _obligation_scores(kind: str, priority: int) -> tuple[float, float]:
     return (min(5.0, value_base + boost), min(5.0, cost_base))
 
 
+def _canonical_proof_program_obligations(universe: LimaUniverseSpec) -> list[LimaObligationSpec]:
+    blob = " ".join(
+        [
+            universe.title,
+            universe.branch_of_math,
+            universe.solved_world,
+            universe.why_problem_is_easy_here,
+            universe.core_story_md,
+            " ".join(obj.object_kind + " " + obj.name + " " + obj.description_md for obj in universe.core_objects),
+            " ".join(claim.title + " " + claim.statement_md for claim in universe.all_claim_specs()),
+        ]
+    ).lower()
+    obligations: list[LimaObligationSpec] = []
+
+    def add(title: str, kind: str, statement: str, priority: int) -> None:
+        obligations.append(
+            LimaObligationSpec(
+                obligation_kind=kind,
+                title=title,
+                statement_md=statement,
+                status="queued_formal_review",
+                priority=priority,
+                why_exists_md="Generic proof-program template emitted because this universe appears close to a proof ontology.",
+                prove_or_kill_md="A proof strengthens the ontology; a failure identifies exactly which structural bridge is missing.",
+            )
+        )
+
+    has_representation = any(
+        marker in blob
+        for marker in ("representation", "decomposition", "normal form", "coordinate", "state space", "lift")
+    )
+    has_transition = any(marker in blob for marker in ("transition", "operator", "dynamics", "step", "rewrite"))
+    has_cases = any(marker in blob for marker in ("case", "branch", "parity", "regime"))
+    has_descent = any(marker in blob for marker in ("energy", "rank", "ranking", "lyapunov", "descent", "monovariant", "invariant"))
+    has_bridge = bool(universe.backward_translation or universe.bridge_lemmas) or "bridge" in blob
+    has_rewrite = any(marker in blob for marker in ("rewrite", "word", "grammar", "local rule"))
+    has_quotient = any(marker in blob for marker in ("quotient", "projection", "factor", "residue"))
+
+    if has_representation:
+        add(
+            "uniqueness_of_representation",
+            "lean_goal",
+            "Prove that every surface state has a unique representation in the proposed ontology.",
+            5,
+        )
+    if has_transition:
+        add(
+            "exact_transition_law_case_A",
+            "lean_goal",
+            "Derive the exact transition law for the first natural case or regime of the surface map.",
+            5,
+        )
+        if has_cases:
+            add(
+                "exact_transition_law_case_B",
+                "lean_goal",
+                "Derive the exact transition law for the second natural case or regime of the surface map.",
+                5,
+            )
+    if has_descent:
+        add(
+            "ranking_or_lexicographic_descent",
+            "invariant_check",
+            "Prove that the proposed ranking, monovariant, or lexicographic energy decreases in the stated cases.",
+            5,
+        )
+    if has_bridge:
+        add(
+            "bridge_to_surface_system",
+            "bridge_lemma",
+            "Prove that termination or correctness in the invented ontology transfers back to the original system.",
+            5,
+        )
+    if has_descent and not has_representation:
+        add(
+            "invariant_or_monovariant_validity",
+            "invariant_check",
+            "Check that the invariant or monovariant is well-defined for all surface states under the proposed translation.",
+            4,
+        )
+    if has_rewrite:
+        add(
+            "local_rewrite_correctness",
+            "equivalence",
+            "Prove that each local rewrite rule exactly simulates the corresponding surface transition.",
+            4,
+        )
+    if has_quotient:
+        add(
+            "quotient_soundness",
+            "equivalence",
+            "Prove that the quotient or projection preserves enough information for the claimed proof obligation.",
+            4,
+        )
+    return obligations
+
+
 def compile_obligations_for_universe(
     universe: LimaUniverseSpec,
     rupture_report: dict[str, Any] | None = None,
@@ -137,6 +234,9 @@ def compile_obligations_for_universe(
                 }
             )
         )
+
+    for template in _canonical_proof_program_obligations(universe):
+        add(template)
 
     for claim in sorted(universe.bridge_lemmas, key=lambda c: c.priority, reverse=True)[:3]:
         add(
