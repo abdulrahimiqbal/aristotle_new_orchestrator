@@ -134,7 +134,7 @@ def _operator_runtime_context() -> dict:
         "supershadow_max_pending_handoffs": int(
             app_config.SUPERSHADOW_MAX_PENDING_HANDOFFS
         ),
-        "lima_enabled": bool(app_config.LIMA_ENABLED),
+        "lima_enabled": True,
         "lima_database_path": app_config.LIMA_DATABASE_PATH,
         "lima_loop_interval_sec": int(app_config.LIMA_LOOP_INTERVAL_SEC),
         "lima_default_problem": app_config.LIMA_DEFAULT_PROBLEM,
@@ -915,7 +915,7 @@ async def lima_ops(problem: str | None = None):
     metrics = build_lima_ui_context(snapshot).get("lima_metrics", {})
     return {
         "problem": snapshot.get("problem"),
-        "enabled": bool(app_config.LIMA_ENABLED),
+        "enabled": True,
         "auto_interval_sec": int(app_config.LIMA_LOOP_INTERVAL_SEC),
         "database_path": app_config.LIMA_DATABASE_PATH,
         "default_mode": app_config.LIMA_DEFAULT_MODE,

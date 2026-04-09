@@ -1101,8 +1101,6 @@ async def run_lima(
 
 
 async def lima_loop(lima_db: LimaDatabase, main_db: Database) -> None:
-    if not app_config.LIMA_ENABLED:
-        return
     problem_cursor = 0
     while True:
         try:

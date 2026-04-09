@@ -113,8 +113,8 @@ ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS = _bool_env(
 
 # LLM (also read in llm.py via this module for caps / JSON mode)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o")
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.us-west-2.modal.direct/v1").rstrip("/")
+LLM_MODEL = os.environ.get("LLM_MODEL", "zai-org/GLM-5.1-FP8")
 
 # Mathlib knowledge (LeanSearch — same HTTP API as LeanSearchClient)
 # MATHLIB_KNOWLEDGE_MODE: off | leansearch
@@ -183,7 +183,10 @@ LIMA_DATABASE_PATH = os.environ.get(
     "LIMA_DATABASE_PATH",
     str(Path(DATABASE_PATH).with_name("lima.db")),
 )
-LIMA_ENABLED = _bool_env("LIMA_ENABLED", False)
+# Lima's scheduler now runs continuously and only works on problems whose status is `active`.
+# The env var is retained for backward compatibility with older deployments and UI snapshots,
+# but the loop itself no longer shuts off when this is false.
+LIMA_ENABLED = _bool_env("LIMA_ENABLED", True)
 LIMA_LOOP_INTERVAL_SEC = _int_env("LIMA_LOOP_INTERVAL_SEC", 1800)
 LIMA_DEFAULT_PROBLEM = os.environ.get("LIMA_DEFAULT_PROBLEM", "collatz").strip() or "collatz"
 _LIMA_MODE_RAW = os.environ.get("LIMA_DEFAULT_MODE", "balanced").strip().lower()

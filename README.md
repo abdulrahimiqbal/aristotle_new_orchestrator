@@ -239,7 +239,7 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 |----------|-------------|
 | `DATABASE_PATH` | SQLite database file (default: `orchestrator.db` in the CWD) |
 | `LIMA_DATABASE_PATH` | Separate Lima SQLite database file (default: `lima.db` next to `DATABASE_PATH`; Docker/Railway: `/data/lima.db`) |
-| `LIMA_ENABLED` | Run Lima's background loop (`false` by default; manual runs still work) |
+| `LIMA_ENABLED` | Deprecated compatibility flag. Lima's background loop now runs continuously and processes problems whose status is `active`. |
 | `LIMA_AUTO_LOCAL_OBLIGATION_CHECKS` | Run bounded local Lima checks automatically after a Lima pass (`true` by default) |
 | `LIMA_FORMAL_BACKEND` | Formal review adapter (`local_stub` by default; records review packets without live submission) |
 | `LIMA_FORMAL_AUTO_SUBMIT` | Reserved approval gate for future formal backends; default `false` keeps zero-live-authority |
@@ -260,8 +260,8 @@ Older deployments stored every campaign under one `WORKSPACE_DIR`. Set **`WORKSP
 | `DEFAULT_WORKSPACE_TEMPLATE` | `minimal` or `mathlib` when the form/API does not specify (default: `minimal`) |
 | `ARISTOTLE_API_KEY` | API key for the Aristotle CLI |
 | `LLM_API_KEY` | API key for an OpenAI-compatible chat API |
-| `LLM_BASE_URL` | API base URL (default: `https://api.openai.com/v1`) |
-| `LLM_MODEL` | Model name (default: `gpt-4o`) |
+| `LLM_BASE_URL` | API base URL (default: `https://api.us-west-2.modal.direct/v1`) |
+| `LLM_MODEL` | Model name (default: `zai-org/GLM-5.1-FP8`) |
 | `MAX_ACTIVE_EXPERIMENTS` | Max concurrent in-flight Aristotle jobs per campaign (default: `3`; Tier-0-friendly) |
 | `TICK_INTERVAL` | Seconds between manager ticks (default: `60`) |
 | `MAX_EXPERIMENTS` | Max total experiments per campaign (default: `100`) |
@@ -386,7 +386,7 @@ The container listens on **`PORT`** (Railway sets this automatically). SQLite an
    railway link -p <your-project-id>   # or: railway link  (interactive)
    ```
 
-5. **Secrets** — do **not** commit keys. Copy `.env.example` → `.env`, fill in `LLM_API_KEY`, `ARISTOTLE_API_KEY`, and Moonshot settings, then:
+5. **Secrets** — do **not** commit keys. Copy `.env.example` → `.env`, fill in `LLM_API_KEY`, `ARISTOTLE_API_KEY`, and the Modal GLM settings, then:
 
    ```bash
    ./scripts/sync-railway-env.sh
@@ -400,9 +400,9 @@ The container listens on **`PORT`** (Railway sets this automatically). SQLite an
 
 | Variable | Example / note |
 |----------|----------------|
-| `LLM_API_KEY` | Moonshot API key |
-| `LLM_BASE_URL` | `https://api.moonshot.ai/v1` (or `https://api.moonshot.cn/v1`) |
-| `LLM_MODEL` | e.g. `kimi-k2-turbo-preview` (use the exact id from Moonshot) |
+| `LLM_API_KEY` | Modal Direct API key |
+| `LLM_BASE_URL` | `https://api.us-west-2.modal.direct/v1` |
+| `LLM_MODEL` | `zai-org/GLM-5.1-FP8` |
 | `ARISTOTLE_API_KEY` | Your Aristotle key |
 | `DATABASE_PATH` | `/data/orchestrator.db` (default in Docker image) |
 | `LIMA_DATABASE_PATH` | `/data/lima.db` (default in Docker image) |
@@ -435,10 +435,9 @@ Run locally:
 DATABASE_PATH=./orchestrator.db LIMA_DATABASE_PATH=./lima.db ./.venv/bin/python -m uvicorn orchestrator.app:app --reload
 ```
 
-Then open `/lima`, choose a problem/mode, and run Lima manually. Set `LIMA_ENABLED=1` only when you want the background Lima loop. For autonomous Collatz research with bounded Aristotle escalation, use the safe caps explicitly:
+Then open `/lima`, choose a problem/mode, and run Lima manually. Lima's background loop now stays on and only works on problems marked `active`. For autonomous Collatz research with bounded Aristotle escalation, use the safe caps explicitly:
 
 ```bash
-LIMA_ENABLED=1
 LIMA_DEFAULT_PROBLEM=collatz
 LIMA_DEFAULT_MODE=forge
 LIMA_LOOP_INTERVAL_SEC=1800
@@ -454,9 +453,9 @@ LIMA_ARISTOTLE_THRESHOLD=strict_survivor
 
 The Docker image installs **`aristotlelib`** from PyPI (provides the `aristotle` CLI on `PATH`). Each **campaign** gets its own seeded Lake project under `WORKSPACE_ROOT/<campaign_id>/` when the campaign is created.
 
-### Moonshot note
+### Provider compatibility note
 
-This app sends `response_format: { "type": "json_object" }` on decomposition and reasoning calls. If Moonshot returns an error for that field, set `LLM_JSON_MODE=0` or open an issue.
+This app sends `response_format: { "type": "json_object" }` on decomposition and reasoning calls. If an OpenAI-compatible provider rejects that field, the client now retries once without it. Set `LLM_JSON_MODE=0` to force-disable JSON mode entirely.
 
 ## Database schema notes (migrations)
 
