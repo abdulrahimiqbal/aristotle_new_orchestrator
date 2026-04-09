@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from orchestrator import config as app_config
@@ -40,6 +41,176 @@ REQUIRED_DELTA_BY_FAILURE = {
         "derive exact transition laws in the repaired state description",
     ],
 }
+
+_STAGNATION_RUN_WINDOW = 6
+_STAGNATION_REPEAT_THRESHOLD = 3
+
+
+def _load_json(raw: Any, default: Any) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return default
+
+
+def _run_frontier_signature(run: dict[str, Any]) -> dict[str, str]:
+    response = _load_json(run.get("response_json"), {})
+    output = response.get("output") if isinstance(response, dict) else {}
+    universes = output.get("universes") if isinstance(output, dict) else []
+    top_universe = universes[0] if isinstance(universes, list) and universes else {}
+    rupture_reports = response.get("rupture_reports") if isinstance(response, dict) else []
+
+    top_failure = ""
+    top_blocker_title = ""
+    top_confidence = -1.0
+    for report in rupture_reports or []:
+        if not isinstance(report, dict):
+            continue
+        attacks = report.get("attacks") or []
+        for attack in attacks:
+            if not isinstance(attack, dict):
+                continue
+            failure_type = str(attack.get("failure_type") or "")
+            if not failure_type:
+                continue
+            try:
+                confidence = float(attack.get("confidence") or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence > top_confidence:
+                top_confidence = confidence
+                top_failure = failure_type
+                top_blocker_title = str(report.get("universe_title") or "")
+
+    return {
+        "family_key": str((top_universe or {}).get("family_key") or ""),
+        "title": str((top_universe or {}).get("title") or ""),
+        "failure_type": top_failure,
+        "blocker_title": top_blocker_title,
+    }
+
+
+def compute_stagnation_controller(
+    *,
+    runs: list[dict[str, Any]],
+    families: list[dict[str, Any]],
+    fractures: list[dict[str, Any]],
+    obligations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    recent_runs = runs[:_STAGNATION_RUN_WINDOW]
+    signatures = [_run_frontier_signature(run) for run in recent_runs]
+    family_counts: dict[str, int] = {}
+    blocker_counts: dict[str, int] = {}
+    for sig in signatures:
+        family_key = str(sig.get("family_key") or "")
+        if family_key:
+            family_counts[family_key] = family_counts.get(family_key, 0) + 1
+        failure_type = str(sig.get("failure_type") or "")
+        if failure_type:
+            blocker_counts[failure_type] = blocker_counts.get(failure_type, 0) + 1
+
+    top_family_key = max(family_counts, key=family_counts.get, default="")
+    top_family_repeats = int(family_counts.get(top_family_key, 0))
+    dominant_blocker = max(blocker_counts, key=blocker_counts.get, default="")
+    dominant_blocker_repeats = int(blocker_counts.get(dominant_blocker, 0))
+    active_family_rows = [
+        family
+        for family in families
+        if str(family.get("family_key") or "") == top_family_key
+    ]
+    top_family = active_family_rows[0] if active_family_rows else {}
+    strong_survivor_present = any(
+        int(family.get("formal_win_count") or 0) > 0
+        or int(family.get("survival_count") or 0) > 1
+        for family in families
+    )
+    human_queue_waiting = any(
+        str(obligation.get("status") or "") in {"queued", "queued_local", "running_local", "queued_formal_review"}
+        for obligation in obligations
+    )
+    repeated_failure_pressure = [
+        fracture for fracture in fractures if str(fracture.get("failure_type") or "") == dominant_blocker
+    ]
+    active = (
+        len(recent_runs) >= 4
+        and not strong_survivor_present
+        and not human_queue_waiting
+        and (
+            top_family_repeats >= _STAGNATION_REPEAT_THRESHOLD
+            or dominant_blocker_repeats >= _STAGNATION_REPEAT_THRESHOLD
+        )
+    )
+
+    mode_shift = ""
+    recommended_actions: list[str] = []
+    if active:
+        if dominant_blocker == "underparameterized_state":
+            mode_shift = "bridge_first"
+            recommended_actions = [
+                "force a companion-object or defect-state mutation instead of another scalar potential",
+                "favor exact bridge lemmas and commutation checks over new high-level summaries",
+                "suppress repeated scalar families until they materially change their state representation",
+            ]
+        elif dominant_blocker == "prior_art":
+            mode_shift = "literature_distinct_mutation"
+            recommended_actions = [
+                "force a literature-distinct object or operator before re-emitting the family",
+                "treat cited prior-art tools as support rather than novelty claims",
+                "pivot to a new ontology class if overlap remains unresolved",
+            ]
+        else:
+            mode_shift = "ontology_rotation"
+            recommended_actions = [
+                "rotate ontology class away from the dominant stalled family",
+                "compile one bridge-first obligation and one falsifier-first obligation",
+                "prefer materially different universes over score-near repeats",
+            ]
+
+    avoid_family_keys = sorted(
+        {
+            str(family.get("family_key") or "")
+            for family in families
+            if str(family.get("family_key") or "")
+            and int(family.get("formal_win_count") or 0) <= 0
+            and (
+                str(family.get("last_failure_type") or "") == dominant_blocker
+                or int(family.get("repeat_failure_count") or 0) >= 3
+            )
+        }
+    )
+    prefer_family_keys = [
+        str(family.get("family_key") or "")
+        for family in families
+        if str(family.get("family_key") or "")
+        and int(family.get("formal_win_count") or 0) > 0
+    ]
+    if top_family_key and top_family_key not in prefer_family_keys and dominant_blocker != "underparameterized_state":
+        prefer_family_keys.append(top_family_key)
+
+    return {
+        "active": active,
+        "window_runs": len(recent_runs),
+        "top_family_key": top_family_key,
+        "top_family_repeats": top_family_repeats,
+        "top_family_formal_wins": int(top_family.get("formal_win_count") or 0),
+        "top_family_survivals": int(top_family.get("survival_count") or 0),
+        "dominant_blocker": dominant_blocker,
+        "dominant_blocker_repeats": dominant_blocker_repeats,
+        "repeated_failure_count": len(repeated_failure_pressure),
+        "mode_shift": mode_shift,
+        "avoid_family_keys": [key for key in avoid_family_keys if key],
+        "prefer_family_keys": [key for key in prefer_family_keys if key],
+        "recommended_actions": recommended_actions,
+        "summary_md": (
+            f"Recent frontier repeated family={top_family_key or 'none'} "
+            f"{top_family_repeats} time(s) with blocker={dominant_blocker or 'none'} "
+            f"{dominant_blocker_repeats} time(s)."
+        ),
+    }
 
 
 def _search_action_for_family(
@@ -214,6 +385,12 @@ def analyze_and_update_policy(
         )
         for family in families
     ]
+    stagnation_controller = compute_stagnation_controller(
+        runs=runs,
+        families=families,
+        fractures=fractures,
+        obligations=obligations,
+    )
     applied_controls = []
     for control in search_controls:
         family_key = str(control.get("family_key") or "")
@@ -241,6 +418,7 @@ def analyze_and_update_policy(
                 str(f.get("family_key")) for f in formalizable_families[:5]
             ],
             "avoid_empty_repetitions": True,
+            "stagnation_controller": stagnation_controller,
             "family_search_controls": [
                 c
                 for c in search_controls
@@ -290,6 +468,7 @@ def analyze_and_update_policy(
             / max(1, sum(int(f.get("survival_count") or 0) + int(f.get("failure_count") or 0) for f in families))
         ),
         "failure_type_histogram": repeated_failures,
+        "stagnation_controller": stagnation_controller,
         "family_search_controls": applied_controls[:12],
     }
     benchmark["transfer_metrics"] = compute_transfer_metrics(
@@ -327,4 +506,5 @@ def analyze_and_update_policy(
         "policy_changes": policy_changes,
         "benchmark": benchmark,
         "family_search_controls": applied_controls,
+        "stagnation_controller": stagnation_controller,
     }

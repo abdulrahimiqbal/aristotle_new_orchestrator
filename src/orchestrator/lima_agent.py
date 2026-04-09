@@ -21,7 +21,11 @@ from orchestrator.lima_literature import (
     refresh_literature,
     score_literature_novelty,
 )
-from orchestrator.lima_meta import analyze_and_update_policy, compute_transfer_metrics
+from orchestrator.lima_meta import (
+    analyze_and_update_policy,
+    compute_stagnation_controller,
+    compute_transfer_metrics,
+)
 from orchestrator.lima_models import (
     LimaClaimSpec,
     LimaGenerationResponse,
@@ -290,6 +294,8 @@ def build_pressure_map(
     state: dict[str, Any],
     reference_points: list[dict[str, Any]],
     fractures: list[dict[str, Any]],
+    obligations: list[dict[str, Any]] | None = None,
+    runs: list[dict[str, Any]] | None = None,
     family_search_constraints: list[dict[str, Any]] | None = None,
     families: list[dict[str, Any]] | None = None,
     policy_layers: list[dict[str, Any]] | None = None,
@@ -306,6 +312,16 @@ def build_pressure_map(
     ]
     if failed:
         tensions.append("Recent fracture memory emphasizes: " + ", ".join(failed[:5]))
+    stagnation_controller = compute_stagnation_controller(
+        runs=runs or [],
+        families=families or [],
+        fractures=fractures,
+        obligations=obligations or [],
+    )
+    if stagnation_controller.get("active"):
+        tensions.append(
+            "Stagnation controller is active: recent runs are repeating the same frontier without clearing the blocker."
+        )
     search_constraints = []
     for row in family_search_constraints or []:
         required_delta = safe_json_loads(row.get("required_delta_json"), [])
@@ -361,6 +377,7 @@ def build_pressure_map(
         },
         "tensions": tensions,
         "search_constraints": search_constraints,
+        "stagnation_controller": stagnation_controller,
         "policy_layers": active_policy_layers,
         "ontology_class_distribution": ontology_class_distribution,
         "ontology_class_balancing": {
@@ -413,6 +430,11 @@ def build_pressure_map(
             "Unify parity-vector, residue, and odd-subsystem facts through a quotient or completion.",
             "Turn failed invariants into boundary theorems rather than hiding the failure.",
             "Compile first bridges as finite/residue or one-step compatibility obligations.",
+            *(
+                stagnation_controller.get("recommended_actions") or []
+                if isinstance(stagnation_controller, dict)
+                else []
+            )[:3],
         ],
     }
 
@@ -632,6 +654,142 @@ def _generic_chip_firing_fallback(
     )
 
 
+def _generic_companion_mutation_fallback(
+    *,
+    problem: dict[str, Any],
+    mode: LimaMode,
+    pressure_map: dict[str, Any],
+    top_frontier: dict[str, Any] | None,
+) -> LimaGenerationResponse:
+    family_key = "defect_augmented_bridge"
+    title = (
+        f"{str((top_frontier or {}).get('title') or problem.get('title') or 'Problem')} "
+        "with a defect coordinate"
+    )
+    return LimaGenerationResponse(
+        frontier_summary_md=(
+            f"{problem.get('title') or problem.get('slug') or 'This problem'} is plateauing on an "
+            "underparameterized scalar story, so Lima is forcing a companion-state mutation."
+        ),
+        pressure_map=pressure_map,
+        run_summary_md=(
+            f"Lima {mode} fallback detected stagnation under the same blocker and pivoted into a "
+            "defect-augmented bridge universe with explicit hidden-state obligations."
+        ),
+        universes=[
+            LimaUniverseSpec(
+                title=title,
+                family_key=family_key,
+                family_kind="new",
+                branch_of_math=str((top_frontier or {}).get("branch_of_math") or problem.get("domain") or "discrete dynamics"),
+                solved_world=(
+                    "A scalar progress quantity is paired with an explicit defect or memory coordinate so "
+                    "the repaired state can track exactly what plain descent was losing."
+                ),
+                why_problem_is_easy_here=(
+                    "The conjecture becomes a bridge-and-closure problem: if the defect coordinate closes "
+                    "the transition law exactly, then the scalar can be used safely."
+                ),
+                core_story_md=(
+                    "Lima is no longer allowed to emit another scalar-only explanation. This mutation adds "
+                    "a defect variable and asks for exact transition laws in the repaired state."
+                ),
+                core_objects=[
+                    LimaObjectSpec(
+                        object_kind="potential",
+                        name="PrimaryScalar",
+                        description_md="The original scalar signal that looked promising but lost state information.",
+                        formal_shape="State -> Int",
+                        payload={},
+                    ),
+                    LimaObjectSpec(
+                        object_kind="state_space",
+                        name="DefectAugmentedState",
+                        description_md="A repaired state carrying the scalar together with a defect or memory coordinate.",
+                        formal_shape="State × Defect",
+                        payload={"mutation_reason": "stagnation_underparameterized_state"},
+                    ),
+                    LimaObjectSpec(
+                        object_kind="bridge",
+                        name="ExactTransitionLaw",
+                        description_md="An exact transition law on the repaired state representation.",
+                        formal_shape="DefectAugmentedState -> DefectAugmentedState",
+                        payload={},
+                    ),
+                ],
+                laws=[
+                    LimaClaimSpec(
+                        claim_kind="law",
+                        title="The defect coordinate closes the transition law",
+                        statement_md="The repaired state has exact one-step evolution without hidden loss.",
+                        priority=5,
+                    )
+                ],
+                backward_translation=[
+                    "Project the defect-augmented state back to the surface system without losing termination facts.",
+                    "Show which information the scalar forgot and how the defect restores it.",
+                ],
+                bridge_lemmas=[
+                    LimaClaimSpec(
+                        claim_kind="bridge_lemma",
+                        title="Repaired state implies original step",
+                        statement_md="The exact repaired transition projects to a valid surface move.",
+                        priority=5,
+                    )
+                ],
+                conditional_theorem=LimaClaimSpec(
+                    claim_kind="conditional_theorem",
+                    title="Defect-closed descent implies progress",
+                    statement_md="If the repaired transition is exact and the scalar decreases there, the original system inherits a valid progress certificate.",
+                    priority=5,
+                ),
+                kill_tests=[
+                    LimaClaimSpec(
+                        claim_kind="kill_test",
+                        title="Two states same scalar different future",
+                        statement_md="Search for a smallest pair of states with the same scalar but different next-step behavior, confirming the defect is necessary.",
+                        priority=5,
+                    )
+                ],
+                expected_failure_mode="The defect variable may still be insufficient or too ad hoc to bridge cleanly.",
+                literature_queries=[
+                    f"{problem.get('title') or problem.get('slug') or 'problem'} defect variable discrete dynamics",
+                    f"{problem.get('title') or problem.get('slug') or 'problem'} hidden state exact transition law",
+                ],
+                formalization_targets=[
+                    LimaObligationSpec(
+                        obligation_kind="counterexample_search",
+                        title="same_scalar_different_future",
+                        statement_md="Search bounded states for equal-scalar pairs with different next-step behavior.",
+                        priority=5,
+                    ),
+                    LimaObligationSpec(
+                        obligation_kind="bridge_lemma",
+                        title="defect_augmented_transition_law",
+                        statement_md="State an exact repaired transition law with an explicit defect variable.",
+                        lean_goal="forall s, True",
+                        priority=4,
+                    ),
+                ],
+                scores={
+                    "compression_score": 3,
+                    "fit_score": 4,
+                    "novelty_score": 4,
+                    "falsifiability_score": 5,
+                    "bridgeability_score": 4,
+                    "formalizability_score": 4,
+                    "theorem_yield_score": 4,
+                    "literature_novelty_score": 4,
+                },
+            )
+        ],
+        policy_notes=[
+            "Stagnation controller forced a companion-state mutation.",
+            "Scalar-only repeats are temporarily disallowed until the missing state is explicit.",
+        ],
+    )
+
+
 def _local_generation(
     *,
     problem: dict[str, Any],
@@ -642,6 +800,7 @@ def _local_generation(
 ) -> LimaGenerationResponse:
     problem_title = str(problem.get("title") or problem.get("slug") or "the problem")
     problem_slug = str(problem.get("slug") or "").lower()
+    stagnation = pressure_map.get("stagnation_controller") if isinstance(pressure_map, dict) else {}
     if "collatz" not in problem_slug and "collatz" not in problem_title.lower():
         top_frontier = _best_generic_frontier_universe(current_universes or [], pressure_map)
         frontier_blob = " ".join(
@@ -665,6 +824,17 @@ def _local_generation(
             )
         ):
             return _generic_chip_firing_fallback(
+                problem=problem,
+                mode=mode,
+                pressure_map=pressure_map,
+                top_frontier=top_frontier,
+            )
+        if (
+            isinstance(stagnation, dict)
+            and stagnation.get("active")
+            and str(stagnation.get("dominant_blocker") or "") == "underparameterized_state"
+        ):
+            return _generic_companion_mutation_fallback(
                 problem=problem,
                 mode=mode,
                 pressure_map=pressure_map,
@@ -1116,6 +1286,8 @@ async def run_lima(
         sync_result = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
         state = lima_db.get_state(problem_id)
         current_universes = lima_db.list_universes(problem_id, limit=12)
+        obligations = lima_db.list_obligations(problem_id, limit=100)
+        runs = lima_db.list_runs(problem_id, limit=20)
         reference_points = _build_reference_points(main_db, problem)
         fractures = lima_db.list_fractures(problem_id, limit=24)
         families = lima_db.list_family_leaderboard(problem_id, limit=16)
@@ -1126,6 +1298,8 @@ async def run_lima(
             state,
             reference_points,
             fractures,
+            obligations=obligations,
+            runs=runs,
             family_search_constraints=family_search_constraints,
             families=families,
             policy_layers=policy_layers,

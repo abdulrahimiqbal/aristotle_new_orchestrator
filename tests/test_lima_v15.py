@@ -10,7 +10,7 @@ from orchestrator.db import Database
 from orchestrator.lima_agent import _build_reference_points, _local_generation
 from orchestrator.lima_db import LimaDatabase, _canonical_hash
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
-from orchestrator.lima_meta import analyze_and_update_policy
+from orchestrator.lima_meta import analyze_and_update_policy, compute_stagnation_controller
 from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, safe_json_loads
 import orchestrator.lima_obligations as lima_obligations_mod
 from orchestrator.lima_obligations import (
@@ -576,6 +576,111 @@ def test_local_generation_prefers_chip_firing_frontier_for_boundary_spill_proble
     assert universe.family_key == "chip_firing_boundary_sinks"
     assert any(
         target.title == "boundary_spill_to_sinked_firing"
+        for target in universe.formalization_targets
+    )
+
+
+def test_stagnation_controller_detects_repeated_frontier_and_blocker() -> None:
+    runs = []
+    for idx in range(4):
+        runs.append(
+            {
+                "id": f"run-{idx}",
+                "response_json": {
+                    "output": {
+                        "universes": [
+                            {
+                                "title": "Chip-Firing with Boundary Sinks",
+                                "family_key": "chip_firing_boundary_sinks",
+                            }
+                        ]
+                    },
+                    "rupture_reports": [
+                        {
+                            "universe_title": "Weighted Height Function with Boundary Deficit",
+                            "attacks": [
+                                {
+                                    "failure_type": "underparameterized_state",
+                                    "confidence": 0.66,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+
+    controller = compute_stagnation_controller(
+        runs=runs,
+        families=[
+            {
+                "family_key": "chip_firing_boundary_sinks",
+                "formal_win_count": 0,
+                "survival_count": 0,
+                "repeat_failure_count": 0,
+                "last_failure_type": "",
+            },
+            {
+                "family_key": "height_deficit_lift",
+                "formal_win_count": 0,
+                "survival_count": 0,
+                "repeat_failure_count": 3,
+                "last_failure_type": "underparameterized_state",
+            },
+        ],
+        fractures=[
+            {"failure_type": "underparameterized_state"},
+            {"failure_type": "underparameterized_state"},
+            {"failure_type": "underparameterized_state"},
+        ],
+        obligations=[],
+    )
+
+    assert controller["active"] is True
+    assert controller["mode_shift"] == "bridge_first"
+    assert controller["top_family_key"] == "chip_firing_boundary_sinks"
+    assert controller["dominant_blocker"] == "underparameterized_state"
+    assert "height_deficit_lift" in controller["avoid_family_keys"]
+
+
+def test_local_generation_uses_companion_mutation_when_stagnation_demands_it() -> None:
+    generated = _local_generation(
+        problem={
+            "title": "Synthetic plateau problem",
+            "slug": "synthetic_plateau_problem",
+            "statement_md": "A scalar energy seems useful but keeps failing to explain the system.",
+            "domain": "discrete_dynamics",
+        },
+        mode="forge",
+        pressure_map={
+            "search_constraints": [],
+            "stagnation_controller": {
+                "active": True,
+                "dominant_blocker": "underparameterized_state",
+            },
+        },
+        literature_refresh={},
+        current_universes=[
+            {
+                "title": "Weighted Height Guess",
+                "family_key": "height_deficit_lift",
+                "universe_status": "promising",
+                "branch_of_math": "discrete dynamics",
+                "solved_world": "Scalar energy should work.",
+                "why_problem_is_easy_here": "Energy seems to decrease.",
+                "fit_score": 4.0,
+                "compression_score": 4.0,
+                "formalizability_score": 3.0,
+                "bridgeability_score": 3.0,
+            }
+        ],
+    )
+
+    universe = generated.universes[0]
+
+    assert universe.family_key == "defect_augmented_bridge"
+    assert any(
+        target.title == "defect_augmented_transition_law"
         for target in universe.formalization_targets
     )
 
