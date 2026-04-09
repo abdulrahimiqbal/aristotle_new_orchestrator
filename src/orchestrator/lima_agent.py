@@ -41,6 +41,7 @@ from orchestrator.lima_obligations import (
     sync_lima_aristotle_results,
 )
 from orchestrator.lima_rupture import rupture_universes
+from orchestrator.lima_steward import problem_ready_for_auto_continue
 from orchestrator.llm import invoke_llm
 
 logger = logging.getLogger("orchestrator.lima")
@@ -169,6 +170,7 @@ Rules:
 
 _GLOBAL_LIMA_RUN_LOCK = False
 _STRIP_JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+_AUTO_CONTINUE_DELAY_SEC = 10
 
 
 def _strip_json_fence(text: str) -> str:
@@ -1103,6 +1105,7 @@ async def run_lima(
 async def lima_loop(lima_db: LimaDatabase, main_db: Database) -> None:
     problem_cursor = 0
     while True:
+        sleep_seconds = max(60, int(app_config.LIMA_LOOP_INTERVAL_SEC))
         try:
             problems = lima_db.list_schedulable_problems()
             if problems:
@@ -1117,8 +1120,13 @@ async def lima_loop(lima_db: LimaDatabase, main_db: Database) -> None:
                     trigger_kind="scheduled",
                     mode=app_config.LIMA_DEFAULT_MODE,
                 )
+                snapshot = lima_db.get_dashboard_snapshot(
+                    str(selected.get("slug") or app_config.LIMA_DEFAULT_PROBLEM)
+                )
+                if problem_ready_for_auto_continue(snapshot):
+                    sleep_seconds = _AUTO_CONTINUE_DELAY_SEC
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Lima loop tick failed")
-        await asyncio.sleep(max(60, int(app_config.LIMA_LOOP_INTERVAL_SEC)))
+        await asyncio.sleep(sleep_seconds)

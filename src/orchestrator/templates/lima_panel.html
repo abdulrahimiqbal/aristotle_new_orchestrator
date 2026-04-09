@@ -147,9 +147,7 @@
       <div class="h-full rounded-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-400 transition-all duration-700 ease-out"
            style="width: {{ lima_workspace_progress.progress_percent }}%"></div>
     </div>
-    <p class="mt-2 text-[11px] font-mono text-zinc-600">
-      open {{ lima_workspace_progress.open }} · universes cleared {{ lima_workspace_progress.resolved_universes }} · obligations cleared {{ lima_workspace_progress.resolved_obligations }} · handoffs reviewed {{ lima_workspace_progress.reviewed_handoffs }}
-    </p>
+    <p class="mt-2 text-[11px] font-mono text-zinc-600">{{ lima_workspace_progress.status_line }}</p>
     <p class="mt-2 text-sm text-zinc-400">{{ lima_workspace_progress.caption }}</p>
   </section>
 
@@ -232,7 +230,7 @@
           <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Escalated To You</p>
           <h2 class="mt-2 font-display text-xl font-semibold text-zinc-100">Steward-triaged survivors, blockers, and ambiguous packets</h2>
         </div>
-        <p class="text-xs text-zinc-500">{{ lima_steward_summary.escalated_count }} escalated</p>
+        <p class="text-xs text-zinc-500">{{ lima_steward_summary.escalated_count }} actionable{% if lima_steward_summary.blocked_count %} / {{ lima_steward_summary.blocked_count }} blocker{% if lima_steward_summary.blocked_count != 1 %}s{% endif %}{% endif %}</p>
       </div>
       <div class="mt-4 rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4">
         <p class="text-sm leading-relaxed text-zinc-300">{{ lima_steward_summary.body }}</p>

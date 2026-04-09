@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from orchestrator.lima_steward import build_lima_steward_view
+from orchestrator.lima_steward import (
+    build_lima_steward_view,
+    count_true_pending_human_items,
+)
 
 
 def _load_json(raw: Any, default: Any) -> Any:
@@ -382,37 +385,83 @@ def _workspace_progress(
     universes: list[dict[str, Any]],
     obligations: list[dict[str, Any]],
     handoffs: list[dict[str, Any]],
+    *,
+    top_candidate: dict[str, Any],
+    top_blocker: dict[str, Any],
 ) -> dict[str, Any]:
-    resolved_universe_statuses = {"formalized", "handed_off", "dead"}
-    in_flight_obligation_statuses = {"queued", "queued_local", "running_local", "queued_formal_review"}
-    resolved_universes = sum(
-        1
-        for universe in universes
-        if str(universe.get("universe_status") or "") in resolved_universe_statuses
-    )
-    resolved_obligations = sum(
-        1
-        for obligation in obligations
-        if str(obligation.get("status") or "") not in in_flight_obligation_statuses
-    )
-    reviewed_handoffs = sum(
-        1 for handoff in handoffs if str(handoff.get("status") or "") != "pending"
-    )
-    total = len(universes) + len(obligations) + len(handoffs)
-    resolved = resolved_universes + resolved_obligations + reviewed_handoffs
+    promising_statuses = {"promising", "formalized", "handed_off"}
+    strong_survivor_statuses = {"formalized", "handed_off"}
+    local_support_statuses = {"verified_local", "verified_formal"}
+    formal_candidate_statuses = {"approved_for_formal", "submitted_formal", "verified_formal"}
+    formal_result_statuses = {"verified_formal", "refuted_formal", "inconclusive"}
+
+    milestones = [
+        {
+            "label": "frontier live",
+            "done": bool(top_candidate.get("id"))
+            or any(str(universe.get("universe_status") or "") in promising_statuses for universe in universes),
+        },
+        {
+            "label": "strong survivor",
+            "done": any(
+                str(universe.get("universe_status") or "") in strong_survivor_statuses
+                for universe in universes
+            ),
+        },
+        {
+            "label": "local evidence",
+            "done": any(
+                str(obligation.get("status") or "") in local_support_statuses
+                for obligation in obligations
+            ),
+        },
+        {
+            "label": "formal candidate",
+            "done": any(
+                str(obligation.get("status") or "") in formal_candidate_statuses
+                for obligation in obligations
+            ),
+        },
+        {
+            "label": "formal result",
+            "done": any(
+                str(obligation.get("status") or "") in formal_result_statuses
+                for obligation in obligations
+            ),
+        },
+        {
+            "label": "human queue clear",
+            "done": count_true_pending_human_items(handoffs=handoffs, obligations=obligations) == 0,
+        },
+        {
+            "label": "blocker retired",
+            "done": str(top_blocker.get("tone") or "") == "calm",
+        },
+    ]
+
+    total = len(milestones)
+    resolved = sum(1 for milestone in milestones if milestone["done"])
     progress_percent = int((100 * resolved) / total) if total else 0
+    status_line = " · ".join(
+        f"{milestone['label']} {'yes' if milestone['done'] else 'no'}"
+        for milestone in milestones
+    )
+    pending_labels = [milestone["label"] for milestone in milestones if not milestone["done"]]
     return {
-        "label": "Research checkpoints resolved",
+        "label": "Frontier milestones cleared",
         "resolved": resolved,
         "total": total,
         "progress_percent": progress_percent,
         "open": max(0, total - resolved),
-        "resolved_universes": resolved_universes,
-        "resolved_obligations": resolved_obligations,
-        "reviewed_handoffs": reviewed_handoffs,
+        "status_line": status_line,
+        "milestones": milestones,
         "caption": (
-            f"{resolved_universes} candidate world(s), {resolved_obligations} obligation(s), "
-            f"and {reviewed_handoffs} handoff(s) have moved past their first gate."
+            "This is frontier progress, not completion progress. "
+            + (
+                f"Still open: {', '.join(pending_labels)}."
+                if pending_labels
+                else "The current frontier has cleared every tracked milestone."
+            )
         ),
     }
 
@@ -988,7 +1037,13 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         top_candidate=top_candidate,
         top_blocker=top_blocker,
     )
-    workspace_progress = _workspace_progress(universes, obligations, handoffs)
+    workspace_progress = _workspace_progress(
+        universes,
+        obligations,
+        handoffs,
+        top_candidate=top_candidate,
+        top_blocker=top_blocker,
+    )
     problem_subsets = _problem_subsets(
         top_candidate=top_candidate,
         top_blocker=top_blocker,

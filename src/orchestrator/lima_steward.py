@@ -6,6 +6,7 @@ from typing import Any
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 LOCAL_CHECK_KINDS = {"finite_check", "counterexample_search", "invariant_check", "consistency"}
 FORMAL_REVIEW_KINDS = {"lean_goal", "bridge_lemma", "equivalence"}
+_FINAL_REVIEW_STATUSES = {"approved", "rejected", "archived"}
 
 
 def _clean_text(value: Any) -> str:
@@ -44,11 +45,44 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 def _status_group(status: str) -> str:
     if status in {"queued", "queued_local", "running_local"}:
         return "needs_local"
-    if status in {"queued_formal_review", "approved_for_formal", "inconclusive"}:
+    if status in {"queued_formal_review"}:
         return "needs_human"
-    if status in {"submitted_formal"}:
+    if status in {"approved_for_formal", "submitted_formal"}:
         return "formal"
     return "closed"
+
+
+def obligation_needs_human_decision(obligation: dict[str, Any]) -> bool:
+    status = str(obligation.get("status") or "")
+    review_status = str(obligation.get("review_status") or "not_reviewed")
+    return status == "queued_formal_review" and review_status not in _FINAL_REVIEW_STATUSES
+
+
+def handoff_needs_human_decision(handoff: dict[str, Any]) -> bool:
+    return str(handoff.get("status") or "") == "pending"
+
+
+def count_true_pending_human_items(
+    *,
+    handoffs: list[dict[str, Any]],
+    obligations: list[dict[str, Any]],
+) -> int:
+    return sum(1 for handoff in handoffs if handoff_needs_human_decision(handoff)) + sum(
+        1 for obligation in obligations if obligation_needs_human_decision(obligation)
+    )
+
+
+def problem_ready_for_auto_continue(snapshot: dict[str, Any]) -> bool:
+    problem = dict(snapshot.get("problem") or {})
+    if str(problem.get("status") or "active") != "active":
+        return False
+    return (
+        count_true_pending_human_items(
+            handoffs=[dict(row) for row in snapshot.get("handoffs") or []],
+            obligations=[dict(row) for row in snapshot.get("obligations") or []],
+        )
+        == 0
+    )
 
 
 def _bundle_handoffs(pending_handoffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -203,6 +237,7 @@ def _bundle_obligations(obligations: list[dict[str, Any]]) -> list[dict[str, Any
             {
                 "kind": "obligation",
                 "group": group,
+                "actionable_human": obligation_needs_human_decision(primary),
                 "bundle_size": len(ordered),
                 "primary_obligation_id": str(primary.get("id") or ""),
                 "primary": primary,
@@ -276,9 +311,10 @@ def build_lima_steward_view(
     escalated_obligations = [
         bundle
         for bundle in obligation_bundles
-        if bundle["group"] == "needs_human" and bundle["confidence_score"] >= 54
+        if bundle["group"] == "needs_human" and bundle["actionable_human"]
     ]
-    packets = handoff_bundles[:3] + escalated_obligations[:2]
+    actionable_packets = handoff_bundles[:3] + escalated_obligations[:3]
+    packets = list(actionable_packets)
     blocker_packet = _build_blocker_packet(top_blocker, fractures)
     if blocker_packet:
         packets.append(blocker_packet)
@@ -298,11 +334,19 @@ def build_lima_steward_view(
     auto_managed_count = sum(bundle["bundle_size"] for bundle in hidden_bundles)
     blocked_count = sum(1 for packet in packets if packet["kind"] == "blocker")
 
-    if packets:
-        headline = f"{len(packets)} escalated item(s) made it through steward triage."
+    actionable_count = len(actionable_packets)
+
+    if actionable_count:
+        headline = f"{actionable_count} item(s) need a real decision."
         body = (
             "Lima is bundling similar queue items and showing you only the survivors, blockers, "
             "and ambiguous formal-review packets that still need a human decision."
+        )
+    elif blocker_packet:
+        headline = "No human queue is waiting, but one blocker still dominates."
+        body = (
+            "The review queue is clear. Lima is surfacing the current dominant blocker so you can "
+            "see what is slowing frontier progress without treating it like a pending task."
         )
     elif auto_managed_count:
         headline = "Routine queue motion is being handled below the fold."
@@ -327,7 +371,8 @@ def build_lima_steward_view(
         "summary": {
             "headline": headline,
             "body": body,
-            "escalated_count": len(packets),
+            "escalated_count": actionable_count,
+            "visible_packet_count": len(packets),
             "bundled_count": bundled_handoffs + bundled_obligations,
             "auto_managed_count": auto_managed_count,
             "blocked_count": blocked_count,
