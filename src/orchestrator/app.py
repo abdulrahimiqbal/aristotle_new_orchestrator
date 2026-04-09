@@ -1324,13 +1324,13 @@ async def lima_obligation_approve_formal_fragment(
 async def lima_obligation_submit_aristotle_fragment(
     request: Request, obligation_id: str, _auth: OperatorWriteAuth
 ):
-    backend = AristotleFormalBackend(lima_db=lima_db, main_db=db, force=True)
+    backend = AristotleFormalBackend(lima_db=lima_db, main_db=db, force=False)
     result = await approve_formal_review_async(
         lima_db,
         obligation_id=obligation_id,
         backend=backend,
         main_db=db,
-        force_aristotle=True,
+        force_aristotle=False,
     )
     row = lima_db.get_obligation(obligation_id)
     problem_id = str((row or {}).get("problem_id") or app_config.LIMA_DEFAULT_PROBLEM)

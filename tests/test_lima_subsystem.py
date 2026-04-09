@@ -423,9 +423,9 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         resp = client.get("/lima")
         assert resp.status_code == 200
         assert "Lima Lab" in resp.text
-        assert "zero live authority" in resp.text
-        assert "Start a Lima problem" in resp.text
-        assert "Add a new Lima problem" in resp.text
+        assert "choose a problem workspace" in resp.text
+        assert "Start A Lima Problem" in resp.text
+        assert "Create a named problem workspace" in resp.text
         assert "Open workspace" in resp.text
         assert "Aristotle auto-submit" in resp.text
 
@@ -483,7 +483,12 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         )
         assert formal_resp.status_code == 200
         assert "No live Aristotle job was created" in formal_resp.text
-        assert "Submit to Aristotle anyway" in formal_resp.text
+        assert "strict survivor gate" in formal_resp.text
+        submit_resp = client.post(
+            f"/api/lima/obligation/{formal_obligations[0]['id']}/submit-aristotle"
+        )
+        assert submit_resp.status_code == 200
+        assert "strict-survivor threshold blocked Aristotle submission" in submit_resp.text
         handoffs = app_mod.lima_db.list_handoffs(problem["id"], status="pending")
         assert handoffs
         hold_resp = client.post(f"/api/lima/handoff/{handoffs[0]['id']}/hold")
