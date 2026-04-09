@@ -116,3 +116,46 @@ def test_presenter_uses_frontier_milestones_instead_of_row_counts() -> None:
     assert progress["resolved"] == 7
     assert "human queue clear yes" in progress["status_line"]
     assert "completion progress" in progress["caption"]
+
+
+def test_presenter_primary_cta_ignores_non_actionable_formal_history() -> None:
+    snapshot = {
+        "problem": {"id": "prob2", "slug": "prob2", "title": "Problem 2", "status": "active"},
+        "problems": [],
+        "state": {},
+        "latest_run": {"run_summary_md": "summary", "created_at": "2026-04-09T00:00:00"},
+        "runs": [],
+        "families": [],
+        "universes": [
+            {
+                "id": "u1",
+                "title": "Promising frontier",
+                "family_key": "frontier_family",
+                "universe_status": "promising",
+                "solved_world": "Solved here",
+                "why_problem_is_easy_here": "It compresses well",
+                "fit_score": 4.0,
+                "compression_score": 4.0,
+                "formalizability_score": 4.0,
+                "falsifiability_score": 2.0,
+            }
+        ],
+        "fractures": [],
+        "obligations": [
+            {"status": "approved_for_formal", "review_status": "approved", "title": "already approved"},
+            {"status": "inconclusive", "review_status": "archived", "title": "old formal result"},
+        ],
+        "handoffs": [],
+        "literature_sources": [],
+        "literature_extracts": [],
+        "literature_links": [],
+        "formal_reviews": [],
+        "artifacts": [],
+        "policy_revisions": [],
+        "policy_layers": [],
+        "transfer_metrics": [],
+    }
+
+    context = build_lima_ui_context(snapshot)
+
+    assert context["lima_primary_cta"]["label"] == "Run Lima"

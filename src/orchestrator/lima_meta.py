@@ -91,6 +91,13 @@ def _search_action_for_family(
     )
     if repeat_count >= 8 and formal_wins <= 0:
         action = "hard_ban"
+    elif (
+        failure_type == "underparameterized_state"
+        and repeat_count >= 2
+        and formal_wins <= 0
+        and survival_count <= 0
+    ):
+        action = "cooldown"
     elif repeat_count >= 3 and failure_type == "prior_art" and formal_wins <= 0:
         action = "cooldown"
     elif repeat_count >= 3 and formal_wins <= 0:

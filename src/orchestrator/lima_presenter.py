@@ -635,19 +635,26 @@ def _group_obligations(obligations: list[dict[str, Any]]) -> list[dict[str, Any]
         "needs_human": {
             "key": "needs_human",
             "title": "Needs human review",
-            "statuses": {"queued_formal_review", "approved_for_formal", "inconclusive"},
+            "statuses": {"queued_formal_review"},
             "items": [],
         },
         "formal": {
             "key": "formal",
             "title": "Formally queued/submitted",
-            "statuses": {"submitted_formal"},
+            "statuses": {"approved_for_formal", "submitted_formal"},
             "items": [],
         },
         "closed": {
             "key": "closed",
             "title": "Closed",
-            "statuses": {"verified_local", "refuted_local", "verified_formal", "refuted_formal", "archived"},
+            "statuses": {
+                "verified_local",
+                "refuted_local",
+                "verified_formal",
+                "refuted_formal",
+                "inconclusive",
+                "archived",
+            },
             "items": [],
         },
     }

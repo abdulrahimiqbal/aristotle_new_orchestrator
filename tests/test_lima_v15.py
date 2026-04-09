@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from orchestrator import config as app_config
 from orchestrator.db import Database
-from orchestrator.lima_agent import _build_reference_points
+from orchestrator.lima_agent import _build_reference_points, _local_generation
 from orchestrator.lima_db import LimaDatabase, _canonical_hash
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
 from orchestrator.lima_meta import analyze_and_update_policy
@@ -503,6 +503,81 @@ def test_lima_fracture_pressure_sets_family_search_control(tmp_path: Path) -> No
     assert strict_family["status"] == "cooled_down"
     assert strict_family["repeat_failure_count"] == 3
     assert "literature-distinct" in strict_family["required_delta_json"]
+
+
+def test_lima_underparameterized_family_cools_down_after_repeats(tmp_path: Path) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    seeded = _seed_lima_formal_candidate(
+        db,
+        universe_status="weakened",
+        fracture_type="underparameterized_state",
+    )
+    conn = sqlite3.connect(db.path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO lima_fracture (
+                id, problem_id, family_id, universe_id, failure_type,
+                breakpoint_md, confidence, created_at
+            )
+            VALUES (?, ?, 'fam-strict', 'univ-strict', 'underparameterized_state', 'missing companion object', 0.7, ?)
+            """,
+            ("fracture-extra-underparam", seeded["problem_id"], "now-underparam"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    meta = analyze_and_update_policy(db, problem_id=seeded["problem_id"])
+    constraints = db.list_family_search_constraints(seeded["problem_id"])
+    strict_family = [c for c in constraints if c["family_key"] == "strict_family"][0]
+
+    assert meta["family_search_controls"]
+    assert strict_family["search_action"] == "cooldown"
+    assert strict_family["status"] == "cooled_down"
+    assert strict_family["repeat_failure_count"] == 2
+    assert "companion coordinate" in strict_family["required_delta_json"]
+
+
+def test_local_generation_prefers_chip_firing_frontier_for_boundary_spill_problem() -> None:
+    generated = _local_generation(
+        problem={
+            "title": "Synthesized Problem 2",
+            "slug": "synthesized_problem_2",
+            "statement_md": (
+                "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+                "A state is stable if every entry is 0 or 1, and the final stable state should be order-independent."
+            ),
+            "domain": "number_theory",
+        },
+        mode="forge",
+        pressure_map={"search_constraints": []},
+        literature_refresh={},
+        current_universes=[
+            {
+                "title": "Chip-Firing with Boundary Sinks",
+                "family_key": "chip_firing_boundary_sinks",
+                "universe_status": "promising",
+                "branch_of_math": "chip-firing and abelian sandpiles",
+                "solved_world": "Boundary loss becomes sinked chip-firing.",
+                "why_problem_is_easy_here": "Abelian stabilization should explain order independence.",
+                "fit_score": 4.0,
+                "compression_score": 4.0,
+                "formalizability_score": 4.0,
+                "bridgeability_score": 4.0,
+            }
+        ],
+    )
+
+    universe = generated.universes[0]
+
+    assert universe.title == "Chip-Firing with Boundary Sinks"
+    assert universe.family_key == "chip_firing_boundary_sinks"
+    assert any(
+        target.title == "boundary_spill_to_sinked_firing"
+        for target in universe.formalization_targets
+    )
 
 
 def test_lima_suppresses_repeated_weakened_handoff_without_material_delta(tmp_path: Path) -> None:

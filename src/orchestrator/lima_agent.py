@@ -428,16 +428,248 @@ def _family_constraint_action(pressure_map: dict[str, Any], family_key: str) -> 
     return ""
 
 
+def _generic_status_weight(status: str) -> int:
+    return {
+        "formalized": 7,
+        "handed_off": 6,
+        "promising": 5,
+        "weakened": 3,
+        "proposed": 2,
+        "dead": 1,
+    }.get(status, 0)
+
+
+def _best_generic_frontier_universe(
+    current_universes: list[dict[str, Any]],
+    pressure_map: dict[str, Any],
+) -> dict[str, Any] | None:
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for universe in current_universes:
+        family_key = str(universe.get("family_key") or "")
+        if _family_constraint_action(pressure_map, family_key) in {"cooldown", "soft_ban", "hard_ban"}:
+            continue
+        score = _generic_status_weight(str(universe.get("universe_status") or "")) * 10
+        for field in ("fit_score", "compression_score", "formalizability_score", "bridgeability_score"):
+            try:
+                score += float(universe.get(field) or 0)
+            except (TypeError, ValueError):
+                pass
+        scored.append((score, universe))
+    if not scored:
+        return None
+    return max(scored, key=lambda item: item[0])[1]
+
+
+def _looks_like_boundary_dissipation_problem(problem: dict[str, Any]) -> bool:
+    blob = " ".join(
+        [
+            str(problem.get("title") or ""),
+            str(problem.get("slug") or ""),
+            str(problem.get("statement_md") or ""),
+        ]
+    ).lower()
+    signals = (
+        "boundary",
+        "stable",
+        "disappears",
+        "move at position",
+        "final stable state",
+    )
+    return sum(1 for signal in signals if signal in blob) >= 3
+
+
+def _generic_chip_firing_fallback(
+    *,
+    problem: dict[str, Any],
+    mode: LimaMode,
+    pressure_map: dict[str, Any],
+    top_frontier: dict[str, Any] | None,
+) -> LimaGenerationResponse:
+    family_key = str((top_frontier or {}).get("family_key") or "chip_firing_boundary_sinks")
+    title = str((top_frontier or {}).get("title") or "Chip-Firing with Boundary Sinks")
+    branch = str((top_frontier or {}).get("branch_of_math") or "chip-firing and abelian sandpiles")
+    return LimaGenerationResponse(
+        frontier_summary_md=(
+            f"{problem.get('title') or problem.get('slug') or 'This problem'} currently points toward a "
+            "boundary-sink chip-firing model: termination and order-independence should come from an abelian "
+            "stabilization mechanism, not from a scalar height argument alone."
+        ),
+        pressure_map=pressure_map,
+        run_summary_md=(
+            f"Lima {mode} fallback reinforced the boundary-sink chip-firing frontier, shifted search away "
+            "from repeated underparameterized scalar families, and compiled bridge obligations that would "
+            "make the survivor more formal."
+        ),
+        universes=[
+            LimaUniverseSpec(
+                title=title,
+                family_key=family_key,
+                family_kind="adjacent",
+                branch_of_math=branch,
+                solved_world=(
+                    "Boundary loss is modeled as chip-firing into sinks, so stabilization and order-independence "
+                    "should be explained by abelian firing rather than by a fragile scalar potential."
+                ),
+                why_problem_is_easy_here=(
+                    "Sinked chip-firing has a natural stabilization story. The real work is to bridge the boundary "
+                    "spill dynamics exactly into that abelian model and prove no state information was lost."
+                ),
+                core_story_md=(
+                    "Lima keeps the strongest surviving frontier but changes the burden of proof: show that the "
+                    "boundary spill system is exactly a sinked chip-firing process, or isolate the missing state "
+                    "needed to make the bridge exact."
+                ),
+                core_objects=[
+                    LimaObjectSpec(
+                        object_kind="state_space",
+                        name="BoundaryChipConfiguration",
+                        description_md="A chip configuration on a finite line with absorbing sink nodes beyond the boundary.",
+                        formal_shape="Fin N -> Nat",
+                        payload={"boundary_behavior": "absorbing_sinks"},
+                    ),
+                    LimaObjectSpec(
+                        object_kind="operator",
+                        name="FireInteriorOrBoundary",
+                        description_md="A firing operator that matches interior redistribution and sink loss at the boundaries.",
+                        formal_shape="State -> Fin N -> State",
+                        payload={},
+                    ),
+                    LimaObjectSpec(
+                        object_kind="bridge",
+                        name="BoundarySpillToSinkedFiring",
+                        description_md="The exact translation from surface states and legal moves into the sinked chip-firing model.",
+                        formal_shape="SurfaceState -> BoundaryChipConfiguration",
+                        payload={},
+                    ),
+                ],
+                laws=[
+                    LimaClaimSpec(
+                        claim_kind="law",
+                        title="Local firings commute after sink completion",
+                        statement_md="Interior and boundary firings commute once sink absorption is made explicit in the completed state model.",
+                        priority=5,
+                    )
+                ],
+                backward_translation=[
+                    "Embed a surface state into a finite chip configuration with explicit boundary sinks.",
+                    "Translate each legal move into one chip-firing step and project stabilized sinked states back to 0/1 surface states.",
+                ],
+                bridge_lemmas=[
+                    LimaClaimSpec(
+                        claim_kind="bridge_lemma",
+                        title="Boundary spill move equals sinked firing",
+                        statement_md="Each legal boundary-spill move is exactly one firing in the sink-completed chip-firing model.",
+                        formal_statement="forall s i, legalMove s i -> bridge(step s i) = fire (bridge s) i",
+                        priority=5,
+                    )
+                ],
+                conditional_theorem=LimaClaimSpec(
+                    claim_kind="conditional_theorem",
+                    title="Sink completion implies unique stabilization",
+                    statement_md="If the bridge to sinked chip-firing is exact and legal firings remain abelian, every legal sequence terminates and has the same stable endpoint.",
+                    priority=5,
+                ),
+                kill_tests=[
+                    LimaClaimSpec(
+                        claim_kind="kill_test",
+                        title="Boundary firing commutation audit",
+                        statement_md="Search small boundary configurations for a pair of legal moves that fail to commute after sink completion.",
+                        priority=5,
+                    ),
+                    LimaClaimSpec(
+                        claim_kind="kill_test",
+                        title="Bridge information-loss audit",
+                        statement_md="Detect whether two distinct surface states collapse to the same sinked state while producing different stabilization behavior.",
+                        priority=5,
+                    ),
+                ],
+                expected_failure_mode=(
+                    "The sink completion may still hide boundary information, or the exact commutation law may fail "
+                    "unless an extra defect variable is tracked."
+                ),
+                literature_queries=[
+                    f"{problem.get('title') or problem.get('slug') or 'problem'} chip-firing sinks abelian sandpile",
+                    f"{problem.get('title') or problem.get('slug') or 'problem'} sink stabilization order independence",
+                ],
+                formalization_targets=[
+                    LimaObligationSpec(
+                        obligation_kind="finite_check",
+                        title="Boundary firing commutation audit",
+                        statement_md="Enumerate small boundary configurations and check whether adjacent legal firings commute after sink completion.",
+                        priority=5,
+                    ),
+                    LimaObligationSpec(
+                        obligation_kind="bridge_lemma",
+                        title="boundary_spill_to_sinked_firing",
+                        statement_md="State the exact bridge lemma from the surface move to sinked chip-firing.",
+                        lean_goal="forall s i, True",
+                        priority=5,
+                    ),
+                    LimaObligationSpec(
+                        obligation_kind="lean_goal",
+                        title="sink_stabilization_implies_unique_endpoint",
+                        statement_md="Formalize the implication from exact sink completion plus abelian firing to unique stable endpoint.",
+                        lean_goal="forall s, True",
+                        priority=4,
+                    ),
+                ],
+                scores={
+                    "compression_score": 4,
+                    "fit_score": 5,
+                    "novelty_score": 3,
+                    "falsifiability_score": 4,
+                    "bridgeability_score": 5,
+                    "formalizability_score": 4,
+                    "theorem_yield_score": 4,
+                    "literature_novelty_score": 3,
+                },
+            )
+        ],
+        policy_notes=[
+            "Deterministic fallback reinforced the strongest surviving family instead of emitting a generic atlas.",
+            "Repeated underparameterized scalar families were deprioritized in favor of bridge-complete sink dynamics.",
+        ],
+    )
+
+
 def _local_generation(
     *,
     problem: dict[str, Any],
     mode: LimaMode,
     pressure_map: dict[str, Any],
     literature_refresh: dict[str, Any],
+    current_universes: list[dict[str, Any]] | None = None,
 ) -> LimaGenerationResponse:
     problem_title = str(problem.get("title") or problem.get("slug") or "the problem")
     problem_slug = str(problem.get("slug") or "").lower()
     if "collatz" not in problem_slug and "collatz" not in problem_title.lower():
+        top_frontier = _best_generic_frontier_universe(current_universes or [], pressure_map)
+        frontier_blob = " ".join(
+            [
+                str((top_frontier or {}).get("title") or ""),
+                str((top_frontier or {}).get("family_key") or ""),
+                str((top_frontier or {}).get("core_story_md") or ""),
+                str((top_frontier or {}).get("solved_world") or ""),
+                str((top_frontier or {}).get("why_problem_is_easy_here") or ""),
+            ]
+        ).lower()
+        if (
+            top_frontier
+            and _family_constraint_action(pressure_map, str(top_frontier.get("family_key") or ""))
+            not in {"cooldown", "soft_ban", "hard_ban"}
+            and (
+                "chip" in frontier_blob
+                or "sandpile" in frontier_blob
+                or "sink" in frontier_blob
+                or _looks_like_boundary_dissipation_problem(problem)
+            )
+        ):
+            return _generic_chip_firing_fallback(
+                problem=problem,
+                mode=mode,
+                pressure_map=pressure_map,
+                top_frontier=top_frontier,
+            )
         generic_family = {
             "wild": "structural_completion_atlas",
             "stress": "counterexample_boundary_atlas",
@@ -883,6 +1115,7 @@ async def run_lima(
         problem_id = str(problem["id"])
         sync_result = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
         state = lima_db.get_state(problem_id)
+        current_universes = lima_db.list_universes(problem_id, limit=12)
         reference_points = _build_reference_points(main_db, problem)
         fractures = lima_db.list_fractures(problem_id, limit=24)
         families = lima_db.list_family_leaderboard(problem_id, limit=16)
@@ -939,6 +1172,7 @@ async def run_lima(
                 mode=selected_mode,
                 pressure_map=pressure_map,
                 literature_refresh=literature_refresh,
+                current_universes=current_universes,
             )
         universes = generated.universes[: int(app_config.LIMA_MAX_UNIVERSES_PER_RUN)]
         # Refresh again after universe-specific queries are known.
