@@ -14,7 +14,10 @@
 
     <div class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
       <div>
-        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Current problem</p>
+        <div class="flex flex-wrap items-center gap-3">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Current problem</p>
+          <a href="/lima" class="text-xs text-zinc-500 hover:text-zinc-300">All Lima problems</a>
+        </div>
         <h1 class="mt-2 font-display text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">{{ lima_problem.title }}</h1>
         <p class="mt-3 max-w-3xl text-sm leading-relaxed text-zinc-300">{{ lima_problem.statement_md }}</p>
         <p class="mt-4 max-w-3xl text-sm leading-relaxed text-emerald-100/85">{{ lima_now_summary }}</p>
@@ -364,19 +367,17 @@
         <details class="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4" open>
           <summary class="cursor-pointer select-none text-sm font-medium text-zinc-200">Run controls</summary>
           <div class="mt-4 space-y-4">
+            <div class="rounded-xl border border-zinc-800/80 bg-black/20 p-3">
+              <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Problem workspace</p>
+              <p class="mt-2 text-sm text-zinc-200">{{ lima_problem.title }}</p>
+              <p class="mt-1 text-xs leading-relaxed text-zinc-500">This page is scoped to one Lima problem. Open <a href="/lima" class="text-emerald-300 hover:text-emerald-200">Lima home</a> to switch or create another workspace.</p>
+            </div>
             <form hx-post="/api/lima/run"
                   hx-target="#campaign-panel"
                   hx-swap="innerHTML"
                   hx-disabled-elt="button"
                   class="grid gap-3">
-              <label>
-                <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Problem</span>
-                <select name="problem_slug" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
-                  {% for p in lima_problems %}
-                  <option value="{{ p.slug }}" {% if p.id == lima_problem.id %}selected{% endif %}>{{ p.title }}</option>
-                  {% endfor %}
-                </select>
-              </label>
+              <input type="hidden" name="problem_slug" value="{{ lima_problem.slug }}" />
               <label>
                 <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Mode</span>
                 <select name="mode" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
@@ -400,42 +401,13 @@
         </details>
 
         <details class="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-          <summary class="cursor-pointer select-none text-sm font-medium text-zinc-200">Start from prompt</summary>
-          <form hx-post="/api/lima/start"
-                hx-target="#campaign-panel"
-                hx-swap="innerHTML"
-                hx-disabled-elt="button"
-                class="mt-4 grid gap-3">
-            <label>
-              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Prompt</span>
-              <textarea name="prompt" required rows="4" placeholder="State the conjecture, goal, and any local constraints..."
-                        class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"></textarea>
-            </label>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <label>
-                <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Title optional</span>
-                <input name="title" placeholder="Auto from first line"
-                       class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-              </label>
-              <label>
-                <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Mode</span>
-                <select name="mode" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
-                  {% for mode in lima_modes %}
-                  <option value="{{ mode.value }}" {% if mode.value == operator.lima_default_mode %}selected{% endif %}>{{ mode.label }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-            </div>
-            <label class="flex items-center gap-2 text-xs text-zinc-300">
-              <input type="checkbox" name="run_now" value="1" checked class="rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500/50" />
-              Run first Lima pass after creating it
-            </label>
-            <button type="submit"
-                    class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70">
-              <span class="htmx-hide-while-loading">Start from prompt</span>
-              <span class="htmx-indicator items-center gap-2">Starting...</span>
-            </button>
-          </form>
+          <summary class="cursor-pointer select-none text-sm font-medium text-zinc-200">Open another problem</summary>
+          <div class="mt-4 rounded-xl border border-zinc-800/80 bg-black/20 p-4">
+            <p class="text-sm leading-relaxed text-zinc-300">
+              Use the Lima home page to open another problem workspace or create a new one.
+            </p>
+            <a href="/lima" class="mt-3 inline-flex items-center justify-center rounded-lg bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 ring-1 ring-zinc-700/70 hover:bg-zinc-700">Back to Lima home</a>
+          </div>
         </details>
       </div>
     </div>
@@ -843,51 +815,13 @@
       </details>
 
       <details class="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-        <summary class="cursor-pointer select-none text-sm font-medium text-zinc-200">Add a new Lima problem</summary>
-        <form hx-post="/api/lima/problem"
-              hx-target="#campaign-panel"
-              hx-swap="innerHTML"
-              hx-disabled-elt="button"
-              class="mt-4 grid gap-3">
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label>
-              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Title</span>
-              <input name="title" required placeholder="Goldbach conjecture"
-                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-            </label>
-            <label>
-              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Slug</span>
-              <input name="slug" placeholder="goldbach"
-                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-            </label>
-          </div>
-          <label>
-            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Statement</span>
-            <textarea name="statement_md" required rows="3" placeholder="State the conjecture or research problem..."
-                      class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"></textarea>
-          </label>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label>
-              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Domain</span>
-              <input name="domain" value="number_theory"
-                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-            </label>
-            <label>
-              <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Seed packet JSON or notes</span>
-              <input name="seed_packet_json" placeholder='{"known_frontier":["..."]}'
-                     class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-            </label>
-          </div>
-          <label>
-            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Default goal</span>
-            <input name="default_goal_text" placeholder="Optional problem-specific Lima mission"
-                   class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50" />
-          </label>
-          <button type="submit"
-                  class="w-fit rounded-lg bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-700 hover:bg-zinc-700 disabled:opacity-70">
-            Create problem
-          </button>
-        </form>
+        <summary class="cursor-pointer select-none text-sm font-medium text-zinc-200">Open or create another problem</summary>
+        <div class="mt-4 rounded-xl border border-zinc-800/80 bg-black/20 p-4">
+          <p class="text-sm leading-relaxed text-zinc-300">
+            Problem creation now lives on the Lima home page so each problem can keep its own dedicated workspace.
+          </p>
+          <a href="/lima" class="mt-3 inline-flex items-center justify-center rounded-lg bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 ring-1 ring-zinc-700/70 hover:bg-zinc-700">Open Lima home</a>
+        </div>
       </details>
 
       <details class="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4">

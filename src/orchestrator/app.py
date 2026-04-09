@@ -97,6 +97,10 @@ def _require_operator_write(
 OperatorWriteAuth = Annotated[bool, Depends(_require_operator_write)]
 
 
+def _is_htmx_request(request: Request) -> bool:
+    return request.headers.get("HX-Request", "").strip().lower() == "true"
+
+
 def _operator_runtime_context() -> dict:
     gate_kinds = sorted(app_config.MAP_PROVED_GATE_KINDS)
     return {
@@ -383,6 +387,80 @@ def _lima_panel_context(
     }
 
 
+def _lima_index_context(*, lima_flash: dict | None = None) -> dict:
+    lima_db.initialize()
+    problems = lima_db.list_problems()
+    cards: list[dict[str, Any]] = []
+    totals = {
+        "problem_count": len(problems),
+        "active_count": 0,
+        "pending_handoffs": 0,
+        "queued_obligations": 0,
+        "escalated_reviews": 0,
+    }
+    lima_modes: list[dict[str, str]] = []
+
+    for problem in problems:
+        snapshot = lima_db.get_dashboard_snapshot(str(problem["id"]))
+        ui_ctx = build_lima_ui_context(snapshot)
+        metrics = dict(ui_ctx.get("lima_metrics") or {})
+        top_candidate = dict(ui_ctx.get("lima_top_candidate") or {})
+        top_blocker = dict(ui_ctx.get("lima_top_blocker") or {})
+        decision_state = dict(ui_ctx.get("lima_decision_state") or {})
+        latest_run = dict(ui_ctx.get("lima_latest_run") or {}) if ui_ctx.get("lima_latest_run") else None
+        if not lima_modes:
+            lima_modes = list(ui_ctx.get("lima_modes") or [])
+        if str(problem.get("status") or "active") == "active":
+            totals["active_count"] += 1
+        totals["pending_handoffs"] += int(metrics.get("pending_handoffs") or 0)
+        totals["queued_obligations"] += int(metrics.get("queued_obligations") or 0)
+        totals["escalated_reviews"] += int(metrics.get("steward_escalated") or 0)
+        cards.append(
+            {
+                "problem": problem,
+                "href": f"/lima/{problem.get('slug')}",
+                "latest_run": latest_run,
+                "latest_summary": str(ui_ctx.get("lima_latest_summary") or ""),
+                "now_summary": str(ui_ctx.get("lima_now_summary") or ""),
+                "metrics": metrics,
+                "decision_state": decision_state,
+                "top_candidate": top_candidate,
+                "top_blocker": top_blocker,
+            }
+        )
+
+    cards.sort(
+        key=lambda card: (
+            0 if str(card["problem"].get("status") or "") == "active" else 1,
+            -int(card["metrics"].get("steward_escalated") or 0),
+            -int(card["metrics"].get("pending_handoffs") or 0),
+            str((card.get("latest_run") or {}).get("created_at") or card["problem"].get("updated_at") or ""),
+        ),
+        reverse=False,
+    )
+
+    return {
+        "selected": None,
+        "operator": _operator_runtime_context(),
+        "public_view": False,
+        "shadow_view": False,
+        "supershadow_view": False,
+        "lima_view": False,
+        "lima_index_view": True,
+        "campaigns": db.get_all_campaigns(),
+        "lima_flash": lima_flash,
+        "lima_index_cards": cards,
+        "lima_index_totals": totals,
+        "lima_modes": lima_modes
+        or [
+            {"value": "balanced", "label": "Balanced", "hint": "general search pass"},
+            {"value": "wild", "label": "Wild", "hint": "broader invention"},
+            {"value": "stress", "label": "Stress", "hint": "break candidates harder"},
+            {"value": "forge", "label": "Forge", "hint": "push toward formal obligations"},
+        ],
+    }
+
+
 async def _maybe_submit_shadow_promoted_experiment(
     payload_json: str | None, extra: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -632,8 +710,32 @@ async def supershadow_dashboard(request: Request):
 
 
 @app.get("/lima", response_class=HTMLResponse)
-async def lima_dashboard(request: Request, problem: str | None = None):
-    ctx = _lima_panel_context(problem=problem)
+async def lima_dashboard(request: Request):
+    ctx = _lima_index_context()
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "campaigns": ctx["campaigns"],
+            "selected": None,
+            "state": None,
+            "ticks": [],
+            "progress": None,
+            "operator": _operator_runtime_context(),
+            "public_view": False,
+            "shadow_view": False,
+            "supershadow_view": False,
+            "lima_view": False,
+            "lima_index_view": True,
+            "campaign_shadow_view": False,
+            **ctx,
+        },
+    )
+
+
+@app.get("/lima/{problem_slug}", response_class=HTMLResponse)
+async def lima_problem_dashboard(request: Request, problem_slug: str):
+    ctx = _lima_panel_context(problem=problem_slug)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -648,6 +750,7 @@ async def lima_dashboard(request: Request, problem: str | None = None):
             "shadow_view": False,
             "supershadow_view": False,
             "lima_view": True,
+            "lima_index_view": False,
             "campaign_shadow_view": False,
             **ctx,
         },
@@ -975,6 +1078,8 @@ async def lima_run_fragment(
         trigger_kind="manual",
         mode=mode or app_config.LIMA_DEFAULT_MODE,
     )
+    if not _is_htmx_request(request):
+        return RedirectResponse(f"/lima/{selected_problem}", status_code=303)
     return templates.TemplateResponse(
         request,
         "lima_panel.html",
@@ -1020,6 +1125,8 @@ async def lima_problem_create_fragment(
         "problem": "created" if created else "updated",
         "problem_title": problem.get("title"),
     }
+    if not _is_htmx_request(request):
+        return RedirectResponse(f"/lima/{problem.get('slug') or problem_id}", status_code=303)
     return templates.TemplateResponse(
         request,
         "lima_panel.html",
@@ -1124,6 +1231,8 @@ async def lima_start_from_prompt_fragment(
             mode=mode or app_config.LIMA_DEFAULT_MODE,
         )
         flash = {**run_flash, "problem": flash["problem"], "problem_title": flash["problem_title"]}
+    if not _is_htmx_request(request):
+        return RedirectResponse(f"/lima/{selected_problem}", status_code=303)
     return templates.TemplateResponse(
         request,
         "lima_panel.html",

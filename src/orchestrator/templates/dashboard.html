@@ -63,7 +63,7 @@
           <span class="font-medium">Supershadow Lab</span>
         </a>
         <a href="/lima"
-           class="block rounded-lg px-3 py-2.5 text-sm transition-all {% if lima_view %}bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200{% endif %}">
+           class="block rounded-lg px-3 py-2.5 text-sm transition-all {% if lima_view or lima_index_view %}bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200{% endif %}">
           <span class="font-medium">Lima Lab</span>
         </a>
         <div class="my-2 border-t border-zinc-800/80"></div>
@@ -154,6 +154,8 @@
              class="max-w-5xl mx-auto">
           {% if supershadow_view %}
             {% include "supershadow_panel.html" %}
+          {% elif lima_index_view %}
+            {% include "lima_index.html" %}
           {% elif lima_view %}
             {% include "lima_panel.html" %}
           {% elif shadow_view or campaign_shadow_view %}

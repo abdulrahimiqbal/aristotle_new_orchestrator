@@ -426,6 +426,7 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         assert "zero live authority" in resp.text
         assert "Start a Lima problem" in resp.text
         assert "Add a new Lima problem" in resp.text
+        assert "Open workspace" in resp.text
         assert "Aristotle auto-submit" in resp.text
 
         start_resp = client.post(
@@ -439,7 +440,7 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         )
         assert start_resp.status_code == 200
         assert "Twin prime conjecture" in start_resp.text
-        assert "Start a Lima problem" in start_resp.text
+        assert "All Lima problems" in start_resp.text
         assert app_mod.lima_db.get_problem("twin_prime_conjecture")["title"] == "Twin prime conjecture"
 
         create_resp = client.post(
@@ -454,6 +455,12 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
         )
         assert create_resp.status_code == 200
         assert "Goldbach conjecture" in create_resp.text
+        assert "All Lima problems" in create_resp.text
+
+        detail_resp = client.get("/lima/goldbach")
+        assert detail_resp.status_code == 200
+        assert "Goldbach conjecture" in detail_resp.text
+        assert "All Lima problems" in detail_resp.text
 
         run_resp = client.post(
             "/api/lima/run",
