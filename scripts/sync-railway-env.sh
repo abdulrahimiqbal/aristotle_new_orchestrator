@@ -18,8 +18,8 @@ set +a
 : "${LLM_API_KEY:?Set LLM_API_KEY in .env}"
 : "${ARISTOTLE_API_KEY:?Set ARISTOTLE_API_KEY in .env}"
 
-LLM_BASE_URL="${LLM_BASE_URL:-https://api.us-west-2.modal.direct/v1}"
-LLM_MODEL="${LLM_MODEL:-zai-org/GLM-5.1-FP8}"
+LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
+LLM_MODEL="${LLM_MODEL:-google/gemma-4-26b-a4b-it}"
 LLM_BACKUP_API_KEY="${LLM_BACKUP_API_KEY:-}"
 LLM_BACKUP_BASE_URL="${LLM_BACKUP_BASE_URL:-}"
 LLM_BACKUP_MODEL="${LLM_BACKUP_MODEL:-}"
