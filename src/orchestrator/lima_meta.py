@@ -44,6 +44,7 @@ REQUIRED_DELTA_BY_FAILURE = {
 
 _STAGNATION_RUN_WINDOW = 6
 _STAGNATION_REPEAT_THRESHOLD = 3
+_REPAIR_ATTEMPT_BUDGET = 4
 
 
 def _load_json(raw: Any, default: Any) -> Any:
@@ -94,6 +95,144 @@ def _run_frontier_signature(run: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _recent_repair_attempt_keys(runs: list[dict[str, Any]]) -> list[str]:
+    attempts: list[str] = []
+    for run in runs[:_STAGNATION_RUN_WINDOW]:
+        response = _load_json(run.get("response_json"), {})
+        output = response.get("output") if isinstance(response, dict) else {}
+        universes = output.get("universes") if isinstance(output, dict) else []
+        if not isinstance(universes, list):
+            continue
+        for universe in universes:
+            if not isinstance(universe, dict):
+                continue
+            key = str(universe.get("repair_hypothesis_key") or "").strip()
+            if key and key not in attempts:
+                attempts.append(key)
+    return attempts
+
+
+def _repair_hypotheses_for_frontier(
+    *,
+    family_key: str,
+    dominant_blocker: str,
+    attempted_keys: list[str],
+) -> dict[str, Any]:
+    if dominant_blocker != "underparameterized_state":
+        return {
+            "active": False,
+            "strategy": "",
+            "target_family_key": family_key,
+            "failure_type": dominant_blocker,
+            "attempt_budget": 0,
+            "attempts_used": 0,
+            "attempts_remaining": 0,
+            "hypotheses": [],
+            "recent_attempt_keys": attempted_keys,
+            "next_hypothesis_keys": [],
+            "summary_md": "",
+        }
+
+    chip_firing_like = "chip_firing" in family_key or "sandpile" in family_key or "sink" in family_key
+    if chip_firing_like:
+        hypotheses = [
+            {
+                "key": "boundary_debt_ledger",
+                "title": "Boundary debt ledger",
+                "description": "Track the mass lost to sinks as an explicit ledger so a boundary spill move becomes an exact augmented firing step.",
+                "why_it_might_work": "The current bridge may be losing endpoint-relevant sink information at the boundary.",
+                "check_focus": "Does the ledger make the boundary transition and endpoint projection deterministic?",
+            },
+            {
+                "key": "boundary_context_tag",
+                "title": "Boundary context tag",
+                "description": "Add a local boundary context label recording which side and local pattern produced the spill before sink completion.",
+                "why_it_might_work": "The missing information may be local and combinatorial rather than numeric.",
+                "check_focus": "Do adjacent boundary firings commute once the context tag is tracked?",
+            },
+            {
+                "key": "sink_parity_cocycle",
+                "title": "Sink parity cocycle",
+                "description": "Attach a cocycle term capturing parity or ordering information that the raw sinked configuration forgets.",
+                "why_it_might_work": "The bridge may need a lightweight correction term rather than a full state redesign.",
+                "check_focus": "Does the cocycle remove same-state/different-future counterexamples?",
+            },
+            {
+                "key": "two_coordinate_defect_state",
+                "title": "Two-coordinate defect state",
+                "description": "Replace the one-number progress story with a paired state: primary scalar plus explicit boundary defect coordinate.",
+                "why_it_might_work": "The frontier may need a minimal repaired state that is still formalizable.",
+                "check_focus": "Can the repaired state support an exact transition law and unique endpoint proof?",
+            },
+        ]
+        strategy = "companion_state_search"
+    else:
+        hypotheses = [
+            {
+                "key": "latent_coordinate",
+                "title": "Latent coordinate repair",
+                "description": "Introduce a latent coordinate that restores exact one-step evolution.",
+                "why_it_might_work": "The current scalar invariant is likely projecting away essential information.",
+                "check_focus": "Does the latent coordinate make the transition law exact?",
+            },
+            {
+                "key": "memory_state",
+                "title": "Memory state repair",
+                "description": "Attach a bounded memory state that records the missing local context.",
+                "why_it_might_work": "The system may depend on short-range history rather than just current scalar value.",
+                "check_focus": "Do bounded memory states eliminate same-scalar divergence?",
+            },
+            {
+                "key": "defect_variable",
+                "title": "Defect variable repair",
+                "description": "Track a defect variable measuring what the scalar forgets.",
+                "why_it_might_work": "A small correction term may be enough to close the bridge.",
+                "check_focus": "Can the defect variable prove a sharper bridge lemma?",
+            },
+            {
+                "key": "quotient_label",
+                "title": "Quotient label repair",
+                "description": "Attach a quotient or regime label to distinguish states that collapse under the current representation.",
+                "why_it_might_work": "The current ontology may need a finite label rather than a continuous correction.",
+                "check_focus": "Does the quotient label make the local laws deterministic?",
+            },
+        ]
+        strategy = "state_repair_search"
+
+    annotated = []
+    for idx, hypothesis in enumerate(hypotheses, start=1):
+        key = str(hypothesis["key"])
+        tried = key in attempted_keys
+        annotated.append(
+            {
+                **hypothesis,
+                "ordinal": idx,
+                "tried": tried,
+                "status": "tried" if tried else "queued",
+            }
+        )
+    attempts_used = sum(1 for hypothesis in annotated if hypothesis["tried"])
+    next_keys = [str(hypothesis["key"]) for hypothesis in annotated if not hypothesis["tried"]][:2]
+    if not next_keys:
+        next_keys = [str(hypothesis["key"]) for hypothesis in annotated[:2]]
+    return {
+        "active": True,
+        "strategy": strategy,
+        "target_family_key": family_key,
+        "failure_type": dominant_blocker,
+        "attempt_budget": _REPAIR_ATTEMPT_BUDGET,
+        "attempts_used": attempts_used,
+        "attempts_remaining": max(0, _REPAIR_ATTEMPT_BUDGET - attempts_used),
+        "hypotheses": annotated,
+        "recent_attempt_keys": attempted_keys,
+        "next_hypothesis_keys": next_keys,
+        "summary_md": (
+            f"Repair loop is targeting {family_key or 'the current frontier'} with "
+            f"{attempts_used}/{_REPAIR_ATTEMPT_BUDGET} companion-state attempt(s) already emitted."
+        ),
+    }
+
+
 def compute_stagnation_controller(
     *,
     runs: list[dict[str, Any]],
@@ -135,6 +274,7 @@ def compute_stagnation_controller(
     repeated_failure_pressure = [
         fracture for fracture in fractures if str(fracture.get("failure_type") or "") == dominant_blocker
     ]
+    attempted_repair_keys = _recent_repair_attempt_keys(recent_runs)
     active = (
         len(recent_runs) >= 4
         and not strong_survivor_present
@@ -147,6 +287,19 @@ def compute_stagnation_controller(
 
     mode_shift = ""
     recommended_actions: list[str] = []
+    repair_loop = {
+        "active": False,
+        "strategy": "",
+        "target_family_key": top_family_key,
+        "failure_type": dominant_blocker,
+        "attempt_budget": 0,
+        "attempts_used": 0,
+        "attempts_remaining": 0,
+        "hypotheses": [],
+        "recent_attempt_keys": attempted_repair_keys,
+        "next_hypothesis_keys": [],
+        "summary_md": "",
+    }
     if active:
         if dominant_blocker == "underparameterized_state":
             mode_shift = "bridge_first"
@@ -155,6 +308,11 @@ def compute_stagnation_controller(
                 "favor exact bridge lemmas and commutation checks over new high-level summaries",
                 "suppress repeated scalar families until they materially change their state representation",
             ]
+            repair_loop = _repair_hypotheses_for_frontier(
+                family_key=top_family_key,
+                dominant_blocker=dominant_blocker,
+                attempted_keys=attempted_repair_keys,
+            )
         elif dominant_blocker == "prior_art":
             mode_shift = "literature_distinct_mutation"
             recommended_actions = [
@@ -205,6 +363,7 @@ def compute_stagnation_controller(
         "avoid_family_keys": [key for key in avoid_family_keys if key],
         "prefer_family_keys": [key for key in prefer_family_keys if key],
         "recommended_actions": recommended_actions,
+        "repair_loop": repair_loop,
         "summary_md": (
             f"Recent frontier repeated family={top_family_key or 'none'} "
             f"{top_family_repeats} time(s) with blocker={dominant_blocker or 'none'} "

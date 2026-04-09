@@ -537,6 +537,84 @@ def _problem_subsets(
     ]
 
 
+def _repair_loop_summary(
+    state: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pressure_map = _load_json(state.get("pressure_map_json"), {})
+    stagnation = pressure_map.get("stagnation_controller") if isinstance(pressure_map, dict) else {}
+    repair_loop = stagnation.get("repair_loop") if isinstance(stagnation, dict) else {}
+    if not isinstance(repair_loop, dict) or not repair_loop.get("active"):
+        return {"active": False}
+
+    hypotheses = [
+        hypothesis
+        for hypothesis in repair_loop.get("hypotheses") or []
+        if isinstance(hypothesis, dict)
+    ]
+    recent_attempts = []
+    for artifact in artifacts:
+        if str(artifact.get("artifact_kind") or "") != "repair_attempt":
+            continue
+        content = _load_json(artifact.get("content_json"), {})
+        recent_attempts.append(
+            {
+                "key": _choice(content.get("repair_hypothesis_key")),
+                "focus": _truncate(
+                    _choice(
+                        content.get("repair_focus"),
+                        content.get("repair_strategy"),
+                        fallback="Repair attempt emitted in a recent run.",
+                    ),
+                    160,
+                ),
+            }
+        )
+    attempts_used = int(repair_loop.get("attempts_used") or 0)
+    attempt_budget = int(repair_loop.get("attempt_budget") or 0)
+    target_family_key = _choice(repair_loop.get("target_family_key"), fallback="current frontier")
+    next_keys = [str(key) for key in repair_loop.get("next_hypothesis_keys") or [] if str(key).strip()]
+    hypotheses_view = []
+    for hypothesis in hypotheses:
+        hypotheses_view.append(
+            {
+                "key": _choice(hypothesis.get("key")),
+                "title": _choice(hypothesis.get("title"), fallback="Repair hypothesis"),
+                "status": _choice(hypothesis.get("status"), fallback="queued"),
+                "description": _truncate(
+                    _choice(
+                        hypothesis.get("description"),
+                        hypothesis.get("why_it_might_work"),
+                        fallback="Lima is testing this as a candidate repair for the current blocker.",
+                    ),
+                    180,
+                ),
+                "focus": _truncate(
+                    _choice(hypothesis.get("check_focus"), fallback="Run bounded checks on this repaired state."),
+                    160,
+                ),
+                "queued_next": _choice(hypothesis.get("key")) in next_keys,
+            }
+        )
+    return {
+        "active": True,
+        "headline": f"Repair loop {attempts_used}/{attempt_budget}",
+        "body": _choice(
+            repair_loop.get("summary_md"),
+            fallback="Lima is generating explicit repaired-state attempts for the dominant blocker.",
+        ),
+        "target_family_key": target_family_key,
+        "failure_type": _choice(repair_loop.get("failure_type"), fallback="repair"),
+        "strategy": _choice(repair_loop.get("strategy"), fallback="repair"),
+        "attempts_used": attempts_used,
+        "attempt_budget": attempt_budget,
+        "attempts_remaining": int(repair_loop.get("attempts_remaining") or 0),
+        "next_hypothesis_keys": next_keys,
+        "hypotheses": hypotheses_view,
+        "recent_attempts": recent_attempts[:4],
+    }
+
+
 def _activity_feed(
     latest_run: dict[str, Any] | None,
     fractures: list[dict[str, Any]],
@@ -1051,6 +1129,7 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         top_candidate=top_candidate,
         top_blocker=top_blocker,
     )
+    repair_loop = _repair_loop_summary(state, artifacts)
     problem_subsets = _problem_subsets(
         top_candidate=top_candidate,
         top_blocker=top_blocker,
@@ -1111,6 +1190,7 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_top_blocker": top_blocker,
         "lima_safety_summary": safety_summary,
         "lima_workspace_progress": workspace_progress,
+        "lima_repair_loop": repair_loop,
         "lima_problem_subsets": problem_subsets,
         "lima_activity_feed": activity_feed,
         "lima_obligation_groups": obligation_groups,

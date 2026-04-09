@@ -500,6 +500,236 @@ def _looks_like_boundary_dissipation_problem(problem: dict[str, Any]) -> bool:
     return sum(1 for signal in signals if signal in blob) >= 3
 
 
+def _repair_hypothesis_by_key(
+    repair_loop: dict[str, Any], hypothesis_key: str
+) -> dict[str, Any] | None:
+    for hypothesis in repair_loop.get("hypotheses") or []:
+        if not isinstance(hypothesis, dict):
+            continue
+        if str(hypothesis.get("key") or "") == hypothesis_key:
+            return hypothesis
+    return None
+
+
+def _chip_firing_repair_universe(
+    *,
+    problem: dict[str, Any],
+    top_frontier: dict[str, Any] | None,
+    hypothesis: dict[str, Any],
+) -> LimaUniverseSpec:
+    parent_family_key = str((top_frontier or {}).get("family_key") or "chip_firing_boundary")
+    parent_title = str((top_frontier or {}).get("title") or "Chip-Firing with Boundary Sinks")
+    branch = str((top_frontier or {}).get("branch_of_math") or "chip-firing and abelian sandpiles")
+    repair_key = str(hypothesis.get("key") or "repair")
+    repair_title = str(hypothesis.get("title") or "Repair")
+    repair_description = str(hypothesis.get("description") or "")
+    repair_focus = str(hypothesis.get("check_focus") or "")
+    title = f"{parent_title}: {repair_title}"
+    exact_transition_title = f"{repair_key}_exact_transition_law"
+    commutation_title = f"{repair_key}_commutation_audit"
+    endpoint_title = f"{repair_key}_unique_endpoint"
+    return LimaUniverseSpec(
+        title=title,
+        family_key=f"{parent_family_key}_{repair_key}",
+        family_kind="adjacent",
+        branch_of_math=branch,
+        solved_world=(
+            "Boundary spill is modeled as sinked chip-firing plus one explicit repair variable, so the "
+            "bridge becomes an exact state update rather than a lossy analogy."
+        ),
+        why_problem_is_easy_here=(
+            f"{repair_description} {repair_focus}".strip()
+            or "The repair variable is supposed to close the exact bridge and restore the missing state."
+        ),
+        core_story_md=(
+            f"Lima is testing the '{repair_title}' repair on top of the chip-firing frontier. "
+            "This attempt lives or dies on whether the added state makes boundary spill updates exact."
+        ),
+        core_objects=[
+            LimaObjectSpec(
+                object_kind="state_space",
+                name="BoundaryChipConfiguration",
+                description_md="A sink-completed chip configuration modeling the surface state.",
+                formal_shape="Fin N -> Nat",
+                payload={"boundary_behavior": "absorbing_sinks", "parent_family_key": parent_family_key},
+            ),
+            LimaObjectSpec(
+                object_kind="state_space",
+                name=repair_title.replace(" ", ""),
+                description_md=repair_description,
+                formal_shape="RepairState",
+                payload={
+                    "repair_hypothesis_key": repair_key,
+                    "repair_parent_family_key": parent_family_key,
+                    "repair_strategy": "companion_state_search",
+                },
+            ),
+            LimaObjectSpec(
+                object_kind="bridge",
+                name="ExactBoundaryBridge",
+                description_md="A repaired bridge from boundary spill moves into augmented sinked chip-firing.",
+                formal_shape="SurfaceState -> BoundaryChipConfiguration × RepairState",
+                payload={"repair_focus": repair_focus},
+            ),
+        ],
+        laws=[
+            LimaClaimSpec(
+                claim_kind="law",
+                title=f"{repair_title} closes the transition law",
+                statement_md="The repaired state representation evolves exactly under one legal move of the surface system.",
+                priority=5,
+            )
+        ],
+        backward_translation=[
+            "Project the repaired sinked state back to the surface system and recover the same stable endpoint.",
+            "Show which missing boundary information is restored by the repair variable.",
+        ],
+        bridge_lemmas=[
+            LimaClaimSpec(
+                claim_kind="bridge_lemma",
+                title=exact_transition_title,
+                statement_md=(
+                    f"State the exact repaired transition law using the {repair_title.lower()} so a boundary-spill move "
+                    "matches one augmented sinked-firing step."
+                ),
+                priority=5,
+            )
+        ],
+        conditional_theorem=LimaClaimSpec(
+            claim_kind="conditional_theorem",
+            title=f"{repair_title} implies unique endpoint",
+            statement_md=(
+                "If the repaired bridge is exact and the augmented sinked dynamics are abelian, then the "
+                "surface system has a unique stable endpoint."
+            ),
+            priority=5,
+        ),
+        kill_tests=[
+            LimaClaimSpec(
+                claim_kind="kill_test",
+                title=commutation_title,
+                statement_md=(
+                    f"Enumerate small boundary configurations and test whether the {repair_title.lower()} "
+                    "makes adjacent legal firings commute."
+                ),
+                priority=5,
+            ),
+            LimaClaimSpec(
+                claim_kind="kill_test",
+                title=f"{repair_key}_same_projection_different_future",
+                statement_md=(
+                    "Search for two repaired states with the same projected sinked configuration but different "
+                    "future behavior, which would show the repair is still insufficient."
+                ),
+                priority=5,
+            ),
+        ],
+        expected_failure_mode=(
+            "The added repair state may still be too weak to determine the exact bridge or may fail the bounded "
+            "commutation audit."
+        ),
+        literature_queries=[
+            f"{problem.get('title') or problem.get('slug') or 'problem'} chip-firing {repair_title.lower()}",
+            f"{problem.get('title') or problem.get('slug') or 'problem'} exact boundary transition repair state",
+        ],
+        formalization_targets=[
+            LimaObligationSpec(
+                obligation_kind="finite_check",
+                title=commutation_title,
+                statement_md=repair_focus or "Run bounded commutation checks on the repaired state.",
+                why_exists_md="A repaired bridge should survive small commutation audits before it is trusted.",
+                prove_or_kill_md="A failing audit kills this repair attempt quickly.",
+                priority=5,
+            ),
+            LimaObligationSpec(
+                obligation_kind="bridge_lemma",
+                title=exact_transition_title,
+                statement_md=(
+                    f"Write the exact transition law for the {repair_title.lower()} repair of the chip-firing bridge."
+                ),
+                lean_goal="forall s i, True",
+                why_exists_md="The repair only matters if it sharpens the bridge into an exact formal statement.",
+                prove_or_kill_md="If the repaired transition law cannot be written cleanly, this repair is not sufficient.",
+                priority=5,
+            ),
+            LimaObligationSpec(
+                obligation_kind="lean_goal",
+                title=endpoint_title,
+                statement_md=(
+                    f"Formalize that the {repair_title.lower()} repair preserves a unique stable endpoint."
+                ),
+                lean_goal="forall s, True",
+                why_exists_md="A viable repair should upgrade the frontier toward a genuine survivor.",
+                prove_or_kill_md="If the repaired state cannot preserve unique endpoint structure, abandon this repair.",
+                priority=4,
+            ),
+        ],
+        scores={
+            "compression_score": 4,
+            "fit_score": 5,
+            "novelty_score": 4,
+            "falsifiability_score": 5,
+            "bridgeability_score": 5,
+            "formalizability_score": 4,
+            "theorem_yield_score": 4,
+            "literature_novelty_score": 4,
+        },
+        repair_hypothesis_key=repair_key,
+        repair_parent_family_key=parent_family_key,
+        repair_strategy="companion_state_search",
+        repair_focus=repair_focus,
+    )
+
+
+def _chip_firing_repair_fallback(
+    *,
+    problem: dict[str, Any],
+    mode: LimaMode,
+    pressure_map: dict[str, Any],
+    top_frontier: dict[str, Any] | None,
+    repair_loop: dict[str, Any],
+) -> LimaGenerationResponse:
+    hypothesis_keys = list(repair_loop.get("next_hypothesis_keys") or [])
+    hypotheses = [
+        _repair_hypothesis_by_key(repair_loop, key)
+        for key in hypothesis_keys
+    ]
+    hypotheses = [hypothesis for hypothesis in hypotheses if isinstance(hypothesis, dict)]
+    if not hypotheses:
+        hypotheses = [
+            hypothesis
+            for hypothesis in repair_loop.get("hypotheses") or []
+            if isinstance(hypothesis, dict)
+        ][:2]
+    universes = [
+        _chip_firing_repair_universe(
+            problem=problem,
+            top_frontier=top_frontier,
+            hypothesis=hypothesis,
+        )
+        for hypothesis in hypotheses[:3]
+    ]
+    attempted = int(repair_loop.get("attempts_used") or 0)
+    budget = int(repair_loop.get("attempt_budget") or 0)
+    return LimaGenerationResponse(
+        frontier_summary_md=(
+            f"{problem.get('title') or problem.get('slug') or 'This problem'} is still centered on the chip-firing "
+            "frontier, but Lima has switched from repeating the same bridge story to enumerating concrete repaired "
+            "state models that could close the missing companion structure."
+        ),
+        pressure_map=pressure_map,
+        run_summary_md=(
+            f"Lima {mode} repair loop is active: it is testing explicit companion-state repairs for the "
+            f"chip-firing bridge ({attempted}/{budget} prior repair attempt(s) recorded)."
+        ),
+        universes=universes,
+        policy_notes=[
+            "Repair loop is active for the dominant chip-firing frontier.",
+            "Each emitted universe is a concrete repaired-state attempt, not another scalar-only summary.",
+        ],
+    )
+
+
 def _generic_chip_firing_fallback(
     *,
     problem: dict[str, Any],
@@ -803,6 +1033,11 @@ def _local_generation(
     stagnation = pressure_map.get("stagnation_controller") if isinstance(pressure_map, dict) else {}
     if "collatz" not in problem_slug and "collatz" not in problem_title.lower():
         top_frontier = _best_generic_frontier_universe(current_universes or [], pressure_map)
+        repair_loop = (
+            stagnation.get("repair_loop")
+            if isinstance(stagnation, dict) and isinstance(stagnation.get("repair_loop"), dict)
+            else {}
+        )
         frontier_blob = " ".join(
             [
                 str((top_frontier or {}).get("title") or ""),
@@ -812,6 +1047,25 @@ def _local_generation(
                 str((top_frontier or {}).get("why_problem_is_easy_here") or ""),
             ]
         ).lower()
+        if (
+            top_frontier
+            and isinstance(repair_loop, dict)
+            and repair_loop.get("active")
+            and str(repair_loop.get("target_family_key") or "") == str(top_frontier.get("family_key") or "")
+            and (
+                "chip" in frontier_blob
+                or "sandpile" in frontier_blob
+                or "sink" in frontier_blob
+                or _looks_like_boundary_dissipation_problem(problem)
+            )
+        ):
+            return _chip_firing_repair_fallback(
+                problem=problem,
+                mode=mode,
+                pressure_map=pressure_map,
+                top_frontier=top_frontier,
+                repair_loop=repair_loop,
+            )
         if (
             top_frontier
             and _family_constraint_action(pressure_map, str(top_frontier.get("family_key") or ""))
@@ -1431,6 +1685,28 @@ async def run_lima(
                             },
                         }
                     )
+        for universe in universes:
+            dumped = universe.model_dump(mode="json")
+            repair_key = str(dumped.get("repair_hypothesis_key") or "")
+            if not repair_key:
+                continue
+            artifacts.append(
+                {
+                    "universe_title": universe.title,
+                    "artifact_kind": "repair_attempt",
+                    "content": {
+                        "repair_hypothesis_key": repair_key,
+                        "repair_parent_family_key": dumped.get("repair_parent_family_key"),
+                        "repair_strategy": dumped.get("repair_strategy"),
+                        "repair_focus": dumped.get("repair_focus"),
+                        "formalization_targets": [
+                            target.get("title")
+                            for target in dumped.get("formalization_targets") or []
+                            if isinstance(target, dict)
+                        ],
+                    },
+                }
+            )
         run_id = lima_db.commit_run(
             problem_id=problem_id,
             trigger_kind=trigger_kind,

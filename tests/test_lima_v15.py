@@ -12,6 +12,7 @@ from orchestrator.lima_db import LimaDatabase, _canonical_hash
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
 from orchestrator.lima_meta import analyze_and_update_policy, compute_stagnation_controller
 from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, safe_json_loads
+from orchestrator.lima_presenter import _repair_loop_summary
 import orchestrator.lima_obligations as lima_obligations_mod
 from orchestrator.lima_obligations import (
     AristotleFormalBackend,
@@ -641,6 +642,82 @@ def test_stagnation_controller_detects_repeated_frontier_and_blocker() -> None:
     assert controller["top_family_key"] == "chip_firing_boundary_sinks"
     assert controller["dominant_blocker"] == "underparameterized_state"
     assert "height_deficit_lift" in controller["avoid_family_keys"]
+    assert controller["repair_loop"]["active"] is True
+    assert controller["repair_loop"]["strategy"] == "companion_state_search"
+    assert controller["repair_loop"]["target_family_key"] == "chip_firing_boundary_sinks"
+    assert controller["repair_loop"]["next_hypothesis_keys"][:2] == [
+        "boundary_debt_ledger",
+        "boundary_context_tag",
+    ]
+
+
+def test_stagnation_controller_marks_already_tried_repairs() -> None:
+    runs = []
+    for idx in range(4):
+        output = {
+            "universes": [
+                {
+                    "title": "Chip-Firing with Boundary Sinks",
+                    "family_key": "chip_firing_boundary_sinks",
+                }
+            ]
+        }
+        if idx == 0:
+            output["universes"].insert(
+                0,
+                {
+                    "title": "Boundary Debt Ledger Repair",
+                    "family_key": "chip_firing_boundary_sinks_boundary_debt_ledger",
+                    "repair_hypothesis_key": "boundary_debt_ledger",
+                },
+            )
+        runs.append(
+            {
+                "id": f"run-repair-{idx}",
+                "response_json": {
+                    "output": output,
+                    "rupture_reports": [
+                        {
+                            "universe_title": "Chip-Firing with Boundary Sinks",
+                            "attacks": [
+                                {
+                                    "failure_type": "underparameterized_state",
+                                    "confidence": 0.7,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+
+    controller = compute_stagnation_controller(
+        runs=runs,
+        families=[
+            {
+                "family_key": "chip_firing_boundary_sinks",
+                "formal_win_count": 0,
+                "survival_count": 0,
+                "repeat_failure_count": 0,
+                "last_failure_type": "",
+            }
+        ],
+        fractures=[
+            {"failure_type": "underparameterized_state"},
+            {"failure_type": "underparameterized_state"},
+            {"failure_type": "underparameterized_state"},
+        ],
+        obligations=[],
+    )
+
+    tried = {
+        hypothesis["key"]: hypothesis["status"]
+        for hypothesis in controller["repair_loop"]["hypotheses"]
+    }
+    assert controller["repair_loop"]["attempts_used"] == 1
+    assert tried["boundary_debt_ledger"] == "tried"
+    assert "boundary_debt_ledger" not in controller["repair_loop"]["next_hypothesis_keys"]
+    assert controller["repair_loop"]["next_hypothesis_keys"][0] == "boundary_context_tag"
 
 
 def test_local_generation_uses_companion_mutation_when_stagnation_demands_it() -> None:
@@ -683,6 +760,143 @@ def test_local_generation_uses_companion_mutation_when_stagnation_demands_it() -
         target.title == "defect_augmented_transition_law"
         for target in universe.formalization_targets
     )
+
+
+def test_local_generation_emits_chip_firing_repair_universes_when_repair_loop_is_active() -> None:
+    generated = _local_generation(
+        problem={
+            "title": "Synthesized Problem 2",
+            "slug": "synthesized_problem_2",
+            "statement_md": (
+                "Boundary spill should stabilize to the same final state regardless of legal firing order."
+            ),
+            "domain": "discrete_dynamics",
+        },
+        mode="forge",
+        pressure_map={
+            "search_constraints": [],
+            "stagnation_controller": {
+                "active": True,
+                "dominant_blocker": "underparameterized_state",
+                "repair_loop": {
+                    "active": True,
+                    "strategy": "companion_state_search",
+                    "target_family_key": "chip_firing_boundary_sinks",
+                    "failure_type": "underparameterized_state",
+                    "attempt_budget": 4,
+                    "attempts_used": 1,
+                    "attempts_remaining": 3,
+                    "next_hypothesis_keys": ["boundary_context_tag", "sink_parity_cocycle"],
+                    "hypotheses": [
+                        {
+                            "key": "boundary_debt_ledger",
+                            "title": "Boundary debt ledger",
+                            "status": "tried",
+                            "description": "Track sink loss as a companion coordinate.",
+                            "check_focus": "Look for exact local bridge updates.",
+                        },
+                        {
+                            "key": "boundary_context_tag",
+                            "title": "Boundary context tag",
+                            "status": "queued",
+                            "description": "Remember which local wall context is active.",
+                            "check_focus": "Run small commutation checks with a tagged boundary state.",
+                        },
+                        {
+                            "key": "sink_parity_cocycle",
+                            "title": "Sink parity cocycle",
+                            "status": "queued",
+                            "description": "Use a parity cocycle to repair the chip-firing bridge.",
+                            "check_focus": "Test if the cocycle restores exact endpoint projection.",
+                        },
+                    ],
+                },
+            },
+        },
+        literature_refresh={},
+        current_universes=[
+            {
+                "title": "Chip-Firing with Boundary Sinks",
+                "family_key": "chip_firing_boundary_sinks",
+                "universe_status": "promising",
+                "branch_of_math": "chip-firing and abelian sandpiles",
+                "solved_world": "Boundary loss becomes sinked chip-firing.",
+                "why_problem_is_easy_here": "Abelian stabilization should explain order independence.",
+                "core_story_md": "Boundary dissipation becomes sink completion.",
+                "fit_score": 4.0,
+                "compression_score": 4.0,
+                "formalizability_score": 4.0,
+                "bridgeability_score": 4.0,
+            }
+        ],
+    )
+
+    family_keys = [universe.family_key for universe in generated.universes]
+    repair_keys = [getattr(universe, "repair_hypothesis_key", "") for universe in generated.universes]
+
+    assert family_keys == [
+        "chip_firing_boundary_sinks_boundary_context_tag",
+        "chip_firing_boundary_sinks_sink_parity_cocycle",
+    ]
+    assert repair_keys == ["boundary_context_tag", "sink_parity_cocycle"]
+    assert all(universe.repair_strategy == "companion_state_search" for universe in generated.universes)
+    assert all(
+        any("commutation" in target.title for target in universe.formalization_targets)
+        for universe in generated.universes
+    )
+
+
+def test_repair_loop_summary_surfaces_recent_attempt_artifacts() -> None:
+    state = {
+        "pressure_map_json": {
+            "stagnation_controller": {
+                "repair_loop": {
+                    "active": True,
+                    "strategy": "companion_state_search",
+                    "target_family_key": "chip_firing_boundary_sinks",
+                    "failure_type": "underparameterized_state",
+                    "attempt_budget": 4,
+                    "attempts_used": 2,
+                    "attempts_remaining": 2,
+                    "summary_md": "Lima is trying explicit repaired-state hypotheses.",
+                    "next_hypothesis_keys": ["sink_parity_cocycle"],
+                    "hypotheses": [
+                        {
+                            "key": "boundary_debt_ledger",
+                            "title": "Boundary debt ledger",
+                            "status": "tried",
+                            "description": "Track sink loss directly.",
+                            "check_focus": "Verify commutation on small examples.",
+                        },
+                        {
+                            "key": "sink_parity_cocycle",
+                            "title": "Sink parity cocycle",
+                            "status": "queued",
+                            "description": "Repair missing parity information.",
+                            "check_focus": "Check endpoint projection after repairs.",
+                        },
+                    ],
+                }
+            }
+        }
+    }
+    artifacts = [
+        {
+            "artifact_kind": "repair_attempt",
+            "content_json": {
+                "repair_hypothesis_key": "boundary_debt_ledger",
+                "repair_focus": "Audit the boundary debt ledger on small commutation cases.",
+            },
+        }
+    ]
+
+    summary = _repair_loop_summary(state, artifacts)
+
+    assert summary["active"] is True
+    assert summary["headline"] == "Repair loop 2/4"
+    assert summary["next_hypothesis_keys"] == ["sink_parity_cocycle"]
+    assert summary["recent_attempts"][0]["key"] == "boundary_debt_ledger"
+    assert "Audit the boundary debt ledger" in summary["recent_attempts"][0]["focus"]
 
 
 def test_lima_suppresses_repeated_weakened_handoff_without_material_delta(tmp_path: Path) -> None:

@@ -151,6 +151,69 @@
     <p class="mt-2 text-sm text-zinc-400">{{ lima_workspace_progress.caption }}</p>
   </section>
 
+  {% if lima_repair_loop.active %}
+  <section aria-label="Repair loop" class="rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-5">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-cyan-200">Repair loop active</p>
+        <h2 class="mt-2 font-display text-xl font-semibold text-zinc-100">{{ lima_repair_loop.headline }}</h2>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono text-cyan-100/80">
+        <span class="rounded-full bg-zinc-950/60 px-2 py-1 ring-1 ring-cyan-500/20">{{ lima_repair_loop.target_family_key }}</span>
+        <span class="rounded-full bg-zinc-950/60 px-2 py-1 ring-1 ring-cyan-500/20">{{ lima_repair_loop.failure_type }}</span>
+        <span class="rounded-full bg-zinc-950/60 px-2 py-1 ring-1 ring-cyan-500/20">{{ lima_repair_loop.strategy }}</span>
+      </div>
+    </div>
+    <p class="mt-3 text-sm leading-relaxed text-zinc-300">{{ lima_repair_loop.body }}</p>
+    <div class="mt-4 grid gap-3 sm:grid-cols-3">
+      <article class="rounded-xl border border-cyan-500/15 bg-zinc-950/40 p-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Attempts</p>
+        <p class="mt-2 text-2xl font-semibold text-zinc-100">{{ lima_repair_loop.attempts_used }} / {{ lima_repair_loop.attempt_budget }}</p>
+        <p class="mt-2 text-xs text-zinc-400">{{ lima_repair_loop.attempts_remaining }} repair slot{% if lima_repair_loop.attempts_remaining != 1 %}s{% endif %} left before a harder pivot.</p>
+      </article>
+      <article class="rounded-xl border border-cyan-500/15 bg-zinc-950/40 p-4 sm:col-span-2">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Next hypotheses</p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          {% for key in lima_repair_loop.next_hypothesis_keys %}
+          <span class="rounded-full bg-cyan-500/10 px-2.5 py-1 text-[11px] font-mono text-cyan-100 ring-1 ring-cyan-500/20">{{ key }}</span>
+          {% else %}
+          <span class="text-xs text-zinc-500">No fresh repair queued yet. Lima will reuse the strongest remaining repair candidate.</span>
+          {% endfor %}
+        </div>
+      </article>
+    </div>
+    <div class="mt-4 grid gap-3 lg:grid-cols-2">
+      {% for hypothesis in lima_repair_loop.hypotheses %}
+      <article class="rounded-xl border {% if hypothesis.queued_next %}border-cyan-500/25 bg-cyan-950/10{% elif hypothesis.status == 'tried' %}border-zinc-800/80 bg-zinc-950/40{% else %}border-zinc-800/80 bg-zinc-900/40{% endif %} p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <p class="text-sm font-semibold text-zinc-100">{{ hypothesis.title }}</p>
+          <span class="rounded-full bg-zinc-950/70 px-2 py-0.5 text-[10px] font-mono text-zinc-400 ring-1 ring-zinc-800/80">{{ hypothesis.status }}</span>
+          {% if hypothesis.queued_next %}
+          <span class="rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-100 ring-1 ring-cyan-500/20">queued next</span>
+          {% endif %}
+        </div>
+        <p class="mt-2 text-xs font-mono text-zinc-500">{{ hypothesis.key }}</p>
+        <p class="mt-2 text-sm leading-relaxed text-zinc-300">{{ hypothesis.description }}</p>
+        <p class="mt-3 text-xs leading-relaxed text-zinc-400">{{ hypothesis.focus }}</p>
+      </article>
+      {% endfor %}
+    </div>
+    {% if lima_repair_loop.recent_attempts %}
+    <div class="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
+      <p class="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Recent repair attempts</p>
+      <div class="mt-3 space-y-2">
+        {% for attempt in lima_repair_loop.recent_attempts %}
+        <div class="flex flex-wrap items-center gap-2 text-sm text-zinc-300">
+          <span class="rounded-full bg-zinc-900/80 px-2 py-0.5 text-[10px] font-mono text-zinc-400 ring-1 ring-zinc-800/80">{{ attempt.key }}</span>
+          <span class="text-zinc-400">{{ attempt.focus }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section aria-label="Problem subsets">
     <h2 class="mb-4 flex items-center gap-2 font-display text-lg font-semibold text-zinc-200">
       <span class="h-px max-w-12 flex-1 bg-gradient-to-r from-cyan-500 to-transparent"></span>
