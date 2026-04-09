@@ -18,8 +18,8 @@ set +a
 : "${LLM_API_KEY:?Set LLM_API_KEY in .env}"
 : "${ARISTOTLE_API_KEY:?Set ARISTOTLE_API_KEY in .env}"
 
-LLM_BASE_URL="${LLM_BASE_URL:-https://api.moonshot.ai/v1}"
-LLM_MODEL="${LLM_MODEL:-kimi-k2-turbo-preview}"
+LLM_BASE_URL="${LLM_BASE_URL:-https://api.us-west-2.modal.direct/v1}"
+LLM_MODEL="${LLM_MODEL:-zai-org/GLM-5.1-FP8}"
 DATABASE_PATH="${DATABASE_PATH:-/data/orchestrator.db}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/data/workspaces}"
 WORKSPACE_LEGACY_DIR="${WORKSPACE_LEGACY_DIR:-/data/workspace}"

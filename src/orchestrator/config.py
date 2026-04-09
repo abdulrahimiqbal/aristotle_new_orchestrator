@@ -115,6 +115,10 @@ ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS = _bool_env(
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.us-west-2.modal.direct/v1").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL", "zai-org/GLM-5.1-FP8")
+LLM_MAX_TOKENS = _int_env("LLM_MAX_TOKENS", 1200)
+LLM_SUMMARIZE_MAX_TOKENS = _int_env("LLM_SUMMARIZE_MAX_TOKENS", 320)
+LLM_MAX_RETRIES_5XX = _int_env("LLM_MAX_RETRIES_5XX", 3)
+LLM_5XX_BACKOFF_BASE_SEC = _float_env("LLM_5XX_BACKOFF_BASE_SEC", 2.0)
 
 # Mathlib knowledge (LeanSearch — same HTTP API as LeanSearchClient)
 # MATHLIB_KNOWLEDGE_MODE: off | leansearch

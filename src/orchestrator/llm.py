@@ -42,6 +42,35 @@ _llm_http_lock = asyncio.Lock()
 _llm_next_allowed_monotonic = 0.0
 
 
+def _extract_message_text(message: Any) -> str:
+    if isinstance(message, str):
+        return message.strip()
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            text = part.strip()
+            if text:
+                parts.append(text)
+            continue
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+            continue
+        nested = part.get("content")
+        if isinstance(nested, str) and nested.strip():
+            parts.append(nested.strip())
+    return "\n".join(parts).strip()
+
+
 async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 120.0) -> dict[str, Any]:
     """POST /chat/completions with global throttle, per-wave 429 backoff, and extra waves.
 
@@ -57,6 +86,8 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
     extra_waves = max(0, int(app_config.LLM_EXTRA_429_WAVES))
     total_waves = 1 + extra_waves
     wave_gap = max(0.0, float(app_config.LLM_429_WAVE_GAP_SEC))
+    max_5xx_retries = max(0, int(app_config.LLM_MAX_RETRIES_5XX))
+    base_5xx_sleep = max(0.5, float(app_config.LLM_5XX_BACKOFF_BASE_SEC))
 
     async with _llm_http_lock:
         now = time.monotonic()
@@ -70,8 +101,21 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
                 await asyncio.sleep(wave_gap)
 
             for attempt in range(max_attempts):
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(url, headers=headers, json=payload)
+                transport_attempts = 1 + max_5xx_retries
+                for transport_attempt in range(transport_attempts):
+                    try:
+                        async with httpx.AsyncClient(timeout=timeout) as client:
+                            response = await client.post(url, headers=headers, json=payload)
+                    except httpx.TransportError:
+                        if transport_attempt >= max_5xx_retries:
+                            raise
+                        sleep_s = min(
+                            30.0,
+                            base_5xx_sleep * (2**transport_attempt) + random.uniform(0.0, 0.5),
+                        )
+                        await asyncio.sleep(sleep_s)
+                        continue
+
                     last_response = response
 
                     if response.status_code == 429:
@@ -85,12 +129,22 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
                             sleep_s = min(120.0, (2**attempt) + random.uniform(0.0, 1.0))
                         sleep_s = max(1.0, min(180.0, sleep_s))
                         await asyncio.sleep(sleep_s)
+                        break
+
+                    if response.status_code in {500, 502, 503, 504} and transport_attempt < max_5xx_retries:
+                        sleep_s = min(
+                            30.0,
+                            base_5xx_sleep * (2**transport_attempt) + random.uniform(0.0, 0.5),
+                        )
+                        await asyncio.sleep(sleep_s)
                         continue
 
                     response.raise_for_status()
                     data = response.json()
                     _llm_next_allowed_monotonic = time.monotonic() + spacing
                     return data
+                else:
+                    continue
 
         if last_response is not None:
             detail = (
@@ -123,11 +177,37 @@ async def invoke_llm(
             {"role": "user", "content": user},
         ],
         "temperature": temperature,
+        "max_tokens": max(64, int(app_config.LLM_MAX_TOKENS)),
     }
     if use_json:
         payload["response_format"] = {"type": "json_object"}
-    data = await _post_chat_completions(payload, timeout=120.0)
-    return str(data["choices"][0]["message"]["content"])
+    try:
+        data = await _post_chat_completions(payload, timeout=120.0)
+    except httpx.HTTPStatusError as exc:
+        # Some OpenAI-compatible providers reject response_format=json_object even
+        # though the rest of the chat completions contract works. Retry once
+        # without response_format so provider swaps do not require a hard failure.
+        detail = ""
+        if exc.response is not None:
+            try:
+                detail = exc.response.text.lower()
+            except Exception:
+                detail = ""
+        if (
+            use_json
+            and exc.response is not None
+            and exc.response.status_code in (400, 404, 415, 422)
+            and (
+                "response_format" in detail
+                or "json_object" in detail
+                or "unsupported response format" in detail
+            )
+        ):
+            payload.pop("response_format", None)
+            data = await _post_chat_completions(payload, timeout=120.0)
+        else:
+            raise
+    return _extract_message_text(data["choices"][0]["message"])
 
 
 async def _call_llm(system: str, user: str) -> str:
@@ -684,10 +764,11 @@ async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
                     {"role": "user", "content": user},
                 ],
                 "temperature": 0.2,
+                "max_tokens": max(64, int(app_config.LLM_SUMMARIZE_MAX_TOKENS)),
             },
             timeout=60.0,
         )
-        text = str(data["choices"][0]["message"]["content"]).strip()
+        text = _extract_message_text(data["choices"][0]["message"])
         return text or _summarize_fallback(raw_output)
     except (httpx.HTTPError, KeyError, TypeError):
         return _summarize_fallback(raw_output)

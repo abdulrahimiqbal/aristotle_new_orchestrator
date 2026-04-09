@@ -378,6 +378,116 @@ def _safety_summary(
     }
 
 
+def _workspace_progress(
+    universes: list[dict[str, Any]],
+    obligations: list[dict[str, Any]],
+    handoffs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    resolved_universe_statuses = {"formalized", "handed_off", "dead"}
+    in_flight_obligation_statuses = {"queued", "queued_local", "running_local", "queued_formal_review"}
+    resolved_universes = sum(
+        1
+        for universe in universes
+        if str(universe.get("universe_status") or "") in resolved_universe_statuses
+    )
+    resolved_obligations = sum(
+        1
+        for obligation in obligations
+        if str(obligation.get("status") or "") not in in_flight_obligation_statuses
+    )
+    reviewed_handoffs = sum(
+        1 for handoff in handoffs if str(handoff.get("status") or "") != "pending"
+    )
+    total = len(universes) + len(obligations) + len(handoffs)
+    resolved = resolved_universes + resolved_obligations + reviewed_handoffs
+    progress_percent = int((100 * resolved) / total) if total else 0
+    return {
+        "label": "Research checkpoints resolved",
+        "resolved": resolved,
+        "total": total,
+        "progress_percent": progress_percent,
+        "open": max(0, total - resolved),
+        "resolved_universes": resolved_universes,
+        "resolved_obligations": resolved_obligations,
+        "reviewed_handoffs": reviewed_handoffs,
+        "caption": (
+            f"{resolved_universes} candidate world(s), {resolved_obligations} obligation(s), "
+            f"and {reviewed_handoffs} handoff(s) have moved past their first gate."
+        ),
+    }
+
+
+def _problem_subsets(
+    *,
+    top_candidate: dict[str, Any],
+    top_blocker: dict[str, Any],
+    obligation_groups: list[dict[str, Any]],
+    steward_summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    needs_local = next(
+        (group for group in obligation_groups if group.get("key") == "needs_local"),
+        {"count": 0},
+    )
+    needs_human = next(
+        (group for group in obligation_groups if group.get("key") == "needs_human"),
+        {"count": 0},
+    )
+    closed = next(
+        (group for group in obligation_groups if group.get("key") == "closed"),
+        {"count": 0},
+    )
+    return [
+        {
+            "title": "Frontier candidate",
+            "status": _choice(top_candidate.get("status"), fallback="waiting"),
+            "summary": _choice(
+                top_candidate.get("title"),
+                fallback="No candidate frontier yet.",
+            ),
+            "detail": _choice(
+                top_candidate.get("why_it_matters"),
+                top_candidate.get("thesis"),
+                fallback="Run Lima to generate the first candidate world.",
+            ),
+            "tone": "positive",
+        },
+        {
+            "title": "Main blocker",
+            "status": _choice(top_blocker.get("label"), fallback="clear enough"),
+            "summary": _choice(top_blocker.get("title"), fallback="No dominant blocker"),
+            "detail": _choice(
+                top_blocker.get("body"),
+                fallback="No fracture or failed obligation is dominating the frontier right now.",
+            ),
+            "tone": "warning" if top_blocker.get("tone") in {"risk", "warning"} else "neutral",
+        },
+        {
+            "title": "Checks and reviews",
+            "status": f"{needs_local.get('count', 0)} local / {needs_human.get('count', 0)} human",
+            "summary": "Subproblems are being narrowed through obligation gates.",
+            "detail": (
+                f"{closed.get('count', 0)} obligation(s) are already closed; "
+                f"{needs_local.get('count', 0)} still need machine checks and "
+                f"{needs_human.get('count', 0)} still need review."
+            ),
+            "tone": "neutral",
+        },
+        {
+            "title": "Escalated survivors",
+            "status": f"{steward_summary.get('escalated_count', 0)} escalated",
+            "summary": _choice(
+                steward_summary.get("headline"),
+                fallback="The steward is filtering the queue before it reaches you.",
+            ),
+            "detail": _choice(
+                steward_summary.get("body"),
+                fallback="Only the strongest or most ambiguous packets should stay visible here.",
+            ),
+            "tone": "positive" if steward_summary.get("escalated_count", 0) else "neutral",
+        },
+    ]
+
+
 def _activity_feed(
     latest_run: dict[str, Any] | None,
     fractures: list[dict[str, Any]],
@@ -878,6 +988,13 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         top_candidate=top_candidate,
         top_blocker=top_blocker,
     )
+    workspace_progress = _workspace_progress(universes, obligations, handoffs)
+    problem_subsets = _problem_subsets(
+        top_candidate=top_candidate,
+        top_blocker=top_blocker,
+        obligation_groups=obligation_groups,
+        steward_summary=steward_view["summary"],
+    )
     primary_cta = _primary_cta(pending_handoffs, obligation_groups)
     if steward_view["summary"]["escalated_count"] > 0:
         primary_cta = {
@@ -931,6 +1048,8 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_candidate_cards": candidate_cards,
         "lima_top_blocker": top_blocker,
         "lima_safety_summary": safety_summary,
+        "lima_workspace_progress": workspace_progress,
+        "lima_problem_subsets": problem_subsets,
         "lima_activity_feed": activity_feed,
         "lima_obligation_groups": obligation_groups,
         "lima_literature_summary": literature_summary,
