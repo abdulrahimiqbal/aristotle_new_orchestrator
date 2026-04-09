@@ -375,6 +375,7 @@ def _lima_panel_context(
     lima_db.initialize()
     snapshot = lima_db.get_dashboard_snapshot(problem or app_config.LIMA_DEFAULT_PROBLEM)
     ui_ctx = build_lima_ui_context(snapshot, lima_flash=lima_flash)
+    selected_problem = dict(snapshot.get("problem") or {})
     return {
         "selected": None,
         "operator": _operator_runtime_context(),
@@ -382,6 +383,8 @@ def _lima_panel_context(
         "shadow_view": False,
         "supershadow_view": False,
         "lima_view": True,
+        "lima_index_view": False,
+        "lima_selected_problem_slug": str(selected_problem.get("slug") or ""),
         "campaigns": db.get_all_campaigns(),
         **ui_ctx,
     }
@@ -447,7 +450,9 @@ def _lima_index_context(*, lima_flash: dict | None = None) -> dict:
         "supershadow_view": False,
         "lima_view": False,
         "lima_index_view": True,
+        "lima_selected_problem_slug": "",
         "campaigns": db.get_all_campaigns(),
+        "lima_problems": problems,
         "lima_flash": lima_flash,
         "lima_index_cards": cards,
         "lima_index_totals": totals,

@@ -49,6 +49,27 @@
       </div>
       <nav class="flex-1 overflow-y-auto p-3 space-y-1 custom-scroll">
         {% if not public_view %}
+        {% if lima_view or lima_index_view %}
+        <p class="px-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 mb-2">Lima workspace</p>
+        <a href="/lima"
+           class="block rounded-lg px-3 py-2.5 text-sm transition-all {% if lima_index_view %}bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200{% endif %}">
+          <span class="font-medium">All Lima problems</span>
+        </a>
+        {% if lima_problems %}
+        <div class="my-2 border-t border-zinc-800/80"></div>
+        <p class="px-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 mb-2">Problems</p>
+        {% for problem in lima_problems %}
+        <a href="/lima/{{ problem.slug }}"
+           class="block rounded-lg px-3 py-2.5 text-sm transition-all {% if lima_selected_problem_slug == problem.slug %}bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200{% endif %}">
+          <span class="line-clamp-2 font-medium">{{ problem.title }}</span>
+          <span class="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600">
+            <span class="{% if problem.status == 'active' %}text-emerald-400/90{% elif problem.status == 'paused' %}text-amber-400/90{% else %}text-zinc-500{% endif %}">{{ problem.status }}</span>
+            <span class="font-mono text-zinc-600">{{ problem.slug }}</span>
+          </span>
+        </a>
+        {% endfor %}
+        {% endif %}
+        {% else %}
         <p class="px-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 mb-2">Workspaces</p>
         <a href="/"
            class="block rounded-lg px-3 py-2.5 text-sm transition-all {% if not shadow_view and not supershadow_view and not lima_view %}bg-violet-500/15 text-violet-200 ring-1 ring-violet-500/40{% else %}text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200{% endif %}">
@@ -68,6 +89,8 @@
         </a>
         <div class="my-2 border-t border-zinc-800/80"></div>
         {% endif %}
+        {% endif %}
+        {% if not public_view and not (lima_view or lima_index_view) %}
         <p class="px-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 mb-2">{% if public_view %}This campaign{% else %}Campaigns{% endif %}</p>
         {% for c in campaigns %}
         <a href="{% if public_view %}/p/campaign/{{ c.id }}{% else %}/campaign/{{ c.id }}{% endif %}"
@@ -83,6 +106,7 @@
         {% endfor %}
         {% if not campaigns %}
         <p class="px-2 text-sm text-zinc-600 italic">No campaigns yet.</p>
+        {% endif %}
         {% endif %}
       </nav>
     </aside>
