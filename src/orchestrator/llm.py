@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 import re
 import time
@@ -27,6 +28,8 @@ from orchestrator.problem_map_util import (
     parse_problem_refs,
 )
 from orchestrator.research_packets import format_research_packet_markdown, parse_research_packet
+
+logger = logging.getLogger("orchestrator.llm")
 
 
 def _strip_json_fence(text: str) -> str:
@@ -71,7 +74,13 @@ def _extract_message_text(message: Any) -> str:
     return "\n".join(parts).strip()
 
 
-async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 120.0) -> dict[str, Any]:
+async def _post_chat_completions(
+    payload: dict[str, Any],
+    *,
+    timeout: float = 120.0,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> dict[str, Any]:
     """POST /chat/completions with global throttle, per-wave 429 backoff, and extra waves.
 
     Each *wave* runs up to ``LLM_MAX_RETRIES_429 + 1`` POST attempts; on 429 we sleep
@@ -79,8 +88,8 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
     we sleep ``LLM_429_WAVE_GAP_SEC`` and start another wave, up to ``1 + LLM_EXTRA_429_WAVES`` waves.
     """
     global _llm_next_allowed_monotonic
-    url = f"{app_config.LLM_BASE_URL}/chat/completions"
-    headers = {"Authorization": f"Bearer {app_config.LLM_API_KEY}"}
+    url = f"{(base_url or app_config.LLM_BASE_URL).rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key or app_config.LLM_API_KEY}"}
     spacing = max(0.0, float(app_config.LLM_MIN_SECONDS_BETWEEN_REQUESTS))
     max_attempts = max(1, int(app_config.LLM_MAX_RETRIES_429) + 1)
     extra_waves = max(0, int(app_config.LLM_EXTRA_429_WAVES))
@@ -161,6 +170,115 @@ async def _post_chat_completions(payload: dict[str, Any], *, timeout: float = 12
         raise httpx.HTTPError("LLM request failed after retries")
 
 
+def _llm_provider_chain(primary_model: str | None = None) -> list[dict[str, str]]:
+    providers = [
+        {
+            "name": "primary",
+            "base_url": app_config.LLM_BASE_URL,
+            "api_key": app_config.LLM_API_KEY,
+            "model": primary_model or app_config.LLM_MODEL,
+        }
+    ]
+    if app_config.LLM_BACKUP_BASE_URL and (app_config.LLM_BACKUP_MODEL or primary_model):
+        backup = {
+            "name": "backup",
+            "base_url": app_config.LLM_BACKUP_BASE_URL,
+            "api_key": app_config.LLM_BACKUP_API_KEY or "modal",
+            "model": app_config.LLM_BACKUP_MODEL or primary_model or app_config.LLM_MODEL,
+        }
+        if (
+            backup["base_url"] != providers[0]["base_url"]
+            or backup["model"] != providers[0]["model"]
+            or backup["api_key"] != providers[0]["api_key"]
+        ):
+            providers.append(backup)
+    return providers
+
+
+async def _post_chat_completions_for_provider(
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    api_key: str,
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    return await _post_chat_completions(
+        payload,
+        timeout=timeout,
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+    )
+
+
+async def _request_chat_with_provider_fallback(
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+    allow_response_format_retry: bool,
+    primary_model: str | None = None,
+) -> dict[str, Any]:
+    last_exc: Exception | None = None
+    providers = _llm_provider_chain(primary_model)
+    for idx, provider in enumerate(providers):
+        request_payload = dict(payload)
+        request_payload["model"] = provider["model"]
+        try:
+            return await _post_chat_completions_for_provider(
+                request_payload,
+                base_url=provider["base_url"],
+                api_key=provider["api_key"],
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as exc:
+            detail = ""
+            if exc.response is not None:
+                try:
+                    detail = exc.response.text.lower()
+                except Exception:
+                    detail = ""
+            if (
+                allow_response_format_retry
+                and exc.response is not None
+                and exc.response.status_code in (400, 404, 415, 422)
+                and (
+                    "response_format" in detail
+                    or "json_object" in detail
+                    or "unsupported response format" in detail
+                )
+            ):
+                request_payload.pop("response_format", None)
+                return await _post_chat_completions_for_provider(
+                    request_payload,
+                    base_url=provider["base_url"],
+                    api_key=provider["api_key"],
+                    timeout=timeout,
+                )
+            last_exc = exc
+            if idx + 1 < len(providers):
+                logger.warning(
+                    "Primary LLM provider failed; falling back to backup",
+                    extra={
+                        "provider": provider["name"],
+                        "status_code": exc.response.status_code if exc.response is not None else None,
+                        "next_provider": providers[idx + 1]["name"],
+                    },
+                )
+                continue
+            raise
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if idx + 1 < len(providers):
+                logger.warning(
+                    "Primary LLM transport failed; falling back to backup",
+                    extra={"provider": provider["name"], "next_provider": providers[idx + 1]["name"]},
+                )
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise httpx.HTTPError("LLM request failed before reaching any provider")
+
+
 async def invoke_llm(
     system: str,
     user: str,
@@ -181,32 +299,12 @@ async def invoke_llm(
     }
     if use_json:
         payload["response_format"] = {"type": "json_object"}
-    try:
-        data = await _post_chat_completions(payload, timeout=120.0)
-    except httpx.HTTPStatusError as exc:
-        # Some OpenAI-compatible providers reject response_format=json_object even
-        # though the rest of the chat completions contract works. Retry once
-        # without response_format so provider swaps do not require a hard failure.
-        detail = ""
-        if exc.response is not None:
-            try:
-                detail = exc.response.text.lower()
-            except Exception:
-                detail = ""
-        if (
-            use_json
-            and exc.response is not None
-            and exc.response.status_code in (400, 404, 415, 422)
-            and (
-                "response_format" in detail
-                or "json_object" in detail
-                or "unsupported response format" in detail
-            )
-        ):
-            payload.pop("response_format", None)
-            data = await _post_chat_completions(payload, timeout=120.0)
-        else:
-            raise
+    data = await _request_chat_with_provider_fallback(
+        payload,
+        timeout=120.0,
+        allow_response_format_retry=use_json,
+        primary_model=model or app_config.LLM_MODEL,
+    )
     return _extract_message_text(data["choices"][0]["message"])
 
 
@@ -756,7 +854,7 @@ async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
     user = raw_output[:cap]
 
     try:
-        data = await _post_chat_completions(
+        data = await _request_chat_with_provider_fallback(
             {
                 "model": app_config.LLM_MODEL,
                 "messages": [
@@ -767,6 +865,8 @@ async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
                 "max_tokens": max(64, int(app_config.LLM_SUMMARIZE_MAX_TOKENS)),
             },
             timeout=60.0,
+            allow_response_format_retry=False,
+            primary_model=app_config.LLM_MODEL,
         )
         text = _extract_message_text(data["choices"][0]["message"])
         return text or _summarize_fallback(raw_output)
