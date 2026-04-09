@@ -12,6 +12,7 @@ import json
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 from orchestrator import config as app_config
 from orchestrator.db import Database
@@ -200,6 +201,31 @@ def _clip(value: Any, limit: int = 1200) -> str:
     return str(value or "")[:limit]
 
 
+def _log_run_event(
+    lima_db: LimaDatabase,
+    *,
+    problem_id: str,
+    run_id: str,
+    stage: str,
+    event_kind: str,
+    payload: dict[str, Any] | None = None,
+    universe_id: str | None = None,
+    obligation_id: str | None = None,
+) -> None:
+    try:
+        lima_db.create_event(
+            problem_id=problem_id,
+            run_id=run_id,
+            stage=stage,
+            event_kind=event_kind,
+            payload=payload,
+            universe_id=universe_id,
+            obligation_id=obligation_id,
+        )
+    except Exception:
+        logger.exception("Lima event logging failed at stage %s", stage)
+
+
 def _mode(value: str | None) -> LimaMode:
     v = str(value or app_config.LIMA_DEFAULT_MODE or "balanced").strip().lower()
     if v not in {"wild", "stress", "forge", "balanced"}:
@@ -384,6 +410,7 @@ def build_pressure_map(
             "goal": "avoid premature collapse into one ontology class unless repeated obligations justify it",
             "classes": [
                 "coordinate_lift",
+                "graph_stabilization",
                 "rewrite_system",
                 "automaton",
                 "quotient",
@@ -489,15 +516,109 @@ def _looks_like_boundary_dissipation_problem(problem: dict[str, Any]) -> bool:
             str(problem.get("slug") or ""),
             str(problem.get("statement_md") or ""),
         ]
-    ).lower()
+    ).lower().replace("_", " ")
+    strong_patterns = (
+        ("boundary spill", "stable"),
+        ("boundary spill", "order independent"),
+        ("boundary spill", "legal firing order"),
+        ("one unit disappears off the boundary", "stable"),
+        ("one unit disappears off the boundary", "order independent"),
+    )
+    if any(all(part in blob for part in pattern) for pattern in strong_patterns):
+        return True
     signals = (
         "boundary",
         "stable",
         "disappears",
         "move at position",
         "final stable state",
+        "legal firing order",
+        "order independent",
     )
     return sum(1 for signal in signals if signal in blob) >= 3
+
+
+def _boundary_chip_firing_fit_score(frontier: dict[str, Any] | None) -> int:
+    if not frontier:
+        return 0
+    blob = " ".join(
+        [
+            str(frontier.get("title") or ""),
+            str(frontier.get("family_key") or ""),
+            str(frontier.get("branch_of_math") or ""),
+            str(frontier.get("solved_world") or ""),
+            str(frontier.get("why_problem_is_easy_here") or ""),
+            str(frontier.get("core_story_md") or ""),
+        ]
+    ).lower()
+    score = 0
+    if "chip_firing_boundary_sinks" in blob:
+        score += 8
+    if "atlas" in blob:
+        score -= 4
+    for marker in (
+        "chip-firing",
+        "chip firing",
+        "sandpile",
+        "sink",
+        "boundary spill",
+        "abelian",
+        "stabilization",
+        "toppling",
+        "path graph",
+    ):
+        if marker in blob:
+            score += 2
+    return score
+
+
+def _select_boundary_chip_firing_identity(
+    *,
+    problem: dict[str, Any],
+    top_frontier: dict[str, Any] | None,
+) -> dict[str, Any]:
+    candidate = {
+        "family_key": "chip_firing_boundary_sinks",
+        "title": "Chip-Firing with Boundary Sinks",
+        "branch_of_math": "chip-firing and abelian sandpiles",
+    }
+    candidate_fit = 20
+    top_fit = _boundary_chip_firing_fit_score(top_frontier)
+    top_family_key = str((top_frontier or {}).get("family_key") or "")
+    top_blob = " ".join(
+        [
+            str((top_frontier or {}).get("title") or ""),
+            str((top_frontier or {}).get("family_key") or ""),
+            str((top_frontier or {}).get("solved_world") or ""),
+        ]
+    ).lower()
+    preserve_top = bool(top_frontier) and (
+        top_family_key == candidate["family_key"]
+        or top_family_key.startswith(candidate["family_key"] + "_")
+        or top_fit >= candidate_fit
+        or (
+            top_fit >= 12
+            and any(marker in top_blob for marker in ("chip", "sandpile", "sink", "abelian"))
+        )
+    )
+    override = bool(top_frontier) and not preserve_top
+    return {
+        **candidate,
+        "selected_family_key": candidate["family_key"],
+        "selected_title": candidate["title"],
+        "problem_aware_family_selected": True,
+        "prior_frontier_family_key": top_family_key,
+        "prior_frontier_title": str((top_frontier or {}).get("title") or ""),
+        "prior_frontier_fit_score": top_fit,
+        "candidate_fit_score": candidate_fit,
+        "overrode_prior_frontier": override,
+        "selection_reason": (
+            "preserved_problem_native_frontier"
+            if preserve_top
+            else "selected_problem_native_chip_firing_family"
+        ),
+        "problem_slug": str(problem.get("slug") or ""),
+    }
 
 
 def _repair_hypothesis_by_key(
@@ -737,9 +858,13 @@ def _generic_chip_firing_fallback(
     pressure_map: dict[str, Any],
     top_frontier: dict[str, Any] | None,
 ) -> LimaGenerationResponse:
-    family_key = str((top_frontier or {}).get("family_key") or "chip_firing_boundary_sinks")
-    title = str((top_frontier or {}).get("title") or "Chip-Firing with Boundary Sinks")
-    branch = str((top_frontier or {}).get("branch_of_math") or "chip-firing and abelian sandpiles")
+    selection_meta = _select_boundary_chip_firing_identity(
+        problem=problem,
+        top_frontier=top_frontier,
+    )
+    family_key = str(selection_meta["family_key"])
+    title = str(selection_meta["title"])
+    branch = str(selection_meta["branch_of_math"])
     return LimaGenerationResponse(
         frontier_summary_md=(
             f"{problem.get('title') or problem.get('slug') or 'This problem'} currently points toward a "
@@ -756,61 +881,78 @@ def _generic_chip_firing_fallback(
             LimaUniverseSpec(
                 title=title,
                 family_key=family_key,
-                family_kind="adjacent",
+                family_kind=(
+                    "new"
+                    if not top_frontier or selection_meta.get("overrode_prior_frontier")
+                    else "adjacent"
+                ),
                 branch_of_math=branch,
                 solved_world=(
-                    "Boundary loss is modeled as chip-firing into sinks, so stabilization and order-independence "
-                    "should be explained by abelian firing rather than by a fragile scalar potential."
+                    "The surface dynamics are modeled on a finite path graph with absorbing boundary sinks, so legal "
+                    "moves become chip-firing topplings and stabilization becomes an abelian-network question."
                 ),
                 why_problem_is_easy_here=(
-                    "Sinked chip-firing has a natural stabilization story. The real work is to bridge the boundary "
-                    "spill dynamics exactly into that abelian model and prove no state information was lost."
+                    "Path-graph chip-firing exposes exact local toppling operators, a quadratic potential for "
+                    "termination, and a concrete same-endpoint hypothesis for order-independent stabilization."
                 ),
                 core_story_md=(
-                    "Lima keeps the strongest surviving frontier but changes the burden of proof: show that the "
-                    "boundary spill system is exactly a sinked chip-firing process, or isolate the missing state "
-                    "needed to make the bridge exact."
+                    "Lima uses a problem-native boundary-sinks ontology instead of a generic atlas. The live burden "
+                    "is to verify exact bridge steps, bounded commutation, quadratic-potential descent, termination, "
+                    "and unique stabilized endpoints honestly on small path graphs."
                 ),
                 core_objects=[
                     LimaObjectSpec(
                         object_kind="state_space",
-                        name="BoundaryChipConfiguration",
-                        description_md="A chip configuration on a finite line with absorbing sink nodes beyond the boundary.",
+                        name="BoundaryPathState",
+                        description_md="A chip configuration on a finite path graph whose missing external neighbors are absorbing left/right sinks.",
                         formal_shape="Fin N -> Nat",
-                        payload={"boundary_behavior": "absorbing_sinks"},
+                        payload={"graph_kind": "path_with_boundary_sinks", "boundary_behavior": "absorbing_sinks"},
                     ),
                     LimaObjectSpec(
                         object_kind="operator",
-                        name="FireInteriorOrBoundary",
-                        description_md="A firing operator that matches interior redistribution and sink loss at the boundaries.",
-                        formal_shape="State -> Fin N -> State",
-                        payload={},
+                        name="BoundarySpillTopple",
+                        description_md="A toppling operator that removes two chips from a legal site, sends one to each path neighbor, and routes off-path mass into the matching sink.",
+                        formal_shape="BoundaryPathState -> Fin N -> BoundaryPathState",
+                        payload={"operator_kind": "chip_firing_with_sinks"},
                     ),
                     LimaObjectSpec(
                         object_kind="bridge",
-                        name="BoundarySpillToSinkedFiring",
-                        description_md="The exact translation from surface states and legal moves into the sinked chip-firing model.",
-                        formal_shape="SurfaceState -> BoundaryChipConfiguration",
-                        payload={},
+                        name="BoundarySpillToSinkedChipFiring",
+                        description_md="The exact embedding of a surface state into chip-firing on a path graph with explicit left/right sink coordinates.",
+                        formal_shape="SurfaceState -> (Nat × BoundaryPathState × Nat)",
+                        payload={"tracks_sink_mass": True},
+                    ),
+                    LimaObjectSpec(
+                        object_kind="potential",
+                        name="QuadraticSinkPotential",
+                        description_md="A quadratic potential with weights i*(N+1-i) that should strictly decrease under every legal firing.",
+                        formal_shape="BoundaryPathState -> Nat",
+                        payload={"weight_shape": "i*(N+1-i)", "expected_drop_per_firing": 2},
                     ),
                 ],
                 laws=[
                     LimaClaimSpec(
                         claim_kind="law",
-                        title="Local firings commute after sink completion",
-                        statement_md="Interior and boundary firings commute once sink absorption is made explicit in the completed state model.",
+                        title="Local firings commute on the path graph with sinks",
+                        statement_md="Interior and boundary firings commute once the path graph is completed with explicit boundary sinks.",
+                        priority=5,
+                    ),
+                    LimaClaimSpec(
+                        claim_kind="law",
+                        title="Quadratic potential decreases under legal firings",
+                        statement_md="The quadratic sink potential decreases by a fixed positive amount on every legal toppling.",
                         priority=5,
                     )
                 ],
                 backward_translation=[
-                    "Embed a surface state into a finite chip configuration with explicit boundary sinks.",
-                    "Translate each legal move into one chip-firing step and project stabilized sinked states back to 0/1 surface states.",
+                    "Embed a surface state into a finite path graph with explicit left and right sinks.",
+                    "Translate each legal move into one sinked toppling step and project stabilized chip-firing states back to 0/1 surface states.",
                 ],
                 bridge_lemmas=[
                     LimaClaimSpec(
                         claim_kind="bridge_lemma",
                         title="Boundary spill move equals sinked firing",
-                        statement_md="Each legal boundary-spill move is exactly one firing in the sink-completed chip-firing model.",
+                        statement_md="Each legal boundary-spill move is exactly one chip-firing step on the completed path graph with boundary sinks.",
                         formal_statement="forall s i, legalMove s i -> bridge(step s i) = fire (bridge s) i",
                         priority=5,
                     )
@@ -818,51 +960,86 @@ def _generic_chip_firing_fallback(
                 conditional_theorem=LimaClaimSpec(
                     claim_kind="conditional_theorem",
                     title="Sink completion implies unique stabilization",
-                    statement_md="If the bridge to sinked chip-firing is exact and legal firings remain abelian, every legal sequence terminates and has the same stable endpoint.",
+                    statement_md="If the path-graph bridge is exact, local firings are abelian, and the quadratic potential decreases, every legal sequence terminates and reaches the same stable endpoint.",
                     priority=5,
                 ),
                 kill_tests=[
                     LimaClaimSpec(
                         claim_kind="kill_test",
-                        title="Boundary firing commutation audit",
-                        statement_md="Search small boundary configurations for a pair of legal moves that fail to commute after sink completion.",
+                        title="firing_commutation_local",
+                        statement_md="Search bounded path-graph states for a pair of legal firings that fail to commute.",
                         priority=5,
                     ),
                     LimaClaimSpec(
                         claim_kind="kill_test",
-                        title="Bridge information-loss audit",
-                        statement_md="Detect whether two distinct surface states collapse to the same sinked state while producing different stabilization behavior.",
+                        title="local_confluence_or_abelianity",
+                        statement_md="Enumerate bounded states and check whether all legal firing orders reach the same stabilized endpoint.",
+                        priority=5,
+                    ),
+                    LimaClaimSpec(
+                        claim_kind="kill_test",
+                        title="quadratic_potential_descent",
+                        statement_md="Check bounded legal firings for any violation of strict quadratic-potential descent.",
                         priority=5,
                     ),
                 ],
                 expected_failure_mode=(
-                    "The sink completion may still hide boundary information, or the exact commutation law may fail "
-                    "unless an extra defect variable is tracked."
+                    "The path-graph completion may still omit a companion coordinate, or bounded confluence may fail "
+                    "even if the bridge and potential descent look plausible."
                 ),
                 literature_queries=[
-                    f"{problem.get('title') or problem.get('slug') or 'problem'} chip-firing sinks abelian sandpile",
-                    f"{problem.get('title') or problem.get('slug') or 'problem'} sink stabilization order independence",
+                    f"{problem.get('title') or problem.get('slug') or 'problem'} chip-firing sinks abelian sandpile path graph",
+                    f"{problem.get('title') or problem.get('slug') or 'problem'} boundary sink stabilization order independence",
                 ],
                 formalization_targets=[
                     LimaObligationSpec(
                         obligation_kind="finite_check",
-                        title="Boundary firing commutation audit",
-                        statement_md="Enumerate small boundary configurations and check whether adjacent legal firings commute after sink completion.",
+                        title="boundary_spill_move_equals_sinked_firing",
+                        statement_md="Verify on bounded path-graph states that each legal boundary-spill move matches one sinked chip-firing step exactly.",
                         priority=5,
+                        why_exists_md="The ontology is only honest if live moves literally agree with sinked chip-firing on bounded states.",
+                        prove_or_kill_md="Any bounded bridge mismatch kills this family immediately.",
                     ),
                     LimaObligationSpec(
-                        obligation_kind="bridge_lemma",
-                        title="boundary_spill_to_sinked_firing",
-                        statement_md="State the exact bridge lemma from the surface move to sinked chip-firing.",
-                        lean_goal="forall s i, True",
+                        obligation_kind="finite_check",
+                        title="firing_commutation_local",
+                        statement_md="Verify on bounded states that adjacent legal firings commute in the path-graph sink model.",
                         priority=5,
+                        why_exists_md="Local commutation is the bounded shadow of the abelian-network claim.",
+                        prove_or_kill_md="A bounded non-commuting pair would refute the live path-graph ontology.",
+                    ),
+                    LimaObligationSpec(
+                        obligation_kind="invariant_check",
+                        title="quadratic_potential_descent",
+                        statement_md="Check on bounded states that the quadratic sink potential strictly decreases after every legal firing.",
+                        priority=5,
+                        why_exists_md="Termination should already be visible as a real bounded ranking witness.",
+                        prove_or_kill_md="If the quadratic potential fails to decrease, the current termination story is wrong.",
+                    ),
+                    LimaObligationSpec(
+                        obligation_kind="finite_check",
+                        title="stabilization_terminates",
+                        statement_md="Verify on bounded states that every legal firing sequence reaches a stable state in finitely many steps.",
+                        priority=5,
+                        why_exists_md="A live chip-firing ontology should survive bounded termination checks before escalation.",
+                        prove_or_kill_md="A bounded non-terminating trace would kill the family.",
+                    ),
+                    LimaObligationSpec(
+                        obligation_kind="finite_check",
+                        title="local_confluence_or_abelianity",
+                        statement_md="Verify on bounded states that all legal firing orders reach the same stabilized endpoint.",
+                        priority=5,
+                        why_exists_md="Order-independence is the actual benchmark-facing claim.",
+                        prove_or_kill_md="If two legal orders stabilize differently on a bounded state, abandon this ontology.",
                     ),
                     LimaObligationSpec(
                         obligation_kind="lean_goal",
                         title="sink_stabilization_implies_unique_endpoint",
-                        statement_md="Formalize the implication from exact sink completion plus abelian firing to unique stable endpoint.",
+                        statement_md="Formalize that exact boundary-sink chip-firing, local confluence, and quadratic-potential descent imply a unique stabilized endpoint.",
                         lean_goal="forall s, True",
                         priority=4,
+                        why_exists_md="This theorem upgrades the bounded path-graph evidence into a formal proof target.",
+                        prove_or_kill_md="If the theorem cannot be stated cleanly, the family is not mature enough for formal escalation.",
                     ),
                 ],
                 scores={
@@ -878,9 +1055,10 @@ def _generic_chip_firing_fallback(
             )
         ],
         policy_notes=[
-            "Deterministic fallback reinforced the strongest surviving family instead of emitting a generic atlas.",
-            "Repeated underparameterized scalar families were deprioritized in favor of bridge-complete sink dynamics.",
+            "Deterministic fallback selected a problem-native path-graph with boundary sinks instead of reusing a generic atlas family.",
+            "Live evaluation now prioritizes exact bridge checks, bounded abelianity, potential descent, termination, and same-endpoint stabilization.",
         ],
+        selection_meta=selection_meta,
     )
 
 
@@ -1030,6 +1208,7 @@ def _local_generation(
 ) -> LimaGenerationResponse:
     problem_title = str(problem.get("title") or problem.get("slug") or "the problem")
     problem_slug = str(problem.get("slug") or "").lower()
+    boundary_chip_problem = _looks_like_boundary_dissipation_problem(problem)
     stagnation = pressure_map.get("stagnation_controller") if isinstance(pressure_map, dict) else {}
     if "collatz" not in problem_slug and "collatz" not in problem_title.lower():
         top_frontier = _best_generic_frontier_universe(current_universes or [], pressure_map)
@@ -1048,7 +1227,8 @@ def _local_generation(
             ]
         ).lower()
         if (
-            top_frontier
+            boundary_chip_problem
+            and top_frontier
             and isinstance(repair_loop, dict)
             and repair_loop.get("active")
             and str(repair_loop.get("target_family_key") or "") == str(top_frontier.get("family_key") or "")
@@ -1067,14 +1247,11 @@ def _local_generation(
                 repair_loop=repair_loop,
             )
         if (
-            top_frontier
-            and _family_constraint_action(pressure_map, str(top_frontier.get("family_key") or ""))
-            not in {"cooldown", "soft_ban", "hard_ban"}
+            boundary_chip_problem
             and (
-                "chip" in frontier_blob
-                or "sandpile" in frontier_blob
-                or "sink" in frontier_blob
-                or _looks_like_boundary_dissipation_problem(problem)
+                not top_frontier
+                or _family_constraint_action(pressure_map, str(top_frontier.get("family_key") or ""))
+                not in {"cooldown", "soft_ban", "hard_ban"}
             )
         ):
             return _generic_chip_firing_fallback(
@@ -1537,7 +1714,40 @@ async def run_lima(
         lima_db.initialize()
         problem = lima_db.get_problem(problem_slug)
         problem_id = str(problem["id"])
+        run_id = uuid4().hex[:12]
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="run",
+            event_kind="started",
+            payload={
+                "problem_slug": problem.get("slug"),
+                "trigger_kind": trigger_kind,
+                "mode": selected_mode,
+            },
+        )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="sync",
+            event_kind="started",
+            payload={"target": "aristotle_results"},
+        )
         sync_result = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="sync",
+            event_kind="completed",
+            payload={
+                "target": "aristotle_results",
+                "synced": len(sync_result.get("synced") or []),
+                "skipped": len(sync_result.get("skipped") or []),
+            },
+        )
         state = lima_db.get_state(problem_id)
         current_universes = lima_db.list_universes(problem_id, limit=12)
         obligations = lima_db.list_obligations(problem_id, limit=100)
@@ -1547,6 +1757,24 @@ async def run_lima(
         families = lima_db.list_family_leaderboard(problem_id, limit=16)
         family_search_constraints = lima_db.list_family_search_constraints(problem_id, limit=12)
         policy_layers = lima_db.list_policy_layers(problem_id, limit=16)
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="context",
+            event_kind="loaded",
+            payload={
+                "state_revision": int(state.get("revision") or 0) if state else 0,
+                "current_universes": len(current_universes),
+                "obligations": len(obligations),
+                "prior_runs": len(runs),
+                "reference_points": len(reference_points),
+                "fractures": len(fractures),
+                "families": len(families),
+                "family_search_constraints": len(family_search_constraints),
+                "policy_layers": len(policy_layers),
+            },
+        )
         pressure_map = build_pressure_map(
             problem,
             state,
@@ -1558,11 +1786,48 @@ async def run_lima(
             families=families,
             policy_layers=policy_layers,
         )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="pressure_map",
+            event_kind="completed",
+            payload={
+                "tension_count": len(pressure_map.get("tensions") or []),
+                "failed_invariant_count": len(pressure_map.get("failed_invariants") or []),
+                "constraint_count": len(pressure_map.get("search_constraints") or []),
+                "stagnation_active": bool(
+                    isinstance(pressure_map.get("stagnation_controller"), dict)
+                    and pressure_map.get("stagnation_controller", {}).get("active")
+                ),
+            },
+        )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="literature_refresh",
+            event_kind="started",
+            payload={"phase": "pre_generation"},
+        )
         literature_refresh = refresh_literature(
             lima_db,
             problem=problem,
             pressure_map=pressure_map,
             universes=[],
+        )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="literature_refresh",
+            event_kind="completed",
+            payload={
+                "phase": "pre_generation",
+                "backend": literature_refresh.get("backend"),
+                "source_count": literature_refresh.get("source_count"),
+                "extract_count": literature_refresh.get("extract_count"),
+            },
         )
         literature_context = lima_db.list_literature_sources(
             problem_id, limit=int(app_config.LIMA_MAX_LITERATURE_RESULTS)
@@ -1572,6 +1837,14 @@ async def run_lima(
         raw_preview = ""
         json_warnings: list[str] = []
         if app_config.LLM_API_KEY:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="llm",
+                event_kind="started",
+                payload={"provider": "configured"},
+            )
             user = _build_user_message(
                 problem=problem,
                 state=state,
@@ -1585,15 +1858,43 @@ async def run_lima(
             )
             try:
                 raw_response, raw_preview = await _invoke_lima_json(user)
+                _log_run_event(
+                    lima_db,
+                    problem_id=problem_id,
+                    run_id=run_id,
+                    stage="llm",
+                    event_kind="completed",
+                    payload={
+                        "raw_preview": _clip(raw_preview, 500),
+                        "response_keys": sorted(raw_response.keys()),
+                    },
+                )
             except Exception:
                 logger.exception("Lima LLM call failed; falling back to deterministic local generation")
                 json_warnings.append("llm_request_failed_local_fallback")
+                _log_run_event(
+                    lima_db,
+                    problem_id=problem_id,
+                    run_id=run_id,
+                    stage="llm",
+                    event_kind="failed",
+                    payload={"warning": "llm_request_failed_local_fallback"},
+                )
         else:
             json_warnings.append("llm_api_key_missing_local_fallback")
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="llm",
+                event_kind="skipped",
+                payload={"warning": "llm_api_key_missing_local_fallback"},
+            )
 
         if raw_response:
             generated, warnings = coerce_lima_generation_response(raw_response)
             json_warnings.extend(warnings)
+            generation_source = "llm"
         else:
             generated = _local_generation(
                 problem=problem,
@@ -1602,18 +1903,98 @@ async def run_lima(
                 literature_refresh=literature_refresh,
                 current_universes=current_universes,
             )
+            generation_source = "local_fallback"
         universes = generated.universes[: int(app_config.LIMA_MAX_UNIVERSES_PER_RUN)]
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="generation",
+            event_kind="completed",
+            payload={
+                "source": generation_source,
+                "universe_count": len(universes),
+                "json_warnings": json_warnings,
+                "selection_meta": dict(getattr(generated, "selection_meta", {}) or {}),
+            },
+        )
+        for universe in universes:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="generation",
+                event_kind="universe_emitted",
+                payload={
+                    "title": universe.title,
+                    "family_key": universe.family_key,
+                    "repair_hypothesis_key": getattr(universe, "repair_hypothesis_key", ""),
+                    "formalization_target_count": len(universe.formalization_targets or []),
+                    "selection_reason": str(
+                        (getattr(generated, "selection_meta", {}) or {}).get("selection_reason") or ""
+                    ),
+                    "overrode_prior_frontier": bool(
+                        (getattr(generated, "selection_meta", {}) or {}).get("overrode_prior_frontier")
+                    ),
+                },
+            )
         # Refresh again after universe-specific queries are known.
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="literature_refresh",
+            event_kind="started",
+            payload={"phase": "post_generation", "universe_count": len(universes)},
+        )
         universe_lit_refresh = refresh_literature(
             lima_db,
             problem=problem,
             pressure_map=pressure_map,
             universes=universes,
         )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="literature_refresh",
+            event_kind="completed",
+            payload={
+                "phase": "post_generation",
+                "backend": universe_lit_refresh.get("backend"),
+                "source_count": universe_lit_refresh.get("source_count"),
+                "extract_count": universe_lit_refresh.get("extract_count"),
+            },
+        )
         literature_context = lima_db.list_literature_sources(
             problem_id, limit=int(app_config.LIMA_MAX_LITERATURE_RESULTS)
         )
         rupture_reports = rupture_universes(universes, literature_context=literature_context)
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="rupture",
+            event_kind="completed",
+            payload={
+                "universe_count": len(rupture_reports),
+                "fracture_count": sum(len(r.get("fractures") or []) for r in rupture_reports),
+            },
+        )
+        for report in rupture_reports:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="rupture",
+                event_kind="universe_report",
+                payload={
+                    "universe_title": report.get("universe_title"),
+                    "verdict": report.get("verdict"),
+                    "fracture_count": len(report.get("fractures") or []),
+                    "attack_count": len(report.get("attacks") or []),
+                },
+            )
         rupture_by_title = {str(r.get("universe_title") or ""): r for r in rupture_reports}
         universes = [
             universe.model_copy(
@@ -1625,6 +2006,19 @@ async def run_lima(
             )
             for universe in universes
         ]
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="obligation_compile",
+            event_kind="completed",
+            payload={
+                "universe_count": len(universes),
+                "formalization_target_count": sum(
+                    len(universe.formalization_targets or []) for universe in universes
+                ),
+            },
+        )
         policy_snapshot = {
             "mode": selected_mode,
             "zero_live_authority": True,
@@ -1708,6 +2102,7 @@ async def run_lima(
                 }
             )
         run_id = lima_db.commit_run(
+            run_id=run_id,
             problem_id=problem_id,
             trigger_kind=trigger_kind,
             mode=selected_mode,
@@ -1720,6 +2115,18 @@ async def run_lima(
             rupture_reports=rupture_reports,
             reference_points=reference_points,
             artifacts=artifacts,
+        )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="run_commit",
+            event_kind="completed",
+            payload={
+                "artifact_count": len(artifacts),
+                "reference_count": len(reference_points),
+                "universe_count": len(universes),
+            },
         )
         created_universes = lima_db.list_universes_for_run(run_id)
         transfer_metric = compute_transfer_metrics(
@@ -1735,6 +2142,7 @@ async def run_lima(
             metric=transfer_metric,
         )
         sources = lima_db.list_literature_sources(problem_id, limit=6)
+        linked_sources = 0
         for row, universe in zip(created_universes, universes):
             for source in sources[:2]:
                 lit_score = score_literature_novelty(universe, source)
@@ -1744,25 +2152,138 @@ async def run_lima(
                     relation_kind=str(lit_score.get("relation_kind") or infer_literature_relation(universe, source)),
                     note=f"Linked by Lima literature routing. prior_art_score={lit_score.get('prior_art_score')}",
                 )
+                linked_sources += 1
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="literature_linking",
+            event_kind="completed",
+            payload={"link_count": linked_sources},
+        )
         obligation_result = None
         if app_config.LIMA_AUTO_LOCAL_OBLIGATION_CHECKS:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="obligation_checks",
+                event_kind="started",
+                payload={"limit": int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN)},
+            )
             obligation_result = run_queued_obligation_checks(
                 lima_db,
                 problem_id=problem_id,
                 limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
+                run_id=run_id,
             )
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="obligation_checks",
+                event_kind="completed",
+                payload={
+                    "checked": len(obligation_result.get("checked") or []),
+                    "falsified": len(obligation_result.get("falsified") or []),
+                    "skipped": len(obligation_result.get("skipped") or []),
+                },
+            )
+        else:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="obligation_checks",
+                event_kind="skipped",
+                payload={"reason": "auto_local_checks_disabled"},
+            )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="formal_submit",
+            event_kind="started",
+            payload={"limit": int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN)},
+        )
         formal_submit_result = await submit_promising_formal_obligations(
             lima_db,
             main_db,
             problem_id=problem_id,
             limit=int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN),
         )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="formal_submit",
+            event_kind="completed",
+            payload={
+                "enabled": bool(formal_submit_result.get("enabled")),
+                "submitted": len(formal_submit_result.get("submitted") or []),
+                "blocked": len(formal_submit_result.get("blocked") or []),
+            },
+        )
         sync_after_submit = sync_lima_aristotle_results(lima_db, main_db, problem_id=problem_id)
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="formal_sync",
+            event_kind="completed",
+            payload={
+                "synced": len(sync_after_submit.get("synced") or []),
+                "skipped": len(sync_after_submit.get("skipped") or []),
+            },
+        )
         meta_result = None
         if app_config.LIMA_ENABLE_AUTO_POLICY_UPDATES and not app_config.LIMA_FREEZE_FAMILY_GOVERNANCE:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="meta_policy",
+                event_kind="started",
+                payload={},
+            )
             meta_result = analyze_and_update_policy(
                 lima_db, problem_id=problem_id, from_run_id=run_id
             )
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="meta_policy",
+                event_kind="completed",
+                payload={
+                    "has_changes": bool(meta_result and meta_result.get("family_search_controls")),
+                    "family_search_controls": len(meta_result.get("family_search_controls") or [])
+                    if isinstance(meta_result, dict)
+                    else 0,
+                },
+            )
+        else:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="meta_policy",
+                event_kind="skipped",
+                payload={"reason": "auto_policy_updates_disabled_or_frozen"},
+            )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
+            stage="run",
+            event_kind="completed",
+            payload={
+                "summary": generated.run_summary_md,
+                "universe_count": len(universes),
+                "fracture_count": sum(len(r.get("fractures") or []) for r in rupture_reports),
+                "pending_handoffs": len(lima_db.list_handoffs(problem_id, status="pending", limit=100)),
+            },
+        )
         return {
             "ok": True,
             "run_id": run_id,

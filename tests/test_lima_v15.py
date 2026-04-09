@@ -19,6 +19,7 @@ from orchestrator.lima_obligations import (
     approve_formal_review_async,
     approve_formal_review,
     archive_obligation,
+    compile_obligations_for_universe,
     queue_formal_review,
     rerun_local_obligation,
     run_queued_obligation_checks,
@@ -130,6 +131,7 @@ def test_lima_migrates_legacy_obligation_schema(tmp_path: Path) -> None:
     assert "repeat_failure_count" in family_columns
     assert "last_failure_type" in family_columns
     assert "lima_formal_review_queue" in tables
+    assert "lima_event" in tables
     assert "family_id" in formal_columns
     assert "claim_ids_json" in formal_columns
     assert "lineage_json" in formal_columns
@@ -575,10 +577,74 @@ def test_local_generation_prefers_chip_firing_frontier_for_boundary_spill_proble
 
     assert universe.title == "Chip-Firing with Boundary Sinks"
     assert universe.family_key == "chip_firing_boundary_sinks"
+    assert universe.ontology_class() == "graph_stabilization"
     assert any(
-        target.title == "boundary_spill_to_sinked_firing"
+        target.title == "boundary_spill_move_equals_sinked_firing"
         for target in universe.formalization_targets
     )
+    assert generated.selection_meta["problem_aware_family_selected"] is True
+
+
+def test_local_generation_boundary_spill_problem_without_frontier_emits_chip_firing_family() -> None:
+    generated = _local_generation(
+        problem={
+            "title": "Synthesized Problem 2",
+            "slug": "synthesized_problem_2",
+            "statement_md": (
+                "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+                "A state is stable if every entry is 0 or 1, and the final stable state should be order-independent."
+            ),
+            "domain": "discrete_dynamics",
+        },
+        mode="forge",
+        pressure_map={"search_constraints": []},
+        literature_refresh={},
+        current_universes=[],
+    )
+
+    universe = generated.universes[0]
+
+    assert universe.title == "Chip-Firing with Boundary Sinks"
+    assert universe.family_key == "chip_firing_boundary_sinks"
+    assert universe.ontology_class() == "graph_stabilization"
+    assert generated.selection_meta["overrode_prior_frontier"] is False
+
+
+def test_local_generation_overrides_generic_frontier_for_boundary_problem() -> None:
+    generated = _local_generation(
+        problem={
+            "title": "Synthesized Problem 2",
+            "slug": "synthesized_problem_2",
+            "statement_md": (
+                "Boundary spill should stabilize to the same final state regardless of legal firing order."
+            ),
+            "domain": "discrete_dynamics",
+        },
+        mode="forge",
+        pressure_map={"search_constraints": []},
+        literature_refresh={},
+        current_universes=[
+            {
+                "title": "Synthesized Problem 2 bridge-obligation atlas",
+                "family_key": "minimal_bridge_obligation_atlas",
+                "universe_status": "promising",
+                "branch_of_math": "discrete_dynamics",
+                "solved_world": "Generic atlas of regimes.",
+                "why_problem_is_easy_here": "Local reductions might help.",
+                "fit_score": 5.0,
+                "compression_score": 4.0,
+                "formalizability_score": 4.0,
+                "bridgeability_score": 4.0,
+            }
+        ],
+    )
+
+    universe = generated.universes[0]
+
+    assert universe.title == "Chip-Firing with Boundary Sinks"
+    assert universe.family_key == "chip_firing_boundary_sinks"
+    assert generated.selection_meta["overrode_prior_frontier"] is True
+    assert generated.selection_meta["prior_frontier_family_key"] == "minimal_bridge_obligation_atlas"
 
 
 def test_stagnation_controller_detects_repeated_frontier_and_blocker() -> None:
@@ -897,6 +963,83 @@ def test_repair_loop_summary_surfaces_recent_attempt_artifacts() -> None:
     assert summary["next_hypothesis_keys"] == ["sink_parity_cocycle"]
     assert summary["recent_attempts"][0]["key"] == "boundary_debt_ledger"
     assert "Audit the boundary debt ledger" in summary["recent_attempts"][0]["focus"]
+
+
+def test_compile_obligations_adds_problem_native_chip_firing_suite() -> None:
+    universe = _local_generation(
+        problem={
+            "title": "Synthesized Problem 2",
+            "slug": "synthesized_problem_2",
+            "statement_md": (
+                "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+                "The final stable state should be order-independent."
+            ),
+            "domain": "discrete_dynamics",
+        },
+        mode="forge",
+        pressure_map={"search_constraints": []},
+        literature_refresh={},
+        current_universes=[],
+    ).universes[0]
+
+    obligations = compile_obligations_for_universe(universe)
+    titles = {obligation.title: obligation for obligation in obligations}
+
+    assert "boundary_spill_move_equals_sinked_firing" in titles
+    assert titles["boundary_spill_move_equals_sinked_firing"].status == "queued_local"
+    assert "firing_commutation_local" in titles
+    assert "quadratic_potential_descent" in titles
+    assert "stabilization_terminates" in titles
+    assert "local_confluence_or_abelianity" in titles
+    assert "sink_stabilization_implies_unique_endpoint" in titles
+
+
+def test_problem_native_local_checker_verifies_boundary_chip_firing_obligation(
+    tmp_path: Path,
+) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    problem_id, _ = db.create_problem(
+        slug="synthesized_problem_2",
+        title="Synthesized Problem 2",
+        statement_md=(
+            "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+            "The final stable state should be order-independent."
+        ),
+        domain="discrete_dynamics",
+        default_goal_text="Check sinked chip-firing.",
+    )
+    conn = sqlite3.connect(str(tmp_path / "lima.db"))
+    try:
+        conn.execute(
+            """
+            INSERT INTO lima_obligation (
+                id, problem_id, universe_id, obligation_kind, title, statement_md,
+                status, priority, lineage_json, created_at, updated_at
+            )
+            VALUES (
+                'obl-chip', ?, 'univ-chip', 'finite_check', 'firing_commutation_local',
+                'Verify on bounded path-graph states that adjacent legal firings commute.',
+                'queued_local', 5,
+                '{"source_family_key":"chip_firing_boundary_sinks","source_universe_title":"Chip-Firing with Boundary Sinks"}',
+                'now', 'now'
+            )
+            """,
+            (problem_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = run_queued_obligation_checks(db, problem_id=problem_id)
+    obligation = db.get_obligation("obl-chip")
+    artifacts = db.list_artifacts(problem_id, limit=20)
+    latest_artifact = artifacts[0]
+
+    assert result["checked"] == ["obl-chip"]
+    assert obligation["status"] == "verified_local"
+    assert "commutation violations" in obligation["result_summary_md"]
+    assert safe_json_loads(latest_artifact["content_json"], {})["artifact"]["checker_path"] == "boundary_chip_firing"
 
 
 def test_lima_suppresses_repeated_weakened_handoff_without_material_delta(tmp_path: Path) -> None:

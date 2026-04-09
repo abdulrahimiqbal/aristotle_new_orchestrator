@@ -25,6 +25,7 @@ from orchestrator.lima_models import (
     LimaUniverseSpec,
     coerce_lima_generation_response,
     infer_ontology_class_from_universe,
+    safe_json_loads,
 )
 from orchestrator.lima_obligations import compile_obligations_for_universe
 from orchestrator.lima_rupture import rupture_universe
@@ -52,6 +53,7 @@ def test_lima_db_initialization_and_schema(tmp_path: Path) -> None:
             "lima_problem",
             "lima_state",
             "lima_run",
+            "lima_event",
             "lima_universe_family",
             "lima_universe",
             "lima_claim",
@@ -402,12 +404,85 @@ def test_lima_run_persists_memory_without_live_main_queue(
     assert obligations
     assert any(o["status"] == "verified_local" for o in obligations)
     assert lima.list_handoffs(problem["id"], status="pending")
+    events = lima.list_events(problem["id"], run_id=result["run_id"], limit=200)
+    event_stages = {(event["stage"], event["event_kind"]) for event in events}
+    assert ("run", "started") in event_stages
+    assert ("context", "loaded") in event_stages
+    assert ("pressure_map", "completed") in event_stages
+    assert ("generation", "completed") in event_stages
+    assert ("rupture", "completed") in event_stages
+    assert ("run_commit", "completed") in event_stages
+    assert ("literature_linking", "completed") in event_stages
+    assert ("obligation_checks", "completed") in event_stages
+    assert ("formal_submit", "completed") in event_stages
+    assert ("formal_sync", "completed") in event_stages
+    assert ("run", "completed") in event_stages
+    assert any(event["stage"] == "obligation_check" for event in events)
 
     conn = sqlite3.connect(str(tmp_path / "main.db"))
     try:
         assert int(conn.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]) == 0
     finally:
         conn.close()
+
+
+def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_config, "LLM_API_KEY", "")
+    main_db = Database(str(tmp_path / "main.db"))
+    main_db.initialize()
+    lima = LimaDatabase(str(tmp_path / "lima.db"))
+    lima.initialize()
+    problem_id, _ = lima.create_problem(
+        slug="synthesized_problem_2",
+        title="Synthesized Problem 2",
+        statement_md=(
+            "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+            "A state is stable if every entry is 0 or 1, and the final stable state should be order-independent."
+        ),
+        domain="discrete_dynamics",
+        default_goal_text="Check sinked chip-firing honestly in fallback mode.",
+    )
+
+    result = asyncio.run(
+        run_lima(
+            lima,
+            main_db,
+            problem_slug="synthesized_problem_2",
+            trigger_kind="manual",
+            mode="forge",
+        )
+    )
+
+    assert result["ok"] is True
+    run_universes = lima.list_universes_for_run(result["run_id"])
+    assert run_universes
+    assert run_universes[0]["family_key"] == "chip_firing_boundary_sinks"
+    assert run_universes[0]["title"] == "Chip-Firing with Boundary Sinks"
+    assert run_universes[0]["ontology_class"] == "graph_stabilization"
+
+    obligations = lima.list_obligations(problem_id, limit=50)
+    obligation_titles = {row["title"]: row for row in obligations}
+    assert "boundary_spill_move_equals_sinked_firing" in obligation_titles
+    assert "firing_commutation_local" in obligation_titles
+    assert "quadratic_potential_descent" in obligation_titles
+    assert "stabilization_terminates" in obligation_titles
+    assert "local_confluence_or_abelianity" in obligation_titles
+    assert any(row["status"] == "verified_local" for row in obligations)
+
+    events = lima.list_events(problem_id, run_id=result["run_id"], limit=200)
+    generation_completed = next(
+        event for event in events if event["stage"] == "generation" and event["event_kind"] == "completed"
+    )
+    generation_payload = safe_json_loads(generation_completed["payload_json"], {})
+    assert generation_payload["selection_meta"]["problem_aware_family_selected"] is True
+    assert generation_payload["selection_meta"]["selected_family_key"] == "chip_firing_boundary_sinks"
+    obligation_event = next(
+        event for event in events if event["stage"] == "obligation_check" and event["event_kind"] == "completed"
+    )
+    obligation_payload = safe_json_loads(obligation_event["payload_json"], {})
+    assert obligation_payload["checker_path"] == "boundary_chip_firing"
 
 
 def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> None:

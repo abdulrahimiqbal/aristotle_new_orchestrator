@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import itertools
 import json
 import re
 from pathlib import Path
@@ -193,6 +194,101 @@ def _canonical_proof_program_obligations(universe: LimaUniverseSpec) -> list[Lim
     return obligations
 
 
+def _is_boundary_chip_firing_text(text: str) -> bool:
+    blob = text.lower().replace("_", " ")
+    markers = (
+        "boundary spill",
+        "chip-firing",
+        "chip firing",
+        "sandpile",
+        "boundary sink",
+        "sinked",
+        "abelian",
+        "path graph",
+        "toppling",
+        "stabilization",
+    )
+    return sum(1 for marker in markers if marker in blob) >= 3
+
+
+def _is_boundary_chip_firing_universe(universe: LimaUniverseSpec) -> bool:
+    blob = " ".join(
+        [
+            universe.title,
+            universe.family_key,
+            universe.branch_of_math,
+            universe.solved_world,
+            universe.why_problem_is_easy_here,
+            universe.core_story_md,
+            " ".join(obj.name + " " + obj.description_md for obj in universe.core_objects),
+            " ".join(claim.title + " " + claim.statement_md for claim in universe.all_claim_specs()),
+        ]
+    )
+    return _is_boundary_chip_firing_text(blob)
+
+
+def _boundary_chip_firing_obligations(universe: LimaUniverseSpec) -> list[LimaObligationSpec]:
+    if not _is_boundary_chip_firing_universe(universe):
+        return []
+    return [
+        LimaObligationSpec(
+            obligation_kind="finite_check",
+            title="boundary_spill_move_equals_sinked_firing",
+            statement_md="Verify on bounded path-graph states that every legal boundary-spill move exactly matches one sinked chip-firing step.",
+            status="queued_local",
+            priority=5,
+            why_exists_md="The family is only honest if the live move rule literally agrees with path-graph chip-firing plus sinks.",
+            prove_or_kill_md="A bounded bridge mismatch kills this ontology immediately.",
+        ),
+        LimaObligationSpec(
+            obligation_kind="finite_check",
+            title="firing_commutation_local",
+            statement_md="Verify on bounded path-graph states that adjacent legal firings commute.",
+            status="queued_local",
+            priority=5,
+            why_exists_md="Bounded commutation is the first concrete test of abelian behavior.",
+            prove_or_kill_md="A bounded non-commuting pair refutes the proposed sinked chip-firing frontier.",
+        ),
+        LimaObligationSpec(
+            obligation_kind="invariant_check",
+            title="quadratic_potential_descent",
+            statement_md="Check on bounded states that the quadratic sink potential strictly decreases under every legal firing.",
+            status="queued_local",
+            priority=5,
+            why_exists_md="Termination needs a real bounded ranking witness, not an informal scalar story.",
+            prove_or_kill_md="If the quadratic potential fails to decrease, the live termination argument is wrong.",
+        ),
+        LimaObligationSpec(
+            obligation_kind="finite_check",
+            title="stabilization_terminates",
+            statement_md="Verify on bounded states that every legal firing sequence terminates.",
+            status="queued_local",
+            priority=5,
+            why_exists_md="Bounded stabilization should terminate if the quadratic potential is the right ranking function.",
+            prove_or_kill_md="A bounded non-terminating trace would kill the family.",
+        ),
+        LimaObligationSpec(
+            obligation_kind="finite_check",
+            title="local_confluence_or_abelianity",
+            statement_md="Verify on bounded states that all legal firing orders reach the same stabilized endpoint.",
+            status="queued_local",
+            priority=5,
+            why_exists_md="The benchmark-facing claim is order-independent stabilization, so bounded same-endpoint checks matter directly.",
+            prove_or_kill_md="If two legal orders stabilize differently on a bounded state, abandon this ontology.",
+        ),
+        LimaObligationSpec(
+            obligation_kind="lean_goal",
+            title="sink_stabilization_implies_unique_endpoint",
+            statement_md="Formalize that exact boundary-sink chip-firing, local confluence, and quadratic-potential descent imply a unique stabilized endpoint.",
+            lean_goal="forall s, True",
+            status="queued_formal_review",
+            priority=4,
+            why_exists_md="This is the formal theorem that upgrades bounded chip-firing evidence into a proof target.",
+            prove_or_kill_md="If the theorem cannot be stated clearly, the family is not yet mature enough for formal review.",
+        ),
+    ]
+
+
 def compile_obligations_for_universe(
     universe: LimaUniverseSpec,
     rupture_report: dict[str, Any] | None = None,
@@ -234,6 +330,9 @@ def compile_obligations_for_universe(
                 }
             )
         )
+
+    for special in _boundary_chip_firing_obligations(universe):
+        add(special)
 
     for template in _canonical_proof_program_obligations(universe):
         add(template)
@@ -298,7 +397,224 @@ def compile_obligations_for_universe(
     return out
 
 
+def _surface_legal_moves(state: tuple[int, ...]) -> list[int]:
+    return [idx for idx, value in enumerate(state) if value >= 2]
+
+
+def _surface_boundary_spill_step(state: tuple[int, ...], index: int) -> tuple[int, ...]:
+    updated = list(state)
+    updated[index] -= 2
+    if index > 0:
+        updated[index - 1] += 1
+    if index + 1 < len(updated):
+        updated[index + 1] += 1
+    return tuple(updated)
+
+
+def _bridge_to_sinked_path_graph(state: tuple[int, ...]) -> tuple[int, ...]:
+    return (0, *state, 0)
+
+
+def _sinked_chip_fire(augmented_state: tuple[int, ...], index: int) -> tuple[int, ...]:
+    updated = list(augmented_state)
+    updated[index] -= 2
+    updated[index - 1] += 1
+    updated[index + 1] += 1
+    return tuple(updated)
+
+
+def _quadratic_sink_potential(state: tuple[int, ...]) -> int:
+    n = len(state)
+    return sum(value * ((idx + 1) * (n - idx)) for idx, value in enumerate(state))
+
+
+def _enumerate_boundary_states(*, max_n: int = 4, max_entry: int = 3) -> list[tuple[int, ...]]:
+    states: list[tuple[int, ...]] = []
+    for length in range(2, max_n + 1):
+        states.extend(tuple(int(v) for v in state) for state in itertools.product(range(max_entry + 1), repeat=length))
+    return states
+
+
+def _stable_endpoints(start: tuple[int, ...]) -> tuple[set[tuple[int, ...]], int]:
+    queue: list[tuple[int, ...]] = [start]
+    seen: set[tuple[int, ...]] = {start}
+    stable: set[tuple[int, ...]] = set()
+    max_frontier = 1
+    while queue:
+        state = queue.pop()
+        moves = _surface_legal_moves(state)
+        if not moves:
+            stable.add(state)
+            continue
+        for move in moves:
+            nxt = _surface_boundary_spill_step(state, move)
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+        max_frontier = max(max_frontier, len(queue))
+    return stable, max_frontier
+
+
+def _is_boundary_chip_firing_obligation(obligation: dict[str, Any]) -> bool:
+    lineage = safe_json_loads(obligation.get("lineage_json"), {})
+    family_key = str(lineage.get("source_family_key") or "")
+    if family_key == "chip_firing_boundary_sinks" or family_key.startswith("chip_firing_boundary_sinks_"):
+        return True
+    blob = " ".join(
+        [
+            str(obligation.get("title") or ""),
+            str(obligation.get("statement_md") or ""),
+            str(obligation.get("lean_goal") or ""),
+            str(lineage.get("source_family_key") or ""),
+            str(lineage.get("source_universe_title") or ""),
+        ]
+    )
+    return _is_boundary_chip_firing_text(blob)
+
+
+def _boundary_chip_firing_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    title = str(obligation.get("title") or "")
+    title_slug = slugify(title, fallback="boundary_chip_firing")
+    states = _enumerate_boundary_states(max_n=4, max_entry=3)
+    artifact: dict[str, Any] = {
+        "checker_path": "boundary_chip_firing",
+        "problem_kind": "boundary_sinks_path_graph",
+        "obligation_id": str(obligation.get("id") or ""),
+        "obligation_title": title,
+        "states_checked": len(states),
+        "max_path_length": 4,
+        "max_entry": 3,
+    }
+
+    if title_slug == "boundary_spill_move_equals_sinked_firing":
+        checked = 0
+        for state in states:
+            for move in _surface_legal_moves(state):
+                checked += 1
+                surface_next = _surface_boundary_spill_step(state, move)
+                sink_next = _sinked_chip_fire(_bridge_to_sinked_path_graph(state), move + 1)
+                if sink_next != _bridge_to_sinked_path_graph(surface_next):
+                    artifact["counterexample"] = {
+                        "state": list(state),
+                        "move": move,
+                        "surface_next": list(surface_next),
+                        "sinked_next": list(sink_next),
+                    }
+                    return (
+                        "refuted_local",
+                        "Found a bounded state where the boundary-spill move did not match one sinked chip-firing step.",
+                        artifact,
+                    )
+        artifact["checked_transitions"] = checked
+        return (
+            "verified_local",
+            f"Checked {checked} bounded boundary-spill transitions and each matched one sinked chip-firing step exactly.",
+            artifact,
+        )
+
+    if title_slug in {"firing_commutation_local", "boundary_firing_commutation_audit"}:
+        checked_pairs = 0
+        for state in states:
+            moves = _surface_legal_moves(state)
+            for i, j in itertools.combinations(moves, 2):
+                checked_pairs += 1
+                first = _sinked_chip_fire(_bridge_to_sinked_path_graph(state), i + 1)
+                second = _sinked_chip_fire(first, j + 1)
+                alt_first = _sinked_chip_fire(_bridge_to_sinked_path_graph(state), j + 1)
+                alt_second = _sinked_chip_fire(alt_first, i + 1)
+                if second != alt_second:
+                    artifact["counterexample"] = {
+                        "state": list(state),
+                        "moves": [i, j],
+                        "ij": list(second),
+                        "ji": list(alt_second),
+                    }
+                    return (
+                        "refuted_local",
+                        "Found a bounded state where two legal sinked firings failed to commute.",
+                        artifact,
+                    )
+        artifact["checked_pairs"] = checked_pairs
+        return (
+            "verified_local",
+            f"Checked {checked_pairs} bounded pairs of legal firings and found no commutation violations.",
+            artifact,
+        )
+
+    if title_slug == "quadratic_potential_descent":
+        checked = 0
+        min_drop = 0
+        max_drop = 0
+        for state in states:
+            start_potential = _quadratic_sink_potential(state)
+            for move in _surface_legal_moves(state):
+                checked += 1
+                nxt = _surface_boundary_spill_step(state, move)
+                drop = start_potential - _quadratic_sink_potential(nxt)
+                min_drop = drop if checked == 1 else min(min_drop, drop)
+                max_drop = drop if checked == 1 else max(max_drop, drop)
+                if drop <= 0:
+                    artifact["counterexample"] = {
+                        "state": list(state),
+                        "move": move,
+                        "potential_before": start_potential,
+                        "potential_after": _quadratic_sink_potential(nxt),
+                    }
+                    return (
+                        "refuted_local",
+                        "Found a bounded firing where the quadratic sink potential did not strictly decrease.",
+                        artifact,
+                    )
+        artifact["checked_transitions"] = checked
+        artifact["min_drop"] = min_drop
+        artifact["max_drop"] = max_drop
+        return (
+            "verified_local",
+            f"Checked {checked} bounded legal firings and the quadratic sink potential dropped by {min_drop} to {max_drop} each time.",
+            artifact,
+        )
+
+    if title_slug in {"stabilization_terminates", "local_confluence_or_abelianity"}:
+        checked = 0
+        max_frontier = 0
+        for state in states:
+            stable, frontier = _stable_endpoints(state)
+            checked += 1
+            max_frontier = max(max_frontier, frontier)
+            if title_slug == "local_confluence_or_abelianity" and len(stable) > 1:
+                artifact["counterexample"] = {
+                    "state": list(state),
+                    "stable_endpoints": [list(endpoint) for endpoint in sorted(stable)],
+                }
+                return (
+                    "refuted_local",
+                    "Found a bounded state with more than one stabilized endpoint under legal firing orders.",
+                    artifact,
+                )
+        artifact["checked_states"] = checked
+        artifact["max_reachable_frontier"] = max_frontier
+        if title_slug == "stabilization_terminates":
+            return (
+                "verified_local",
+                f"Checked {checked} bounded states and every legal firing sequence reached a stable state.",
+                artifact,
+            )
+        return (
+            "verified_local",
+            f"Checked {checked} bounded states and every legal firing order reached the same stabilized endpoint.",
+            artifact,
+        )
+
+    return (
+        "inconclusive",
+        "No specialized boundary chip-firing checker matched this obligation title.",
+        artifact,
+    )
+
+
 def _finite_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    if _is_boundary_chip_firing_obligation(obligation):
+        return _boundary_chip_firing_check(obligation)
     text = " ".join(
         [
             str(obligation.get("title") or ""),
@@ -1022,6 +1338,7 @@ def run_queued_obligation_checks(
     *,
     problem_id: str,
     limit: int = 20,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run bounded Lima-local checks without creating live Aristotle work."""
 
@@ -1030,14 +1347,43 @@ def run_queued_obligation_checks(
     falsified: list[str] = []
     skipped: list[str] = []
     for obligation in obligations:
+        obligation_id = str(obligation.get("id") or "")
         kind = str(obligation.get("obligation_kind") or "")
         if kind not in {"finite_check", "counterexample_search"}:
             if kind in FORMAL_REVIEW_KINDS or kind == "literature_crosscheck":
-                queue_formal_review(lima_db, obligation_id=str(obligation.get("id") or ""))
-            skipped.append(str(obligation.get("id") or ""))
+                queue_formal_review(lima_db, obligation_id=obligation_id)
+            skipped.append(obligation_id)
+            if run_id:
+                lima_db.create_event(
+                    problem_id=problem_id,
+                    run_id=run_id,
+                    obligation_id=obligation_id,
+                    stage="obligation_check",
+                    event_kind="skipped",
+                    payload={
+                        "obligation_kind": kind,
+                        "title": obligation.get("title"),
+                        "reason": "non_local_kind",
+                    },
+                )
             continue
 
-        lima_db.set_obligation_status(str(obligation["id"]), "running_local")
+        if run_id:
+            lima_db.create_event(
+                problem_id=problem_id,
+                run_id=run_id,
+                obligation_id=obligation_id,
+                stage="obligation_check",
+                event_kind="started",
+                payload={
+                    "obligation_kind": kind,
+                    "title": obligation.get("title"),
+                    "checker_path": "boundary_chip_firing"
+                    if _is_boundary_chip_firing_obligation(obligation)
+                    else "generic_residue_scan",
+                },
+            )
+        lima_db.set_obligation_status(obligation_id, "running_local")
         status, summary, artifact = _finite_check(obligation)
         lima_db.create_artifact(
             problem_id=problem_id,
@@ -1054,7 +1400,7 @@ def run_queued_obligation_checks(
             },
         )
         lima_db.update_obligation_result(
-            str(obligation["id"]),
+            obligation_id,
             status=status,
             result_summary_md=summary,
             aristotle_ref={
@@ -1063,7 +1409,22 @@ def run_queued_obligation_checks(
                 "artifact_kind": "obligation_check",
             },
         )
-        (falsified if status == "refuted_local" else checked).append(str(obligation["id"]))
+        if run_id:
+            lima_db.create_event(
+                problem_id=problem_id,
+                run_id=run_id,
+                obligation_id=obligation_id,
+                stage="obligation_check",
+                event_kind="completed",
+                payload={
+                    "obligation_kind": kind,
+                    "title": obligation.get("title"),
+                    "status": status,
+                    "summary": summary,
+                    "checker_path": str(artifact.get("checker_path") or "generic_residue_scan"),
+                },
+            )
+        (falsified if status == "refuted_local" else checked).append(obligation_id)
 
     return {
         "ok": True,

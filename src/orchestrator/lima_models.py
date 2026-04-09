@@ -18,6 +18,7 @@ LimaFamilyGovernanceState = Literal[
 ]
 LimaOntologyClass = Literal[
     "coordinate_lift",
+    "graph_stabilization",
     "rewrite_system",
     "automaton",
     "quotient",
@@ -52,6 +53,7 @@ _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 
 ONTOLOGY_CLASSES: tuple[str, ...] = (
     "coordinate_lift",
+    "graph_stabilization",
     "rewrite_system",
     "automaton",
     "quotient",
@@ -131,6 +133,22 @@ def legacy_search_action_for_governance(state: Any) -> str:
 
 def infer_ontology_class_from_text(text: str) -> str:
     blob = text.lower()
+    if any(
+        marker in blob
+        for marker in (
+            "chip-firing",
+            "chip firing",
+            "sandpile",
+            "abelian network",
+            "boundary sink",
+            "sink completion",
+            "toppling",
+            "stabilization",
+            "stable endpoint",
+            "path graph",
+        )
+    ):
+        return "graph_stabilization"
     if any(marker in blob for marker in ("cofactor", "valuation", "v_p", "v2", "p-adic", "2-adic")):
         return "valuation_or_cofactor"
     if any(marker in blob for marker in ("skew product", "cocycle", "fiber", "fibre")):
@@ -374,6 +392,7 @@ class LimaGenerationResponse(BaseModel):
     run_summary_md: str = Field(default="")
     universes: list[LimaUniverseSpec] = Field(default_factory=list)
     policy_notes: list[str] = Field(default_factory=list)
+    selection_meta: dict[str, Any] = Field(default_factory=dict)
 
 
 def coerce_lima_generation_response(raw: Any) -> tuple[LimaGenerationResponse, list[str]]:

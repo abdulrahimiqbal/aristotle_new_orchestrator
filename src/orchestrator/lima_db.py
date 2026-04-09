@@ -459,6 +459,21 @@ class LimaDatabase:
                 CREATE INDEX IF NOT EXISTS idx_lima_artifact_kind ON lima_artifact(artifact_kind);
                 CREATE INDEX IF NOT EXISTS idx_lima_artifact_hash ON lima_artifact(content_hash);
 
+                CREATE TABLE IF NOT EXISTS lima_event (
+                    id TEXT PRIMARY KEY,
+                    problem_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL DEFAULT '',
+                    universe_id TEXT,
+                    obligation_id TEXT,
+                    stage TEXT NOT NULL DEFAULT '',
+                    event_kind TEXT NOT NULL DEFAULT 'info',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_lima_event_problem ON lima_event(problem_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_lima_event_run ON lima_event(run_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_lima_event_stage ON lima_event(stage, created_at);
+
                 CREATE TABLE IF NOT EXISTS lima_policy_layer (
                     id TEXT PRIMARY KEY,
                     problem_id TEXT,
@@ -1211,9 +1226,10 @@ class LimaDatabase:
         rupture_reports: list[dict[str, Any]] | None = None,
         reference_points: list[dict[str, Any]] | None = None,
         artifacts: list[dict[str, Any]] | None = None,
+        run_id: str | None = None,
     ) -> str:
         now = _now()
-        run_id = _new_id()
+        run_id = run_id or _new_id()
         rupture_by_title = {
             str(r.get("universe_title") or ""): r for r in rupture_reports or []
         }
@@ -1847,6 +1863,77 @@ class LimaDatabase:
                 LIMIT ?
                 """,
                 (problem_id, min(limit, 200)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def create_event(
+        self,
+        *,
+        problem_id: str,
+        run_id: str,
+        stage: str,
+        event_kind: str,
+        payload: dict[str, Any] | None = None,
+        universe_id: str | None = None,
+        obligation_id: str | None = None,
+    ) -> str:
+        event_id = _new_id()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO lima_event (
+                    id, problem_id, run_id, universe_id, obligation_id, stage,
+                    event_kind, payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    problem_id,
+                    run_id[:64],
+                    universe_id or None,
+                    obligation_id or None,
+                    stage[:80],
+                    event_kind[:80],
+                    _json(payload or {}),
+                    _now(),
+                ),
+            )
+            conn.commit()
+            return event_id
+        finally:
+            conn.close()
+
+    def list_events(
+        self,
+        problem_id: str,
+        *,
+        run_id: str | None = None,
+        stage: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            clauses = ["problem_id = ?"]
+            params: list[Any] = [problem_id]
+            if run_id is not None:
+                clauses.append("run_id = ?")
+                params.append(run_id)
+            if stage is not None:
+                clauses.append("stage = ?")
+                params.append(stage)
+            cur = conn.execute(
+                f"""
+                SELECT *
+                FROM lima_event
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (*params, min(limit, 1000)),
             )
             return [dict(r) for r in cur.fetchall()]
         finally:
@@ -2495,6 +2582,7 @@ class LimaDatabase:
             "literature_links": self.list_universe_literature_links(problem_id, limit=30),
             "formal_reviews": self.list_formal_reviews(problem_id, limit=20),
             "artifacts": self.list_artifacts(problem_id, limit=30),
+            "events": self.list_events(problem_id, limit=60),
             "policy_revisions": self.list_policy_revisions(problem_id, limit=8),
             "policy_layers": self.list_policy_layers(problem_id, limit=20),
             "transfer_metrics": self.list_transfer_metrics(problem_id, limit=12),
