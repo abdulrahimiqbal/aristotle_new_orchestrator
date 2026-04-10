@@ -566,8 +566,10 @@ def _boundary_chip_firing_check(obligation: dict[str, Any]) -> tuple[str, str, d
                         artifact,
                     )
         artifact["checked_transitions"] = checked
+        artifact["checked_moves"] = checked
         artifact["min_drop"] = min_drop
         artifact["max_drop"] = max_drop
+        artifact["potential_name"] = "quadratic_sink_potential"
         return (
             "verified_local",
             f"Checked {checked} bounded legal firings and the quadratic sink potential dropped by {min_drop} to {max_drop} each time.",
@@ -655,6 +657,33 @@ def _finite_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]
             f"Odd residue classes {odd_non_descent} do not one-step descend; this is evidence for the obligation, not a proof of the quotient transfer."
         ),
         artifact,
+    )
+
+
+def _run_local_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    kind = str(obligation.get("obligation_kind") or "")
+    if _is_boundary_chip_firing_obligation(obligation):
+        if kind in {"finite_check", "counterexample_search", "invariant_check"}:
+            return _boundary_chip_firing_check(obligation)
+        return (
+            "inconclusive",
+            "Boundary chip-firing checker does not support this local obligation kind yet.",
+            {
+                "checker_path": "boundary_chip_firing",
+                "obligation_id": str(obligation.get("id") or ""),
+                "obligation_kind": kind,
+            },
+        )
+    if kind in {"finite_check", "counterexample_search"}:
+        return _finite_check(obligation)
+    return (
+        "inconclusive",
+        "No local checker is available for this obligation kind.",
+        {
+            "checker_path": "unsupported_local_kind",
+            "obligation_id": str(obligation.get("id") or ""),
+            "obligation_kind": kind,
+        },
     )
 
 
@@ -1349,7 +1378,7 @@ def run_queued_obligation_checks(
     for obligation in obligations:
         obligation_id = str(obligation.get("id") or "")
         kind = str(obligation.get("obligation_kind") or "")
-        if kind not in {"finite_check", "counterexample_search"}:
+        if kind not in LOCAL_CHECK_KINDS:
             if kind in FORMAL_REVIEW_KINDS or kind == "literature_crosscheck":
                 queue_formal_review(lima_db, obligation_id=obligation_id)
             skipped.append(obligation_id)
@@ -1384,7 +1413,7 @@ def run_queued_obligation_checks(
                 },
             )
         lima_db.set_obligation_status(obligation_id, "running_local")
-        status, summary, artifact = _finite_check(obligation)
+        status, summary, artifact = _run_local_check(obligation)
         lima_db.create_artifact(
             problem_id=problem_id,
             universe_id=str(obligation.get("universe_id") or ""),

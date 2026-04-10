@@ -1042,6 +1042,58 @@ def test_problem_native_local_checker_verifies_boundary_chip_firing_obligation(
     assert safe_json_loads(latest_artifact["content_json"], {})["artifact"]["checker_path"] == "boundary_chip_firing"
 
 
+def test_problem_native_local_checker_executes_quadratic_potential_invariant_check(
+    tmp_path: Path,
+) -> None:
+    db = LimaDatabase(str(tmp_path / "lima.db"))
+    db.initialize()
+    problem_id, _ = db.create_problem(
+        slug="synthesized_problem_2",
+        title="Synthesized Problem 2",
+        statement_md=(
+            "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+            "The final stable state should be order-independent."
+        ),
+        domain="discrete_dynamics",
+        default_goal_text="Check sinked chip-firing.",
+    )
+    conn = sqlite3.connect(str(tmp_path / "lima.db"))
+    try:
+        conn.execute(
+            """
+            INSERT INTO lima_obligation (
+                id, problem_id, universe_id, obligation_kind, title, statement_md,
+                status, priority, lineage_json, created_at, updated_at
+            )
+            VALUES (
+                'obl-quad', ?, 'univ-chip', 'invariant_check', 'quadratic_potential_descent',
+                'Check on bounded states that the quadratic sink potential strictly decreases under every legal firing.',
+                'queued_local', 5,
+                '{"source_family_key":"chip_firing_boundary_sinks","source_universe_title":"Chip-Firing with Boundary Sinks"}',
+                'now', 'now'
+            )
+            """,
+            (problem_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = run_queued_obligation_checks(db, problem_id=problem_id)
+    obligation = db.get_obligation("obl-quad")
+    artifacts = db.list_artifacts(problem_id, limit=20)
+    latest_artifact = artifacts[0]
+    payload = safe_json_loads(latest_artifact["content_json"], {})
+
+    assert result["checked"] == ["obl-quad"]
+    assert result["skipped"] == []
+    assert obligation["status"] in {"verified_local", "refuted_local"}
+    assert payload["obligation_kind"] == "invariant_check"
+    assert payload["artifact"]["checker_path"] == "boundary_chip_firing"
+    assert payload["artifact"]["potential_name"] == "quadratic_sink_potential"
+    assert payload["artifact"]["checked_transitions"] > 0
+
+
 def test_lima_suppresses_repeated_weakened_handoff_without_material_delta(tmp_path: Path) -> None:
     db = LimaDatabase(str(tmp_path / "lima.db"))
     db.initialize()

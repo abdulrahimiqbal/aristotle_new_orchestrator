@@ -483,6 +483,25 @@ def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
     )
     obligation_payload = safe_json_loads(obligation_event["payload_json"], {})
     assert obligation_payload["checker_path"] == "boundary_chip_firing"
+    quadratic_started = next(
+        event
+        for event in events
+        if event["stage"] == "obligation_check"
+        and event["event_kind"] == "started"
+        and safe_json_loads(event["payload_json"], {}).get("title") == "quadratic_potential_descent"
+    )
+    quadratic_started_payload = safe_json_loads(quadratic_started["payload_json"], {})
+    assert quadratic_started_payload["checker_path"] == "boundary_chip_firing"
+    quadratic_completed = next(
+        event
+        for event in events
+        if event["stage"] == "obligation_check"
+        and event["event_kind"] == "completed"
+        and safe_json_loads(event["payload_json"], {}).get("title") == "quadratic_potential_descent"
+    )
+    quadratic_completed_payload = safe_json_loads(quadratic_completed["payload_json"], {})
+    assert quadratic_completed_payload["checker_path"] == "boundary_chip_firing"
+    assert quadratic_completed_payload["status"] in {"verified_local", "refuted_local"}
 
 
 def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> None:
