@@ -1027,6 +1027,7 @@ async def lima_ops(problem: str | None = None):
         "auto_interval_sec": int(app_config.LIMA_LOOP_INTERVAL_SEC),
         "database_path": app_config.LIMA_DATABASE_PATH,
         "default_mode": app_config.LIMA_DEFAULT_MODE,
+        "default_run_label": "GUIDED_DEBUG",
         "benchmark_locked": bool(app_config.LIMA_BENCHMARK_LOCKED),
         "family_governance_frozen": bool(app_config.LIMA_FREEZE_FAMILY_GOVERNANCE),
         "zero_live_authority": not bool(app_config.LIMA_ARISTOTLE_AUTO_SUBMIT),
@@ -1074,6 +1075,7 @@ async def lima_run_fragment(
     _auth: OperatorWriteAuth,
     problem_slug: str = Form(""),
     mode: str = Form(""),
+    run_label: str = Form("GUIDED_DEBUG"),
 ):
     selected_problem = (problem_slug or app_config.LIMA_DEFAULT_PROBLEM).strip()
     flash = await run_lima(
@@ -1082,6 +1084,7 @@ async def lima_run_fragment(
         problem_slug=selected_problem,
         trigger_kind="manual",
         mode=mode or app_config.LIMA_DEFAULT_MODE,
+        run_label=run_label or "GUIDED_DEBUG",
     )
     if not _is_htmx_request(request):
         return RedirectResponse(f"/lima/{selected_problem}", status_code=303)
@@ -1186,6 +1189,7 @@ async def lima_start_from_prompt_fragment(
     slug: str = Form(""),
     domain: str = Form("unspecified"),
     mode: str = Form(""),
+    run_label: str = Form("GUIDED_DEBUG"),
     run_now: str = Form(""),
 ):
     prompt_text = prompt.strip()
@@ -1234,6 +1238,7 @@ async def lima_start_from_prompt_fragment(
             problem_slug=selected_problem,
             trigger_kind="manual",
             mode=mode or app_config.LIMA_DEFAULT_MODE,
+            run_label=run_label or "GUIDED_DEBUG",
         )
         flash = {**run_flash, "problem": flash["problem"], "problem_title": flash["problem_title"]}
     if not _is_htmx_request(request):

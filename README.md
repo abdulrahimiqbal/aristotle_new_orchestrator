@@ -88,6 +88,44 @@ Lima policy is explicitly layered:
 
 Benchmark/session policy overrides problem policy during the session, and problem policy overrides global policy for that problem. Benchmark controls must stay scoped: they expire or are explicitly closed, and they must not silently become global defaults.
 
+### Generic ontology discovery
+
+Lima now uses a blueprint-based discovery path instead of benchmark-shaped runtime shortcuts.
+
+- A generic problem-signature extractor reads the visible problem statement and examples and scores abstract features such as local neighboring-site operators, boundary leakage, order-sensitive legal moves, stable-state targets, confluence hints, hidden-state suspicion, rewrite suspicion, quotient suspicion, and operator-algebra suspicion.
+- Blueprint selection happens from those signatures. Current blueprint classes include `coordinate_lift`, `rewrite_system`, `automaton`, `quotient`, `graph_stabilization`, `cocycle_or_skew_product`, `symbolic_grammar`, `geometric_or_topological`, and `algebraic_operator`.
+- Each blueprint defines its fit conditions, proposed core objects, canonical proof-program obligations, and the local capability plugins that can test those obligations.
+- For Synthesized Problem 2, Lima can still select a graph-stabilization world, but it does so through generic signature scoring and blueprint selection rather than direct phrase triggers or hardcoded fallback-family injection.
+
+### Capability-plugin local checking
+
+Local obligation checking now routes through capability plugins instead of benchmark-specific obligation-title matching as the main control path.
+
+- Example capabilities include `local_operator_commutation_checker`, `bounded_confluence_checker`, `bounded_termination_checker`, `ranking_function_drop_checker`, `exact_bridge_counterexample_checker`, `rewrite_rule_checker`, and `representation_uniqueness_checker`.
+- Obligations carry metadata such as ontology blueprint, template key, and capability hints.
+- Runtime routing prefers that metadata and ontology class first. Legacy title/family matching remains only as a compatibility fallback for older stored obligations.
+
+### AUTONOMY_EVAL and GUIDED_DEBUG
+
+Runs now carry an explicit runtime label:
+
+- `AUTONOMY_EVAL`: benchmark-shaped shortcuts are disabled, only generic ontology-blueprint selection is allowed, problem-specific rescue prompts are disabled, and guided repair loops are skipped.
+- `GUIDED_DEBUG`: generic discovery is still the main path, but bounded repair/debug aids may run to help inspect an already-identified ontology.
+
+These labels are stored in Lima run metadata, included in event logs, and surfaced in the presenter/UI runtime-policy summary.
+
+### Why shortcut paths do not count as autonomy evidence
+
+Benchmark-shaped shortcuts can still be useful for debugging a known frontier, but they are not evidence that Lima discovered the ontology on its own. Autonomy evidence must come from `AUTONOMY_EVAL` runs where the system only has access to the visible problem packet, generic policy layers, and blueprint-driven discovery machinery.
+
+### What changed to keep Lima generic
+
+- Removed the main runtime dependence on direct boundary-spill phrase triggers.
+- Replaced hardcoded problem-native family injection with generic blueprint scoring and selection.
+- Moved local checking toward capability-plugin routing through obligation metadata and ontology class.
+- Made policy layers real at runtime by resolving active global, problem, benchmark, and session layers into the live control path.
+- Added explicit autonomy-evaluation labeling so benchmark-shaped debug helpers cannot be mistaken for autonomous discovery.
+
 ### Anti-overfitting design checklist
 
 - Does this patch teach a research skill rather than a benchmark answer?

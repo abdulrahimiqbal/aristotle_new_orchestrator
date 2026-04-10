@@ -5,6 +5,7 @@ from typing import Any
 
 from orchestrator import config as app_config
 from orchestrator.lima_db import LimaDatabase
+from orchestrator.lima_discovery import resolve_runtime_policy
 from orchestrator.lima_models import normalize_family_governance_state
 
 
@@ -512,6 +513,8 @@ def analyze_and_update_policy(
     fractures = lima_db.list_fractures(problem_id, limit=50)
     obligations = lima_db.list_obligations(problem_id, limit=50)
     runs = lima_db.list_runs(problem_id, limit=20)
+    policy_layers = lima_db.list_policy_layers(problem_id, limit=20)
+    runtime_policy = resolve_runtime_policy(policy_layers, run_label="GUIDED_DEBUG", problem_id=problem_id)
 
     formalizable_families = [
         f for f in families if int(f.get("formal_win_count") or 0) > 0
@@ -629,6 +632,7 @@ def analyze_and_update_policy(
         "failure_type_histogram": repeated_failures,
         "stagnation_controller": stagnation_controller,
         "family_search_controls": applied_controls[:12],
+        "runtime_policy_indicators": runtime_policy.get("indicators", {}),
     }
     benchmark["transfer_metrics"] = compute_transfer_metrics(
         families=families,
@@ -664,6 +668,7 @@ def analyze_and_update_policy(
         "analysis_summary_md": summary,
         "policy_changes": policy_changes,
         "benchmark": benchmark,
+        "runtime_policy": runtime_policy,
         "family_search_controls": applied_controls,
         "stagnation_controller": stagnation_controller,
     }

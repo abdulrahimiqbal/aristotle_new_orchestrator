@@ -146,6 +146,12 @@ def infer_ontology_class_from_text(text: str) -> str:
             "stabilization",
             "stable endpoint",
             "path graph",
+            "boundary leakage",
+            "boundary accounting",
+            "neighboring sites",
+            "local redistribution",
+            "confluence",
+            "commutation",
         )
     ):
         return "graph_stabilization"

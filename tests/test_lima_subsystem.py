@@ -426,7 +426,7 @@ def test_lima_run_persists_memory_without_live_main_queue(
         conn.close()
 
 
-def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
+def test_lima_live_fallback_for_synthesized_problem_2_emits_graph_stabilization_blueprint(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(app_config, "LLM_API_KEY", "")
@@ -458,17 +458,18 @@ def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
     assert result["ok"] is True
     run_universes = lima.list_universes_for_run(result["run_id"])
     assert run_universes
-    assert run_universes[0]["family_key"] == "chip_firing_boundary_sinks"
-    assert run_universes[0]["title"] == "Chip-Firing with Boundary Sinks"
+    assert run_universes[0]["family_key"] == "graph_stabilization_boundary_leakage"
+    assert run_universes[0]["title"] == "Boundary-Leakage Graph Stabilization"
     assert run_universes[0]["ontology_class"] == "graph_stabilization"
 
     obligations = lima.list_obligations(problem_id, limit=50)
     obligation_titles = {row["title"]: row for row in obligations}
-    assert "boundary_spill_move_equals_sinked_firing" in obligation_titles
-    assert "firing_commutation_local" in obligation_titles
-    assert "quadratic_potential_descent" in obligation_titles
-    assert "stabilization_terminates" in obligation_titles
-    assert "local_confluence_or_abelianity" in obligation_titles
+    assert "exact_transition_law_case_A" in obligation_titles
+    assert "exact_transition_law_case_B" in obligation_titles
+    assert "local_operator_commutation_window" in obligation_titles
+    assert "ranking_or_lexicographic_descent" in obligation_titles
+    assert "bounded_termination_or_stabilization" in obligation_titles
+    assert "local_confluence_or_commutation" in obligation_titles
     assert any(row["status"] == "verified_local" for row in obligations)
 
     events = lima.list_events(problem_id, run_id=result["run_id"], limit=200)
@@ -476,31 +477,37 @@ def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
         event for event in events if event["stage"] == "generation" and event["event_kind"] == "completed"
     )
     generation_payload = safe_json_loads(generation_completed["payload_json"], {})
-    assert generation_payload["selection_meta"]["problem_aware_family_selected"] is True
-    assert generation_payload["selection_meta"]["selected_family_key"] == "chip_firing_boundary_sinks"
+    assert generation_payload["selection_meta"]["selected_via"] == "generic_problem_signature_blueprint"
+    assert generation_payload["selection_meta"]["selected_family_key"] == "graph_stabilization_boundary_leakage"
     obligation_event = next(
         event for event in events if event["stage"] == "obligation_check" and event["event_kind"] == "completed"
     )
     obligation_payload = safe_json_loads(obligation_event["payload_json"], {})
-    assert obligation_payload["checker_path"] == "boundary_chip_firing"
+    assert obligation_payload["checker_path"] in {
+        "exact_bridge_counterexample_checker",
+        "ranking_function_drop_checker",
+        "local_operator_commutation_checker",
+        "bounded_confluence_checker",
+        "bounded_termination_checker",
+    }
     quadratic_started = next(
         event
         for event in events
         if event["stage"] == "obligation_check"
         and event["event_kind"] == "started"
-        and safe_json_loads(event["payload_json"], {}).get("title") == "quadratic_potential_descent"
+        and safe_json_loads(event["payload_json"], {}).get("title") == "ranking_or_lexicographic_descent"
     )
     quadratic_started_payload = safe_json_loads(quadratic_started["payload_json"], {})
-    assert quadratic_started_payload["checker_path"] == "boundary_chip_firing"
+    assert quadratic_started_payload["checker_path"] == "ranking_function_drop_checker"
     quadratic_completed = next(
         event
         for event in events
         if event["stage"] == "obligation_check"
         and event["event_kind"] == "completed"
-        and safe_json_loads(event["payload_json"], {}).get("title") == "quadratic_potential_descent"
+        and safe_json_loads(event["payload_json"], {}).get("title") == "ranking_or_lexicographic_descent"
     )
     quadratic_completed_payload = safe_json_loads(quadratic_completed["payload_json"], {})
-    assert quadratic_completed_payload["checker_path"] == "boundary_chip_firing"
+    assert quadratic_completed_payload["checker_path"] == "ranking_function_drop_checker"
     assert quadratic_completed_payload["status"] in {"verified_local", "refuted_local"}
     bridge_repair_event = next(
         event for event in events if event["stage"] == "bridge_repair" and event["event_kind"] == "completed"
@@ -514,8 +521,51 @@ def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
         for artifact in artifacts
         if artifact["artifact_kind"] == "bridge_repair_cycle"
     )
-    assert bridge_repair_artifact["benchmark_status"] == "bounded_proof_program_recovered"
+    assert bridge_repair_artifact["proof_program_status"] == "bounded_proof_program_recovered"
     assert len(bridge_repair_artifact["top_revised_bridges"]) == 3
+
+
+def test_lima_autonomy_eval_records_runtime_label_and_disables_guided_repair(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_config, "LLM_API_KEY", "")
+    main_db = Database(str(tmp_path / "main.db"))
+    main_db.initialize()
+    lima = LimaDatabase(str(tmp_path / "lima.db"))
+    lima.initialize()
+    lima.create_problem(
+        slug="synthesized_problem_2",
+        title="Synthesized Problem 2",
+        statement_md=(
+            "A move at position i is allowed if ai >= 2. One unit disappears off the boundary. "
+            "A state is stable if every entry is 0 or 1, and the final stable state should be order-independent."
+        ),
+        domain="discrete_dynamics",
+        default_goal_text="Check generic autonomy mode.",
+    )
+
+    result = asyncio.run(
+        run_lima(
+            lima,
+            main_db,
+            problem_slug="synthesized_problem_2",
+            trigger_kind="manual",
+            mode="forge",
+            run_label="AUTONOMY_EVAL",
+        )
+    )
+
+    latest_run = lima.get_latest_run(result["problem_id"])
+    events = lima.list_events(result["problem_id"], run_id=result["run_id"], limit=200)
+    bridge_repair_event = next(
+        event for event in events if event["stage"] == "bridge_repair" and event["event_kind"] == "skipped"
+    )
+    bridge_repair_payload = safe_json_loads(bridge_repair_event["payload_json"], {})
+
+    assert result["run_label"] == "AUTONOMY_EVAL"
+    assert latest_run["run_label"] == "AUTONOMY_EVAL"
+    assert int(latest_run["autonomy_eval"]) == 1
+    assert bridge_repair_payload["reason"] == "autonomy_eval_disables_guided_repair"
 
 
 def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> None:
@@ -575,7 +625,7 @@ def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> N
             data={"problem_slug": "goldbach", "mode": "balanced"},
         )
         assert run_resp.status_code == 200
-        assert "Goldbach conjecture bridge-obligation atlas" in run_resp.text
+        assert "Goldbach conjecture" in run_resp.text
         assert "Formal obligations" in run_resp.text
         assert "Hold for obligations" in run_resp.text
 

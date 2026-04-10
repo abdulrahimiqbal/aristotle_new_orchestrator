@@ -635,7 +635,7 @@ def _activity_feed(
                     220,
                 ),
                 "meta": _choice(
-                    f"{latest_run.get('created_at')} / {latest_run.get('trigger_kind')} / {latest_run.get('mode')}"
+                    f"{latest_run.get('created_at')} / {latest_run.get('trigger_kind')} / {latest_run.get('mode')} / {latest_run.get('run_label') or 'GUIDED_DEBUG'}"
                 ),
             }
         )
@@ -1025,6 +1025,18 @@ def _review_guidance(
 def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None = None) -> dict[str, Any]:
     state = dict(snapshot.get("state") or {})
     latest_run = dict(snapshot.get("latest_run") or {}) if snapshot.get("latest_run") else None
+    runtime_policy = {}
+    if latest_run:
+        latest_run["policy_snapshot"] = _load_json(latest_run.get("policy_snapshot_json"), {})
+        runtime_policy = _load_json(
+            latest_run["policy_snapshot"].get("runtime_policy"),
+            {},
+        )
+        latest_run["run_label"] = _choice(
+            latest_run.get("run_label"),
+            latest_run["policy_snapshot"].get("run_label"),
+            fallback="GUIDED_DEBUG",
+        )
     universes = [dict(u) for u in snapshot.get("universes") or []]
     handoffs = [dict(h) for h in snapshot.get("handoffs") or []]
     pending_handoffs: list[dict[str, Any]] = []
@@ -1150,6 +1162,20 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         latest_summary,
         fallback="Lima is ready for the next research checkpoint.",
     )
+    runtime_policy_indicators = _load_json(
+        _load_json(state.get("pressure_map_json"), {}).get("runtime_policy_indicators"),
+        {},
+    )
+    if runtime_policy and isinstance(runtime_policy, dict):
+        runtime_policy_indicators = {
+            **runtime_policy_indicators,
+            **dict(runtime_policy.get("indicators") or {}),
+            "run_label": _choice(
+                runtime_policy.get("run_label"),
+                latest_run.get("run_label") if latest_run else "",
+                fallback="GUIDED_DEBUG",
+            ),
+        }
 
     return {
         "lima_problem": snapshot.get("problem") or {},
@@ -1160,6 +1186,8 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
         "lima_policy_pretty": _pretty(state.get("policy_json")),
         "lima_latest_run": latest_run,
         "lima_latest_summary": latest_summary,
+        "lima_runtime_policy": runtime_policy,
+        "lima_runtime_policy_indicators": runtime_policy_indicators,
         "lima_runs": snapshot.get("runs") or [],
         "lima_families": families,
         "lima_family_search_controls": family_search_controls,
@@ -1222,6 +1250,18 @@ def build_lima_ui_context(snapshot: dict[str, Any], *, lima_flash: dict | None =
                 "value": "forge",
                 "label": "Forge",
                 "hint": "push toward formal obligations",
+            },
+        ],
+        "lima_run_labels": [
+            {
+                "value": "GUIDED_DEBUG",
+                "label": "Guided Debug",
+                "hint": "allows bounded repair/debug helpers",
+            },
+            {
+                "value": "AUTONOMY_EVAL",
+                "label": "Autonomy Eval",
+                "hint": "generic blueprints only; benchmark-shaped shortcuts disabled",
             },
         ],
         "lima_metrics": {

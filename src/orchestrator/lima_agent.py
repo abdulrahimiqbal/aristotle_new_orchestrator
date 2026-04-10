@@ -17,6 +17,14 @@ from uuid import uuid4
 from orchestrator import config as app_config
 from orchestrator.db import Database
 from orchestrator.lima_db import LimaDatabase
+from orchestrator.lima_discovery import (
+    build_generic_blueprint_universe,
+    build_graph_stabilization_universe,
+    extract_problem_signature,
+    normalize_run_label,
+    resolve_runtime_policy,
+    select_ontology_blueprints,
+)
 from orchestrator.lima_literature import (
     infer_literature_relation,
     refresh_literature,
@@ -387,10 +395,20 @@ def build_pressure_map(
             "imposed_by": row.get("imposed_by"),
             "reason": row.get("reason_md"),
             "meta_mutable": bool(row.get("meta_mutable", 1)),
-            "policy": safe_json_loads(row.get("policy_json"), {}),
+            "policy": row.get("policy_json")
+            if isinstance(row.get("policy_json"), dict)
+            else safe_json_loads(row.get("policy_json"), {}),
         }
         for row in policy_layers or []
     ]
+    runtime_policy = next(
+        (
+            layer["policy"]
+            for layer in active_policy_layers
+            if str(layer.get("scope") or "") == "session" and isinstance(layer.get("policy"), dict)
+        ),
+        {},
+    )
     return {
         "problem_slug": problem.get("slug"),
         "seed_frontier": seed.get("known_frontier") or [],
@@ -443,10 +461,25 @@ def build_pressure_map(
             "exact_transition_law_case_B",
             "ranking_or_lexicographic_descent",
             "bridge_to_surface_system",
-            "invariant_or_monovariant_validity",
-            "local_rewrite_correctness",
-            "quotient_soundness",
+            "local_confluence_or_commutation",
+            "quotient_or_normal_form_soundness",
         ],
+        "runtime_policy_indicators": {
+            "active_global_policy": any(str(layer.get("scope") or "") == "global" for layer in active_policy_layers),
+            "active_problem_policy": any(str(layer.get("scope") or "") == "problem" for layer in active_policy_layers),
+            "active_benchmark_policy": any(str(layer.get("scope") or "") == "benchmark" for layer in active_policy_layers),
+            "active_session_policy": any(str(layer.get("scope") or "") == "session" for layer in active_policy_layers),
+            "run_label": runtime_policy.get("run_label") if isinstance(runtime_policy, dict) else "",
+            "autonomy_eval": bool(runtime_policy.get("autonomy_eval")) if isinstance(runtime_policy, dict) else False,
+            "meta_lima_mutation_allowed": {
+                scope: all(
+                    bool(layer.get("meta_mutable", 1))
+                    for layer in active_policy_layers
+                    if str(layer.get("scope") or "") == scope
+                )
+                for scope in ("global", "problem", "benchmark", "session")
+            },
+        },
         "failed_invariants": ["naive global monotone descent", *failed[:4]],
         "known_constraints": [
             "No live Aristotle or main experiment queue mutations without human approval.",
@@ -1089,7 +1122,11 @@ def _latest_boundary_bridge_counterexample(
         if str(artifact.get("artifact_kind") or "") != "obligation_check":
             continue
         payload = safe_json_loads(artifact.get("content_json"), {})
-        if str(payload.get("title") or "") != "boundary_spill_move_equals_sinked_firing":
+        if str(payload.get("title") or "") not in {
+            "boundary_spill_move_equals_sinked_firing",
+            "exact_transition_law_case_A",
+            "exact_transition_law_case_B",
+        }:
             continue
         detail = payload.get("artifact")
         if isinstance(detail, dict) and isinstance(detail.get("counterexample"), dict):
@@ -1109,12 +1146,12 @@ def _build_boundary_bridge_repair_payload(
     bridge_statuses: dict[str, dict[str, Any]],
     counterexample: dict[str, Any],
 ) -> dict[str, Any] | None:
-    exact_bridge = bridge_statuses.get("boundary_spill_move_equals_sinked_firing")
+    exact_bridge = bridge_statuses.get("exact_transition_law_case_B") or bridge_statuses.get("boundary_spill_move_equals_sinked_firing")
     support_titles = (
-        "quadratic_potential_descent",
-        "firing_commutation_local",
-        "stabilization_terminates",
-        "local_confluence_or_abelianity",
+        "ranking_or_lexicographic_descent",
+        "local_operator_commutation_window",
+        "bounded_termination_or_stabilization",
+        "local_confluence_or_commutation",
     )
     if str((exact_bridge or {}).get("status") or "") != "refuted_local":
         return None
@@ -1225,7 +1262,7 @@ def _build_boundary_bridge_repair_payload(
     return {
         "problem_slug": str(problem.get("slug") or ""),
         "problem_title": str(problem.get("title") or ""),
-        "family_key": "chip_firing_boundary_sinks",
+        "family_key": "graph_stabilization_boundary_leakage",
         "repair_scope": "narrow_boundary_bridge_only",
         "exact_bridge_status": str((exact_bridge or {}).get("status") or ""),
         "exact_bridge_summary": str((exact_bridge or {}).get("result_summary_md") or ""),
@@ -1239,6 +1276,7 @@ def _build_boundary_bridge_repair_payload(
         "most_likely_correct_reason": (
             "The only observed failure is missing sink bookkeeping, so adding explicit left/right sink ledgers is the smallest repair that restores exact stepwise simulation without changing the ontology."
         ),
+        "proof_program_status": "bounded_proof_program_recovered",
         "benchmark_status": "bounded_proof_program_recovered",
         "status_reason": (
             "The chip-firing ontology now has a live bounded proof program, but the original exact bridge remains false until one of these repaired bridges is checked."
@@ -1254,14 +1292,18 @@ def _run_boundary_bridge_repair_cycle(
     run_id: str,
     universes: list[LimaUniverseSpec],
 ) -> dict[str, Any] | None:
-    if not any(str(universe.family_key or "") == "chip_firing_boundary_sinks" for universe in universes):
+    if not any(
+        str(universe.family_key or "") in {"chip_firing_boundary_sinks", "graph_stabilization_boundary_leakage"}
+        for universe in universes
+    ):
         return None
     titles = [
-        "boundary_spill_move_equals_sinked_firing",
-        "quadratic_potential_descent",
-        "firing_commutation_local",
-        "stabilization_terminates",
-        "local_confluence_or_abelianity",
+        "exact_transition_law_case_A",
+        "exact_transition_law_case_B",
+        "ranking_or_lexicographic_descent",
+        "local_operator_commutation_window",
+        "bounded_termination_or_stabilization",
+        "local_confluence_or_commutation",
     ]
     payload = _build_boundary_bridge_repair_payload(
         problem=problem,
@@ -1430,39 +1472,32 @@ def _local_generation(
     pressure_map: dict[str, Any],
     literature_refresh: dict[str, Any],
     current_universes: list[dict[str, Any]] | None = None,
+    run_label: str = "GUIDED_DEBUG",
+    runtime_policy: dict[str, Any] | None = None,
 ) -> LimaGenerationResponse:
     problem_title = str(problem.get("title") or problem.get("slug") or "the problem")
     problem_slug = str(problem.get("slug") or "").lower()
-    boundary_chip_problem = _looks_like_boundary_dissipation_problem(problem)
     stagnation = pressure_map.get("stagnation_controller") if isinstance(pressure_map, dict) else {}
+    resolved_policy = runtime_policy or {"merged_policy": {"run_label": normalize_run_label(run_label)}}
+    merged_policy = dict(resolved_policy.get("merged_policy") or {})
     if "collatz" not in problem_slug and "collatz" not in problem_title.lower():
         top_frontier = _best_generic_frontier_universe(current_universes or [], pressure_map)
+        signature = extract_problem_signature(problem)
+        blueprint_decision = select_ontology_blueprints(
+            signature=signature,
+            current_universes=current_universes,
+        )
         repair_loop = (
             stagnation.get("repair_loop")
             if isinstance(stagnation, dict) and isinstance(stagnation.get("repair_loop"), dict)
             else {}
         )
-        frontier_blob = " ".join(
-            [
-                str((top_frontier or {}).get("title") or ""),
-                str((top_frontier or {}).get("family_key") or ""),
-                str((top_frontier or {}).get("core_story_md") or ""),
-                str((top_frontier or {}).get("solved_world") or ""),
-                str((top_frontier or {}).get("why_problem_is_easy_here") or ""),
-            ]
-        ).lower()
         if (
-            boundary_chip_problem
+            bool(merged_policy.get("allow_guided_repair_cycles", True))
             and top_frontier
             and isinstance(repair_loop, dict)
             and repair_loop.get("active")
             and str(repair_loop.get("target_family_key") or "") == str(top_frontier.get("family_key") or "")
-            and (
-                "chip" in frontier_blob
-                or "sandpile" in frontier_blob
-                or "sink" in frontier_blob
-                or _looks_like_boundary_dissipation_problem(problem)
-            )
         ):
             return _chip_firing_repair_fallback(
                 problem=problem,
@@ -1470,20 +1505,6 @@ def _local_generation(
                 pressure_map=pressure_map,
                 top_frontier=top_frontier,
                 repair_loop=repair_loop,
-            )
-        if (
-            boundary_chip_problem
-            and (
-                not top_frontier
-                or _family_constraint_action(pressure_map, str(top_frontier.get("family_key") or ""))
-                not in {"cooldown", "soft_ban", "hard_ban"}
-            )
-        ):
-            return _generic_chip_firing_fallback(
-                problem=problem,
-                mode=mode,
-                pressure_map=pressure_map,
-                top_frontier=top_frontier,
             )
         if (
             isinstance(stagnation, dict)
@@ -1496,116 +1517,47 @@ def _local_generation(
                 pressure_map=pressure_map,
                 top_frontier=top_frontier,
             )
+        if (
+            str(blueprint_decision.get("selected_blueprint") or "") == "graph_stabilization"
+            and (
+                not top_frontier
+                or _family_constraint_action(pressure_map, str(top_frontier.get("family_key") or ""))
+                not in {"cooldown", "soft_ban", "hard_ban"}
+            )
+        ):
+            generated = build_graph_stabilization_universe(
+                problem=problem,
+                mode=mode,
+                signature=signature,
+            )
+            generated.pressure_map = pressure_map
+            generated.selection_meta = {
+                **generated.selection_meta,
+                **blueprint_decision,
+                "run_label": normalize_run_label(run_label),
+            }
+            return generated
         generic_family = {
             "wild": "structural_completion_atlas",
             "stress": "counterexample_boundary_atlas",
             "forge": "minimal_bridge_obligation_atlas",
             "balanced": "minimal_bridge_obligation_atlas",
         }[mode]
-        universe = LimaUniverseSpec(
-            title=f"{problem_title} bridge-obligation atlas",
-            family_key=generic_family,
-            family_kind="new" if mode == "wild" else "adjacent",
-            branch_of_math=str(problem.get("domain") or "general mathematics"),
-            solved_world=(
-                "A decomposition of the problem into local regimes where every "
-                "candidate mechanism is paired with a falsifier and a narrow bridge."
-            ),
-            why_problem_is_easy_here=(
-                "The conjecture becomes easier only if each regime has a precise "
-                "translation back to the original statement and a small obstruction search."
-            ),
-            core_story_md=(
-                f"Lima starts {problem_title} with a conservative atlas: define regimes, "
-                "state bridge obligations, and kill any regime that lacks a counterexample boundary."
-            ),
-            core_objects=[
-                LimaObjectSpec(
-                    object_kind="state_space",
-                    name="ProblemRegimeAtlas",
-                    description_md="A problem-specific partition into regimes with explicit bridge obligations.",
-                    formal_shape="Regime -> Proposition",
-                    payload={"problem_slug": problem.get("slug")},
-                ),
-                LimaObjectSpec(
-                    object_kind="bridge",
-                    name="OriginalStatementBridge",
-                    description_md="A translation layer from local regime claims back to the original conjecture.",
-                    formal_shape="local_claim -> original_statement",
-                    payload={},
-                ),
-            ],
-            laws=[
-                LimaClaimSpec(
-                    claim_kind="law",
-                    title="Every regime needs a falsifier",
-                    statement_md="A regime is not useful unless it has a bounded obstruction search or a formal bridge target.",
-                    priority=4,
-                )
-            ],
-            backward_translation=[
-                "Map each local regime claim back to the original conjecture statement.",
-                "Reject regimes whose assumptions cannot be stated independently of the target conclusion.",
-            ],
-            bridge_lemmas=[
-                LimaClaimSpec(
-                    claim_kind="bridge_lemma",
-                    title="Regime bridge implies original reduction",
-                    statement_md="If every regime bridge is verified, the atlas reduces the original problem to local obligations.",
-                    priority=5,
-                )
-            ],
-            conditional_theorem=LimaClaimSpec(
-                claim_kind="conditional_theorem",
-                title="Atlas reduction theorem",
-                statement_md="If the regime atlas covers the problem and all bridge obligations survive rupture, the original conjecture is reduced.",
-                priority=5,
-            ),
-            kill_tests=[
-                LimaClaimSpec(
-                    claim_kind="kill_test",
-                    title="Vacuity audit",
-                    statement_md="Reject any regime that assumes the original conjecture or has no independent falsifier.",
-                    priority=5,
-                )
-            ],
-            expected_failure_mode="The atlas may be vacuous, non-covering, or too broad to formalize.",
-            literature_queries=[
-                f"{problem_title} survey",
-                f"{problem_title} counterexample methods",
-            ],
-            formalization_targets=[
-                LimaObligationSpec(
-                    obligation_kind="equivalence",
-                    title="State the first regime bridge",
-                    statement_md="Write one regime-to-original-statement bridge as a formal obligation.",
-                    priority=4,
-                )
-            ],
-            scores={
-                "compression_score": 3,
-                "fit_score": 3,
-                "novelty_score": 3,
-                "falsifiability_score": 4,
-                "bridgeability_score": 4,
-                "formalizability_score": 3,
-                "theorem_yield_score": 3,
-                "literature_novelty_score": 3,
-            },
+        generated = build_generic_blueprint_universe(
+            problem=problem,
+            mode=mode,
+            signature=signature,
+            blueprint_key=str(blueprint_decision.get("selected_blueprint") or "coordinate_lift"),
         )
-        return LimaGenerationResponse(
-            frontier_summary_md=(
-                f"{problem_title} is newly registered in Lima; frontier memory starts "
-                "from the user statement, seed packet, literature routing, and fracture constraints."
-            ),
-            pressure_map=pressure_map,
-            run_summary_md=(
-                f"Lima {mode} run initialized {problem_title} with a conservative "
-                "bridge-obligation atlas and deterministic rupture checks."
-            ),
-            universes=[universe],
-            policy_notes=["Generic problem fallback used; no live authority granted."],
-        )
+        generated.universes[0].family_key = generic_family
+        generated.pressure_map = pressure_map
+        generated.selection_meta = {
+            **generated.selection_meta,
+            **blueprint_decision,
+            "run_label": normalize_run_label(run_label),
+        }
+        generated.policy_notes.append("Generic blueprint fallback used; no problem-specific shortcut family was injected.")
+        return generated
     family_key = {
         "wild": "completion_boundary_sheaf",
         "stress": "residue_fracture_boundary",
@@ -1929,12 +1881,14 @@ async def run_lima(
     problem_slug: str | None = None,
     trigger_kind: str = "manual",
     mode: str | None = None,
+    run_label: str = "GUIDED_DEBUG",
 ) -> dict[str, Any]:
     global _GLOBAL_LIMA_RUN_LOCK
     if _GLOBAL_LIMA_RUN_LOCK:
         return {"ok": False, "error": "lima_run_in_progress"}
     _GLOBAL_LIMA_RUN_LOCK = True
     selected_mode = _mode(mode)
+    normalized_run_label = normalize_run_label(run_label)
     try:
         lima_db.initialize()
         problem = lima_db.get_problem(problem_slug)
@@ -1950,6 +1904,7 @@ async def run_lima(
                 "problem_slug": problem.get("slug"),
                 "trigger_kind": trigger_kind,
                 "mode": selected_mode,
+                "run_label": normalized_run_label,
             },
         )
         _log_run_event(
@@ -1981,7 +1936,18 @@ async def run_lima(
         fractures = lima_db.list_fractures(problem_id, limit=24)
         families = lima_db.list_family_leaderboard(problem_id, limit=16)
         family_search_constraints = lima_db.list_family_search_constraints(problem_id, limit=12)
-        policy_layers = lima_db.list_policy_layers(problem_id, limit=16)
+        persisted_policy_layers = lima_db.list_policy_layers(problem_id, limit=16)
+        runtime_policy = resolve_runtime_policy(
+            persisted_policy_layers,
+            run_label=normalized_run_label,
+            problem_id=problem_id,
+        )
+        policy_layers = [
+            *runtime_policy.get("active_layers", {}).get("global", []),
+            *runtime_policy.get("active_layers", {}).get("problem", []),
+            *runtime_policy.get("active_layers", {}).get("benchmark", []),
+            *runtime_policy.get("active_layers", {}).get("session", []),
+        ]
         _log_run_event(
             lima_db,
             problem_id=problem_id,
@@ -1998,6 +1964,7 @@ async def run_lima(
                 "families": len(families),
                 "family_search_constraints": len(family_search_constraints),
                 "policy_layers": len(policy_layers),
+                "run_label": normalized_run_label,
             },
         )
         pressure_map = build_pressure_map(
@@ -2011,6 +1978,7 @@ async def run_lima(
             families=families,
             policy_layers=policy_layers,
         )
+        pressure_map["runtime_policy"] = runtime_policy
         _log_run_event(
             lima_db,
             problem_id=problem_id,
@@ -2021,6 +1989,7 @@ async def run_lima(
                 "tension_count": len(pressure_map.get("tensions") or []),
                 "failed_invariant_count": len(pressure_map.get("failed_invariants") or []),
                 "constraint_count": len(pressure_map.get("search_constraints") or []),
+                "run_label": normalized_run_label,
                 "stagnation_active": bool(
                     isinstance(pressure_map.get("stagnation_controller"), dict)
                     and pressure_map.get("stagnation_controller", {}).get("active")
@@ -2127,6 +2096,8 @@ async def run_lima(
                 pressure_map=pressure_map,
                 literature_refresh=literature_refresh,
                 current_universes=current_universes,
+                run_label=normalized_run_label,
+                runtime_policy=runtime_policy,
             )
             generation_source = "local_fallback"
         universes = generated.universes[: int(app_config.LIMA_MAX_UNIVERSES_PER_RUN)]
@@ -2140,6 +2111,7 @@ async def run_lima(
                 "source": generation_source,
                 "universe_count": len(universes),
                 "json_warnings": json_warnings,
+                "run_label": normalized_run_label,
                 "selection_meta": dict(getattr(generated, "selection_meta", {}) or {}),
             },
         )
@@ -2246,6 +2218,8 @@ async def run_lima(
         )
         policy_snapshot = {
             "mode": selected_mode,
+            "run_label": normalized_run_label,
+            "autonomy_eval": bool(runtime_policy.get("merged_policy", {}).get("autonomy_eval")),
             "zero_live_authority": True,
             "json_warnings": json_warnings,
             "literature_refresh": literature_refresh,
@@ -2256,9 +2230,11 @@ async def run_lima(
                     "imposed_by": row.get("imposed_by"),
                     "reason": row.get("reason_md"),
                     "meta_mutable": bool(row.get("meta_mutable", 1)),
+                    "policy": row.get("policy_json") if isinstance(row.get("policy_json"), dict) else safe_json_loads(row.get("policy_json"), {}),
                 }
                 for row in policy_layers
             ],
+            "runtime_policy": runtime_policy,
             "benchmark_locked": any(
                 str(row.get("scope") or "") in {"benchmark", "session"} for row in policy_layers
             ) or bool(app_config.LIMA_BENCHMARK_LOCKED),
@@ -2331,6 +2307,8 @@ async def run_lima(
             problem_id=problem_id,
             trigger_kind=trigger_kind,
             mode=selected_mode,
+            run_label=normalized_run_label,
+            autonomy_eval=bool(runtime_policy.get("merged_policy", {}).get("autonomy_eval")),
             run_summary_md=generated.run_summary_md,
             frontier_snapshot={"summary": generated.frontier_summary_md},
             pressure_snapshot=pressure_map,
@@ -2351,6 +2329,7 @@ async def run_lima(
                 "artifact_count": len(artifacts),
                 "reference_count": len(reference_points),
                 "universe_count": len(universes),
+                "run_label": normalized_run_label,
             },
         )
         created_universes = lima_db.list_universes_for_run(run_id)
@@ -2423,43 +2402,56 @@ async def run_lima(
                 event_kind="skipped",
                 payload={"reason": "auto_local_checks_disabled"},
             )
-        _log_run_event(
-            lima_db,
-            problem_id=problem_id,
-            run_id=run_id,
-            stage="bridge_repair",
-            event_kind="started",
-            payload={"scope": "narrow_boundary_bridge_only"},
-        )
-        bridge_repair_result = _run_boundary_bridge_repair_cycle(
-            lima_db,
-            problem=problem,
-            problem_id=problem_id,
-            run_id=run_id,
-            universes=universes,
-        )
-        if bridge_repair_result:
+        if bool(runtime_policy.get("merged_policy", {}).get("allow_guided_repair_cycles", True)):
             _log_run_event(
                 lima_db,
                 problem_id=problem_id,
                 run_id=run_id,
                 stage="bridge_repair",
-                event_kind="completed",
-                payload={
-                    "candidate_count": len(bridge_repair_result.get("top_revised_bridges") or []),
-                    "most_likely_correct_key": bridge_repair_result.get("most_likely_correct_key"),
-                    "benchmark_status": bridge_repair_result.get("benchmark_status"),
-                    "artifact_id": bridge_repair_result.get("artifact_id"),
-                },
+                event_kind="started",
+                payload={"scope": "guided_debug_repair_cycle", "run_label": normalized_run_label},
             )
+            bridge_repair_result = _run_boundary_bridge_repair_cycle(
+                lima_db,
+                problem=problem,
+                problem_id=problem_id,
+                run_id=run_id,
+                universes=universes,
+            )
+            if bridge_repair_result:
+                _log_run_event(
+                    lima_db,
+                    problem_id=problem_id,
+                    run_id=run_id,
+                    stage="bridge_repair",
+                    event_kind="completed",
+                    payload={
+                        "candidate_count": len(bridge_repair_result.get("top_revised_bridges") or []),
+                        "most_likely_correct_key": bridge_repair_result.get("most_likely_correct_key"),
+                        "proof_program_status": bridge_repair_result.get("proof_program_status")
+                        or bridge_repair_result.get("benchmark_status"),
+                        "artifact_id": bridge_repair_result.get("artifact_id"),
+                        "run_label": normalized_run_label,
+                    },
+                )
+            else:
+                _log_run_event(
+                    lima_db,
+                    problem_id=problem_id,
+                    run_id=run_id,
+                    stage="bridge_repair",
+                    event_kind="skipped",
+                    payload={"reason": "repair_prerequisites_not_met", "run_label": normalized_run_label},
+                )
         else:
+            bridge_repair_result = None
             _log_run_event(
                 lima_db,
                 problem_id=problem_id,
                 run_id=run_id,
                 stage="bridge_repair",
                 event_kind="skipped",
-                payload={"reason": "repair_prerequisites_not_met"},
+                payload={"reason": "autonomy_eval_disables_guided_repair", "run_label": normalized_run_label},
             )
         _log_run_event(
             lima_db,
@@ -2545,6 +2537,7 @@ async def run_lima(
                 "universe_count": len(universes),
                 "fracture_count": sum(len(r.get("fractures") or []) for r in rupture_reports),
                 "pending_handoffs": len(lima_db.list_handoffs(problem_id, status="pending", limit=100)),
+                "run_label": normalized_run_label,
             },
         )
         return {
@@ -2552,6 +2545,7 @@ async def run_lima(
             "run_id": run_id,
             "problem_id": problem_id,
             "mode": selected_mode,
+            "run_label": normalized_run_label,
             "universe_count": len(universes),
             "fracture_count": sum(len(r.get("fractures") or []) for r in rupture_reports),
             "handoff_count": len(lima_db.list_handoffs(problem_id, status="pending", limit=100)),

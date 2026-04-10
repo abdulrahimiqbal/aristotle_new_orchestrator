@@ -20,7 +20,7 @@ from orchestrator.workspace_seed import ensure_workspace
 
 LOCAL_CHECK_KINDS = {"finite_check", "counterexample_search", "invariant_check", "consistency"}
 FORMAL_REVIEW_KINDS = {"lean_goal", "bridge_lemma", "equivalence"}
-LIMA_ARISTOTLE_PROMPT_PREFIX = "[Lima Formal] Collatz strict-survivor obligations"
+LIMA_ARISTOTLE_PROMPT_PREFIX = "[Lima Formal] Generic obligation review"
 LIMA_ARISTOTLE_ACTIVE_STATUSES = [
     ExperimentStatus.PENDING.value,
     ExperimentStatus.SUBMITTED.value,
@@ -31,6 +31,53 @@ LIMA_FORMAL_SYNC_STATUSES = {
     "submitted": "submitted_formal",
     "running": "submitted_formal",
 }
+
+
+def _obligation_metadata(obligation: dict[str, Any]) -> dict[str, Any]:
+    metadata = safe_json_loads(obligation.get("obligation_metadata_json"), {})
+    if isinstance(metadata, dict) and metadata:
+        return metadata
+    lineage = safe_json_loads(obligation.get("lineage_json"), {})
+    if not isinstance(lineage, dict):
+        return {}
+    fallback = {}
+    for key in ("ontology_blueprint", "capability_hints", "obligation_template_key", "problem_signature"):
+        if key in lineage:
+            fallback[key] = lineage[key]
+    return fallback
+
+
+def _obligation_template_key(obligation: dict[str, Any]) -> str:
+    metadata = _obligation_metadata(obligation)
+    return slugify(
+        metadata.get("obligation_template_key") or obligation.get("title") or "",
+        fallback="obligation",
+    )
+
+
+def _obligation_blueprint(obligation: dict[str, Any]) -> str:
+    metadata = _obligation_metadata(obligation)
+    return slugify(metadata.get("ontology_blueprint") or "", fallback="")
+
+
+def _obligation_capabilities(obligation: dict[str, Any]) -> list[str]:
+    metadata = _obligation_metadata(obligation)
+    hints = metadata.get("capability_hints")
+    if isinstance(hints, list):
+        normalized = [slugify(item, fallback="") for item in hints if str(item).strip()]
+        if normalized:
+            return normalized
+    template_key = _obligation_template_key(obligation)
+    defaults = {
+        "exact_transition_law_case_a": ["exact_bridge_counterexample_checker"],
+        "exact_transition_law_case_b": ["exact_bridge_counterexample_checker"],
+        "ranking_or_lexicographic_descent": ["ranking_function_drop_checker"],
+        "local_operator_commutation_window": ["local_operator_commutation_checker"],
+        "local_confluence_or_commutation": ["bounded_confluence_checker"],
+        "bounded_termination_or_stabilization": ["bounded_termination_checker"],
+        "quotient_or_normal_form_soundness": ["representation_uniqueness_checker"],
+    }
+    return defaults.get(template_key, [])
 
 
 def _parse_modulus(text: str, *, default: int = 16) -> int:
@@ -110,8 +157,10 @@ def _canonical_proof_program_obligations(universe: LimaUniverseSpec) -> list[Lim
         ]
     ).lower()
     obligations: list[LimaObligationSpec] = []
+    blueprint_key = slugify(getattr(universe, "ontology_blueprint", "") or universe.ontology_class(), fallback="")
+    signature = getattr(universe, "problem_signature", {}) or {}
 
-    def add(title: str, kind: str, statement: str, priority: int) -> None:
+    def add(title: str, kind: str, statement: str, priority: int, capability_hints: list[str] | None = None) -> None:
         obligations.append(
             LimaObligationSpec(
                 obligation_kind=kind,
@@ -121,6 +170,10 @@ def _canonical_proof_program_obligations(universe: LimaUniverseSpec) -> list[Lim
                 priority=priority,
                 why_exists_md="Generic proof-program template emitted because this universe appears close to a proof ontology.",
                 prove_or_kill_md="A proof strengthens the ontology; a failure identifies exactly which structural bridge is missing.",
+                obligation_template_key=title,
+                ontology_blueprint=blueprint_key,
+                capability_hints=list(capability_hints or []),
+                problem_signature=signature,
             )
         )
 
@@ -172,24 +225,27 @@ def _canonical_proof_program_obligations(universe: LimaUniverseSpec) -> list[Lim
         )
     if has_descent and not has_representation:
         add(
-            "invariant_or_monovariant_validity",
+            "ranking_or_lexicographic_descent",
             "invariant_check",
             "Check that the invariant or monovariant is well-defined for all surface states under the proposed translation.",
             4,
+            ["ranking_function_drop_checker"],
         )
     if has_rewrite:
         add(
-            "local_rewrite_correctness",
+            "local_confluence_or_commutation",
             "equivalence",
-            "Prove that each local rewrite rule exactly simulates the corresponding surface transition.",
+            "Prove that local rewrites commute or lead to a common normal form compatible with the surface transition.",
             4,
+            ["rewrite_rule_checker", "bounded_confluence_checker"],
         )
     if has_quotient:
         add(
-            "quotient_soundness",
+            "quotient_or_normal_form_soundness",
             "equivalence",
             "Prove that the quotient or projection preserves enough information for the claimed proof obligation.",
             4,
+            ["representation_uniqueness_checker"],
         )
     return obligations
 
@@ -297,12 +353,16 @@ def compile_obligations_for_universe(
 
     out: list[LimaObligationSpec] = []
     seen: set[str] = set()
+    seen_titles: set[str] = set()
 
     def add(obligation: LimaObligationSpec) -> None:
         key = obligation.canonical_key or canonical_obligation_key(obligation)
-        if key in seen:
+        title_key = slugify(obligation.title, fallback="")
+        if key in seen or (title_key and title_key in seen_titles):
             return
         seen.add(key)
+        if title_key:
+            seen_titles.add(title_key)
         kind = obligation.obligation_kind
         status = obligation.status
         if status in {"queued", ""}:
@@ -330,9 +390,6 @@ def compile_obligations_for_universe(
                 }
             )
         )
-
-    for special in _boundary_chip_firing_obligations(universe):
-        add(special)
 
     for template in _canonical_proof_program_obligations(universe):
         add(template)
@@ -456,6 +513,9 @@ def _stable_endpoints(start: tuple[int, ...]) -> tuple[set[tuple[int, ...]], int
 
 
 def _is_boundary_chip_firing_obligation(obligation: dict[str, Any]) -> bool:
+    blueprint = _obligation_blueprint(obligation)
+    if blueprint == "graph_stabilization":
+        return True
     lineage = safe_json_loads(obligation.get("lineage_json"), {})
     family_key = str(lineage.get("source_family_key") or "")
     if family_key == "chip_firing_boundary_sinks" or family_key.startswith("chip_firing_boundary_sinks_"):
@@ -474,19 +534,20 @@ def _is_boundary_chip_firing_obligation(obligation: dict[str, Any]) -> bool:
 
 def _boundary_chip_firing_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     title = str(obligation.get("title") or "")
-    title_slug = slugify(title, fallback="boundary_chip_firing")
+    title_slug = _obligation_template_key(obligation)
     states = _enumerate_boundary_states(max_n=4, max_entry=3)
     artifact: dict[str, Any] = {
-        "checker_path": "boundary_chip_firing",
-        "problem_kind": "boundary_sinks_path_graph",
+        "checker_path": "graph_stabilization_capability_bundle",
+        "problem_kind": "graph_stabilization_boundary_leakage",
         "obligation_id": str(obligation.get("id") or ""),
         "obligation_title": title,
         "states_checked": len(states),
         "max_path_length": 4,
         "max_entry": 3,
+        "ontology_blueprint": _obligation_blueprint(obligation) or "graph_stabilization",
     }
 
-    if title_slug == "boundary_spill_move_equals_sinked_firing":
+    if title_slug in {"exact_transition_law_case_a", "exact_transition_law_case_b", "bridge_to_surface_system"}:
         checked = 0
         for state in states:
             for move in _surface_legal_moves(state):
@@ -502,17 +563,17 @@ def _boundary_chip_firing_check(obligation: dict[str, Any]) -> tuple[str, str, d
                     }
                     return (
                         "refuted_local",
-                        "Found a bounded state where the boundary-spill move did not match one sinked chip-firing step.",
+                        "Found a bounded state where the local move did not match the proposed stabilization-model operator step.",
                         artifact,
                     )
         artifact["checked_transitions"] = checked
         return (
             "verified_local",
-            f"Checked {checked} bounded boundary-spill transitions and each matched one sinked chip-firing step exactly.",
+            f"Checked {checked} bounded local transitions and each matched one stabilization-model operator step exactly.",
             artifact,
         )
 
-    if title_slug in {"firing_commutation_local", "boundary_firing_commutation_audit"}:
+    if title_slug in {"local_operator_commutation_window", "local_operator_commutation_checker"}:
         checked_pairs = 0
         for state in states:
             moves = _surface_legal_moves(state)
@@ -531,17 +592,17 @@ def _boundary_chip_firing_check(obligation: dict[str, Any]) -> tuple[str, str, d
                     }
                     return (
                         "refuted_local",
-                        "Found a bounded state where two legal sinked firings failed to commute.",
+                        "Found a bounded state where two legal local operators failed to commute.",
                         artifact,
                     )
         artifact["checked_pairs"] = checked_pairs
         return (
             "verified_local",
-            f"Checked {checked_pairs} bounded pairs of legal firings and found no commutation violations.",
+            f"Checked {checked_pairs} bounded pairs of legal operators and found no commutation violations.",
             artifact,
         )
 
-    if title_slug == "quadratic_potential_descent":
+    if title_slug == "ranking_or_lexicographic_descent":
         checked = 0
         min_drop = 0
         max_drop = 0
@@ -562,48 +623,48 @@ def _boundary_chip_firing_check(obligation: dict[str, Any]) -> tuple[str, str, d
                     }
                     return (
                         "refuted_local",
-                        "Found a bounded firing where the quadratic sink potential did not strictly decrease.",
+                        "Found a bounded local move where the weighted ranking failed to strictly decrease.",
                         artifact,
                     )
         artifact["checked_transitions"] = checked
         artifact["checked_moves"] = checked
         artifact["min_drop"] = min_drop
         artifact["max_drop"] = max_drop
-        artifact["potential_name"] = "quadratic_sink_potential"
+        artifact["potential_name"] = "weighted_stabilization_ranking"
         return (
             "verified_local",
-            f"Checked {checked} bounded legal firings and the quadratic sink potential dropped by {min_drop} to {max_drop} each time.",
+            f"Checked {checked} bounded legal moves and the weighted stabilization ranking dropped by {min_drop} to {max_drop} each time.",
             artifact,
         )
 
-    if title_slug in {"stabilization_terminates", "local_confluence_or_abelianity"}:
+    if title_slug in {"bounded_termination_or_stabilization", "local_confluence_or_commutation"}:
         checked = 0
         max_frontier = 0
         for state in states:
             stable, frontier = _stable_endpoints(state)
             checked += 1
             max_frontier = max(max_frontier, frontier)
-            if title_slug == "local_confluence_or_abelianity" and len(stable) > 1:
+            if title_slug == "local_confluence_or_commutation" and len(stable) > 1:
                 artifact["counterexample"] = {
                     "state": list(state),
                     "stable_endpoints": [list(endpoint) for endpoint in sorted(stable)],
                 }
                 return (
                     "refuted_local",
-                    "Found a bounded state with more than one stabilized endpoint under legal firing orders.",
+                    "Found a bounded state with more than one stabilized endpoint under legal operator orders.",
                     artifact,
                 )
         artifact["checked_states"] = checked
         artifact["max_reachable_frontier"] = max_frontier
-        if title_slug == "stabilization_terminates":
+        if title_slug == "bounded_termination_or_stabilization":
             return (
                 "verified_local",
-                f"Checked {checked} bounded states and every legal firing sequence reached a stable state.",
+                f"Checked {checked} bounded states and every legal operator sequence reached a stable state.",
                 artifact,
             )
         return (
             "verified_local",
-            f"Checked {checked} bounded states and every legal firing order reached the same stabilized endpoint.",
+            f"Checked {checked} bounded states and every legal operator order reached the same stabilized endpoint.",
             artifact,
         )
 
@@ -660,16 +721,77 @@ def _finite_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]
     )
 
 
-def _run_local_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-    kind = str(obligation.get("obligation_kind") or "")
-    if _is_boundary_chip_firing_obligation(obligation):
-        if kind in {"finite_check", "counterexample_search", "invariant_check"}:
-            return _boundary_chip_firing_check(obligation)
+def _rewrite_rule_checker(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    return (
+        "inconclusive",
+        "Rewrite-rule checking is registered, but this obligation did not include enough executable local rule metadata for a bounded check.",
+        {
+            "checker_path": "rewrite_rule_checker",
+            "obligation_id": str(obligation.get("id") or ""),
+            "obligation_kind": str(obligation.get("obligation_kind") or ""),
+        },
+    )
+
+
+def _representation_uniqueness_checker(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    return (
+        "inconclusive",
+        "Representation-uniqueness checking is registered, but this obligation needs richer executable encoding metadata before Lima can verify it locally.",
+        {
+            "checker_path": "representation_uniqueness_checker",
+            "obligation_id": str(obligation.get("id") or ""),
+            "obligation_kind": str(obligation.get("obligation_kind") or ""),
+        },
+    )
+
+
+LOCAL_CAPABILITY_REGISTRY: dict[str, Any] = {
+    "exact_bridge_counterexample_checker": _boundary_chip_firing_check,
+    "local_operator_commutation_checker": _boundary_chip_firing_check,
+    "bounded_confluence_checker": _boundary_chip_firing_check,
+    "bounded_termination_checker": _boundary_chip_firing_check,
+    "ranking_function_drop_checker": _boundary_chip_firing_check,
+    "rewrite_rule_checker": _rewrite_rule_checker,
+    "representation_uniqueness_checker": _representation_uniqueness_checker,
+}
+
+
+def _run_capability_plugin(
+    obligation: dict[str, Any],
+    capability: str,
+) -> tuple[str, str, dict[str, Any]]:
+    runner = LOCAL_CAPABILITY_REGISTRY.get(capability)
+    if runner is None:
         return (
             "inconclusive",
-            "Boundary chip-firing checker does not support this local obligation kind yet.",
+            f"No local capability plugin is registered for {capability}.",
             {
-                "checker_path": "boundary_chip_firing",
+                "checker_path": "missing_capability_plugin",
+                "requested_capability": capability,
+                "obligation_id": str(obligation.get("id") or ""),
+            },
+        )
+    status, summary, artifact = runner(obligation)
+    artifact = dict(artifact)
+    artifact["checker_path"] = capability
+    artifact["requested_capability"] = capability
+    artifact["ontology_blueprint"] = _obligation_blueprint(obligation) or artifact.get("ontology_blueprint")
+    artifact["obligation_template_key"] = _obligation_template_key(obligation)
+    return status, summary, artifact
+
+
+def _run_local_check(obligation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    kind = str(obligation.get("obligation_kind") or "")
+    for capability in _obligation_capabilities(obligation):
+        return _run_capability_plugin(obligation, capability)
+    if _is_boundary_chip_firing_obligation(obligation):
+        if kind in {"finite_check", "counterexample_search", "invariant_check"}:
+            return _run_capability_plugin(obligation, "exact_bridge_counterexample_checker")
+        return (
+            "inconclusive",
+            "Graph-stabilization capability routing does not support this local obligation kind yet.",
+            {
+                "checker_path": "graph_stabilization_capability_bundle",
                 "obligation_id": str(obligation.get("id") or ""),
                 "obligation_kind": kind,
             },
@@ -712,6 +834,7 @@ class LocalStubFormalBackend:
 
     def build_packet(self, obligation: dict[str, Any]) -> FormalReviewPacket:
         lineage = safe_json_loads(obligation.get("lineage_json"), {})
+        obligation_metadata = _obligation_metadata(obligation)
         payload = {
             "source": "lima",
             "obligation_id": obligation.get("id"),
@@ -728,6 +851,7 @@ class LocalStubFormalBackend:
             "estimated_formalization_value": obligation.get("estimated_formalization_value"),
             "estimated_execution_cost": obligation.get("estimated_execution_cost"),
             "lineage": lineage,
+            "obligation_metadata": obligation_metadata,
             "zero_live_authority": True,
         }
         return FormalReviewPacket(
@@ -1398,6 +1522,7 @@ def run_queued_obligation_checks(
             continue
 
         if run_id:
+            capability_hints = _obligation_capabilities(obligation)
             lima_db.create_event(
                 problem_id=problem_id,
                 run_id=run_id,
@@ -1407,9 +1532,13 @@ def run_queued_obligation_checks(
                 payload={
                     "obligation_kind": kind,
                     "title": obligation.get("title"),
-                    "checker_path": "boundary_chip_firing"
-                    if _is_boundary_chip_firing_obligation(obligation)
-                    else "generic_residue_scan",
+                    "checker_path": capability_hints[0]
+                    if capability_hints
+                    else (
+                        "exact_bridge_counterexample_checker"
+                        if _is_boundary_chip_firing_obligation(obligation)
+                        else "generic_residue_scan"
+                    ),
                 },
             )
         lima_db.set_obligation_status(obligation_id, "running_local")

@@ -99,6 +99,7 @@
           <form action="/api/lima/run" method="post">
             <input type="hidden" name="problem_slug" value="{{ card.problem.slug }}" />
             <input type="hidden" name="mode" value="{{ operator.lima_default_mode }}" />
+            <input type="hidden" name="run_label" value="GUIDED_DEBUG" />
             <button type="submit" class="rounded-lg bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 ring-1 ring-zinc-700/70 hover:bg-zinc-700">Run now</button>
           </form>
         </div>
@@ -128,6 +129,14 @@
             <select name="mode" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
               {% for mode in lima_modes %}
               <option value="{{ mode.value }}" {% if mode.value == operator.lima_default_mode %}selected{% endif %}>{{ mode.label }} - {{ mode.hint }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            <span class="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Run label</span>
+            <select name="run_label" class="w-full rounded-lg border border-zinc-700/80 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+              {% for item in lima_run_labels %}
+              <option value="{{ item.value }}">{{ item.label }} - {{ item.hint }}</option>
               {% endfor %}
             </select>
           </label>

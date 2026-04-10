@@ -13,6 +13,7 @@ from orchestrator.lima_agent import (
     _local_generation,
 )
 from orchestrator.lima_db import LimaDatabase, _canonical_hash
+from orchestrator.lima_discovery import resolve_runtime_policy
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
 from orchestrator.lima_meta import analyze_and_update_policy, compute_stagnation_controller
 from orchestrator.lima_models import LimaObligationSpec, LimaUniverseSpec, safe_json_loads
@@ -579,14 +580,15 @@ def test_local_generation_prefers_chip_firing_frontier_for_boundary_spill_proble
 
     universe = generated.universes[0]
 
-    assert universe.title == "Chip-Firing with Boundary Sinks"
-    assert universe.family_key == "chip_firing_boundary_sinks"
+    assert universe.title == "Boundary-Leakage Graph Stabilization"
+    assert universe.family_key == "graph_stabilization_boundary_leakage"
     assert universe.ontology_class() == "graph_stabilization"
     assert any(
-        target.title == "boundary_spill_move_equals_sinked_firing"
+        target.title == "exact_transition_law_case_A"
         for target in universe.formalization_targets
     )
-    assert generated.selection_meta["problem_aware_family_selected"] is True
+    assert generated.selection_meta["selected_via"] == "generic_problem_signature_blueprint"
+    assert generated.selection_meta["selected_blueprint"] == "graph_stabilization"
 
 
 def test_local_generation_boundary_spill_problem_without_frontier_emits_chip_firing_family() -> None:
@@ -608,10 +610,10 @@ def test_local_generation_boundary_spill_problem_without_frontier_emits_chip_fir
 
     universe = generated.universes[0]
 
-    assert universe.title == "Chip-Firing with Boundary Sinks"
-    assert universe.family_key == "chip_firing_boundary_sinks"
+    assert universe.title == "Boundary-Leakage Graph Stabilization"
+    assert universe.family_key == "graph_stabilization_boundary_leakage"
     assert universe.ontology_class() == "graph_stabilization"
-    assert generated.selection_meta["overrode_prior_frontier"] is False
+    assert generated.selection_meta["selected_blueprint"] == "graph_stabilization"
 
 
 def test_local_generation_overrides_generic_frontier_for_boundary_problem() -> None:
@@ -645,10 +647,95 @@ def test_local_generation_overrides_generic_frontier_for_boundary_problem() -> N
 
     universe = generated.universes[0]
 
-    assert universe.title == "Chip-Firing with Boundary Sinks"
-    assert universe.family_key == "chip_firing_boundary_sinks"
-    assert generated.selection_meta["overrode_prior_frontier"] is True
-    assert generated.selection_meta["prior_frontier_family_key"] == "minimal_bridge_obligation_atlas"
+    assert universe.title == "Boundary-Leakage Graph Stabilization"
+    assert universe.family_key == "graph_stabilization_boundary_leakage"
+    assert generated.selection_meta["selected_blueprint"] == "graph_stabilization"
+    assert generated.selection_meta["selected_family_key"] == "graph_stabilization_boundary_leakage"
+
+
+def test_runtime_policy_layers_merge_by_scope_without_global_leakage() -> None:
+    runtime = resolve_runtime_policy(
+        [
+            {
+                "scope": "global",
+                "policy_json": {"allow_guided_repair_cycles": True, "global_guard": "kept"},
+                "meta_mutable": 1,
+            },
+            {
+                "scope": "problem",
+                "policy_json": {"allow_guided_repair_cycles": True, "problem_guard": "problem-only"},
+                "meta_mutable": 1,
+            },
+            {
+                "scope": "benchmark",
+                "policy_json": {"allow_guided_repair_cycles": False, "benchmark_only": "bounded"},
+                "meta_mutable": 0,
+            },
+        ],
+        run_label="GUIDED_DEBUG",
+        problem_id="problem-1",
+    )
+
+    merged = runtime["merged_policy"]
+
+    assert merged["allow_guided_repair_cycles"] is True
+    assert merged["problem_guard"] == "problem-only"
+    assert merged["benchmark_only"] == "bounded"
+    assert merged["global_guard"] == "kept"
+    assert runtime["indicators"]["meta_lima_mutation_allowed"]["benchmark"] is False
+    assert runtime["indicators"]["active_global_policy"] is True
+    assert runtime["indicators"]["active_problem_policy"] is True
+
+
+def test_autonomy_eval_disables_guided_repair_shortcuts() -> None:
+    runtime_policy = resolve_runtime_policy([], run_label="AUTONOMY_EVAL", problem_id="problem-1")
+
+    generated = _local_generation(
+        problem={
+            "title": "Synthesized Problem 2",
+            "slug": "synthesized_problem_2",
+            "statement_md": "A move redistributes local mass to neighbors, leaks at the boundary, and asks for an order-independent stabilized state.",
+            "domain": "discrete_dynamics",
+        },
+        mode="forge",
+        pressure_map={
+            "search_constraints": [],
+            "stagnation_controller": {
+                "active": True,
+                "dominant_blocker": "underparameterized_state",
+                "repair_loop": {
+                    "active": True,
+                    "target_family_key": "graph_stabilization_boundary_leakage",
+                },
+            },
+        },
+        literature_refresh={},
+        current_universes=[
+            {
+                "title": "Boundary-Leakage Graph Stabilization",
+                "family_key": "graph_stabilization_boundary_leakage",
+                "universe_status": "promising",
+                "ontology_class": "graph_stabilization",
+                "fit_score": 4.0,
+                "compression_score": 4.0,
+                "formalizability_score": 4.0,
+                "bridgeability_score": 4.0,
+            }
+        ],
+        run_label="AUTONOMY_EVAL",
+        runtime_policy=runtime_policy,
+    )
+
+    assert generated.universes[0].family_key == "defect_augmented_bridge"
+
+
+def test_generic_formal_prompt_prefix_is_not_collatz_branded() -> None:
+    from orchestrator.lima_obligations import _lima_aristotle_prompt_prefix
+
+    prefix = _lima_aristotle_prompt_prefix()
+
+    assert prefix.startswith("[Lima Formal] Generic obligation review")
+    assert "Collatz" not in prefix
 
 
 def test_stagnation_controller_detects_repeated_frontier_and_blocker() -> None:
@@ -989,13 +1076,15 @@ def test_compile_obligations_adds_problem_native_chip_firing_suite() -> None:
     obligations = compile_obligations_for_universe(universe)
     titles = {obligation.title: obligation for obligation in obligations}
 
-    assert "boundary_spill_move_equals_sinked_firing" in titles
-    assert titles["boundary_spill_move_equals_sinked_firing"].status == "queued_local"
-    assert "firing_commutation_local" in titles
-    assert "quadratic_potential_descent" in titles
-    assert "stabilization_terminates" in titles
-    assert "local_confluence_or_abelianity" in titles
-    assert "sink_stabilization_implies_unique_endpoint" in titles
+    assert "exact_transition_law_case_A" in titles
+    assert titles["exact_transition_law_case_A"].status == "queued_local"
+    assert "exact_transition_law_case_B" in titles
+    assert "local_operator_commutation_window" in titles
+    assert "ranking_or_lexicographic_descent" in titles
+    assert "bounded_termination_or_stabilization" in titles
+    assert "local_confluence_or_commutation" in titles
+    assert "bridge_to_surface_system" in titles
+    assert "uniqueness_of_representation" in titles
 
 
 def test_problem_native_local_checker_verifies_boundary_chip_firing_obligation(
@@ -1019,13 +1108,14 @@ def test_problem_native_local_checker_verifies_boundary_chip_firing_obligation(
             """
             INSERT INTO lima_obligation (
                 id, problem_id, universe_id, obligation_kind, title, statement_md,
-                status, priority, lineage_json, created_at, updated_at
+                status, priority, lineage_json, obligation_metadata_json, created_at, updated_at
             )
             VALUES (
-                'obl-chip', ?, 'univ-chip', 'finite_check', 'firing_commutation_local',
-                'Verify on bounded path-graph states that adjacent legal firings commute.',
+                'obl-chip', ?, 'univ-chip', 'finite_check', 'local_operator_commutation_window',
+                'Verify on bounded states that compatible local operators commute.',
                 'queued_local', 5,
-                '{"source_family_key":"chip_firing_boundary_sinks","source_universe_title":"Chip-Firing with Boundary Sinks"}',
+                '{"source_family_key":"graph_stabilization_boundary_leakage","source_universe_title":"Boundary-Leakage Graph Stabilization"}',
+                '{"ontology_blueprint":"graph_stabilization","obligation_template_key":"local_operator_commutation_window","capability_hints":["local_operator_commutation_checker"]}',
                 'now', 'now'
             )
             """,
@@ -1043,7 +1133,7 @@ def test_problem_native_local_checker_verifies_boundary_chip_firing_obligation(
     assert result["checked"] == ["obl-chip"]
     assert obligation["status"] == "verified_local"
     assert "commutation violations" in obligation["result_summary_md"]
-    assert safe_json_loads(latest_artifact["content_json"], {})["artifact"]["checker_path"] == "boundary_chip_firing"
+    assert safe_json_loads(latest_artifact["content_json"], {})["artifact"]["checker_path"] == "local_operator_commutation_checker"
 
 
 def test_problem_native_local_checker_executes_quadratic_potential_invariant_check(
@@ -1067,13 +1157,14 @@ def test_problem_native_local_checker_executes_quadratic_potential_invariant_che
             """
             INSERT INTO lima_obligation (
                 id, problem_id, universe_id, obligation_kind, title, statement_md,
-                status, priority, lineage_json, created_at, updated_at
+                status, priority, lineage_json, obligation_metadata_json, created_at, updated_at
             )
             VALUES (
-                'obl-quad', ?, 'univ-chip', 'invariant_check', 'quadratic_potential_descent',
-                'Check on bounded states that the quadratic sink potential strictly decreases under every legal firing.',
+                'obl-quad', ?, 'univ-chip', 'invariant_check', 'ranking_or_lexicographic_descent',
+                'Check on bounded states that the weighted stabilization ranking strictly decreases under every legal move.',
                 'queued_local', 5,
-                '{"source_family_key":"chip_firing_boundary_sinks","source_universe_title":"Chip-Firing with Boundary Sinks"}',
+                '{"source_family_key":"graph_stabilization_boundary_leakage","source_universe_title":"Boundary-Leakage Graph Stabilization"}',
+                '{"ontology_blueprint":"graph_stabilization","obligation_template_key":"ranking_or_lexicographic_descent","capability_hints":["ranking_function_drop_checker"]}',
                 'now', 'now'
             )
             """,
@@ -1093,8 +1184,8 @@ def test_problem_native_local_checker_executes_quadratic_potential_invariant_che
     assert result["skipped"] == []
     assert obligation["status"] in {"verified_local", "refuted_local"}
     assert payload["obligation_kind"] == "invariant_check"
-    assert payload["artifact"]["checker_path"] == "boundary_chip_firing"
-    assert payload["artifact"]["potential_name"] == "quadratic_sink_potential"
+    assert payload["artifact"]["checker_path"] == "ranking_function_drop_checker"
+    assert payload["artifact"]["potential_name"] == "weighted_stabilization_ranking"
     assert payload["artifact"]["checked_transitions"] > 0
 
 
@@ -1102,14 +1193,14 @@ def test_boundary_bridge_repair_payload_stays_inside_chip_firing_ontology() -> N
     payload = _build_boundary_bridge_repair_payload(
         problem={"slug": "synthesized_problem_2", "title": "Synthesized Problem 2"},
         bridge_statuses={
-            "boundary_spill_move_equals_sinked_firing": {
+            "exact_transition_law_case_B": {
                 "status": "refuted_local",
                 "result_summary_md": "Known exact bridge mismatch.",
             },
-            "quadratic_potential_descent": {"status": "verified_local"},
-            "firing_commutation_local": {"status": "verified_local"},
-            "stabilization_terminates": {"status": "verified_local"},
-            "local_confluence_or_abelianity": {"status": "verified_local"},
+            "ranking_or_lexicographic_descent": {"status": "verified_local"},
+            "local_operator_commutation_window": {"status": "verified_local"},
+            "bounded_termination_or_stabilization": {"status": "verified_local"},
+            "local_confluence_or_commutation": {"status": "verified_local"},
         },
         counterexample={
             "state": [0, 2],
@@ -1120,8 +1211,8 @@ def test_boundary_bridge_repair_payload_stays_inside_chip_firing_ontology() -> N
     )
 
     assert payload is not None
-    assert payload["family_key"] == "chip_firing_boundary_sinks"
-    assert payload["benchmark_status"] == "bounded_proof_program_recovered"
+    assert payload["family_key"] == "graph_stabilization_boundary_leakage"
+    assert payload["proof_program_status"] == "bounded_proof_program_recovered"
     assert payload["most_likely_correct_key"] == "boundary_sink_ledger_exact_embedding"
     assert len(payload["top_revised_bridges"]) == 3
     assert payload["top_revised_bridges"][0]["key"] == "simulation_up_to_stabilization"

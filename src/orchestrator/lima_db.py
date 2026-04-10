@@ -127,6 +127,8 @@ class LimaDatabase:
                     problem_id TEXT NOT NULL,
                     trigger_kind TEXT NOT NULL DEFAULT 'manual',
                     mode TEXT NOT NULL DEFAULT 'balanced',
+                    run_label TEXT NOT NULL DEFAULT 'GUIDED_DEBUG',
+                    autonomy_eval INTEGER NOT NULL DEFAULT 0,
                     run_summary_md TEXT NOT NULL DEFAULT '',
                     frontier_snapshot_json TEXT NOT NULL DEFAULT '{}',
                     pressure_snapshot_json TEXT NOT NULL DEFAULT '{}',
@@ -261,6 +263,7 @@ class LimaDatabase:
                     source_claim_id TEXT NOT NULL DEFAULT '',
                     source_claim_ids_json TEXT NOT NULL DEFAULT '[]',
                     lineage_json TEXT NOT NULL DEFAULT '{}',
+                    obligation_metadata_json TEXT NOT NULL DEFAULT '{}',
                     canonical_hash TEXT NOT NULL DEFAULT '',
                     review_status TEXT NOT NULL DEFAULT 'not_reviewed',
                     formal_backend TEXT NOT NULL DEFAULT '',
@@ -511,6 +514,8 @@ class LimaDatabase:
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         _ensure_column(conn, "lima_problem", "routing_policy_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_run", "run_label", "TEXT NOT NULL DEFAULT 'GUIDED_DEBUG'")
+        _ensure_column(conn, "lima_run", "autonomy_eval", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "lima_universe_family", "search_action", "TEXT NOT NULL DEFAULT 'exploit'")
         _ensure_column(conn, "lima_universe_family", "search_reason_md", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_universe_family", "required_delta_json", "TEXT NOT NULL DEFAULT '[]'")
@@ -535,6 +540,7 @@ class LimaDatabase:
         _ensure_column(conn, "lima_obligation", "source_claim_id", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "source_claim_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "lima_obligation", "lineage_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "lima_obligation", "obligation_metadata_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "lima_obligation", "canonical_hash", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lima_obligation", "review_status", "TEXT NOT NULL DEFAULT 'not_reviewed'")
         _ensure_column(conn, "lima_obligation", "formal_backend", "TEXT NOT NULL DEFAULT ''")
@@ -1217,6 +1223,8 @@ class LimaDatabase:
         problem_id: str,
         trigger_kind: str,
         mode: str,
+        run_label: str = "GUIDED_DEBUG",
+        autonomy_eval: bool = False,
         run_summary_md: str,
         frontier_snapshot: dict[str, Any],
         pressure_snapshot: dict[str, Any],
@@ -1238,17 +1246,19 @@ class LimaDatabase:
             conn.execute(
                 """
                 INSERT INTO lima_run (
-                    id, problem_id, trigger_kind, mode, run_summary_md,
+                    id, problem_id, trigger_kind, mode, run_label, autonomy_eval, run_summary_md,
                     frontier_snapshot_json, pressure_snapshot_json,
                     policy_snapshot_json, response_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     problem_id,
                     trigger_kind[:64],
                     mode[:32],
+                    run_label[:32],
+                    int(bool(autonomy_eval)),
                     run_summary_md[:8000],
                     _json(frontier_snapshot),
                     _json(pressure_snapshot),
@@ -1437,6 +1447,27 @@ class LimaDatabase:
                         "policy_snapshot": policy_snapshot,
                         "zero_live_authority": True,
                     }
+                    obligation_dump = obligation.model_dump(mode="json")
+                    obligation_metadata = {
+                        key: value
+                        for key, value in obligation_dump.items()
+                        if key
+                        not in {
+                            "obligation_kind",
+                            "title",
+                            "statement_md",
+                            "lean_goal",
+                            "status",
+                            "priority",
+                            "why_exists_md",
+                            "prove_or_kill_md",
+                            "canonical_key",
+                            "review_status",
+                            "formal_backend",
+                            "estimated_formalization_value",
+                            "estimated_execution_cost",
+                        }
+                    }
                     obligation_id = _new_id()
                     conn.execute(
                         """
@@ -1446,14 +1477,14 @@ class LimaDatabase:
                             why_exists_md, prove_or_kill_md,
                             why_this_exists, what_success_would_show, what_failure_would_kill,
                             source_run_id, source_universe_id, source_claim_id, source_claim_ids_json,
-                            lineage_json, canonical_hash,
+                            lineage_json, obligation_metadata_json, canonical_hash,
                             review_status, formal_backend, formal_payload_json,
                             formal_submission_ref_json, review_note, reviewed_at,
                             estimated_formalization_value, estimated_execution_cost,
                             estimated_value, estimated_cost,
                             aristotle_ref_json, result_summary_md, created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             obligation_id,
@@ -1476,6 +1507,7 @@ class LimaDatabase:
                             claim_id or "",
                             _json([claim_id] if claim_id else []),
                             _json(lineage),
+                            _json(obligation_metadata),
                             canonical_hash,
                             str(obligation.review_status or "not_reviewed")[:32],
                             str(obligation.formal_backend or "")[:80],
