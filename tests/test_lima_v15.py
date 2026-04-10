@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 from orchestrator import config as app_config
 from orchestrator.db import Database
-from orchestrator.lima_agent import _build_reference_points, _local_generation
+from orchestrator.lima_agent import (
+    _build_boundary_bridge_repair_payload,
+    _build_reference_points,
+    _local_generation,
+)
 from orchestrator.lima_db import LimaDatabase, _canonical_hash
 from orchestrator.lima_literature import LocalFileLiteratureBackend, make_literature_backend
 from orchestrator.lima_meta import analyze_and_update_policy, compute_stagnation_controller
@@ -1092,6 +1096,37 @@ def test_problem_native_local_checker_executes_quadratic_potential_invariant_che
     assert payload["artifact"]["checker_path"] == "boundary_chip_firing"
     assert payload["artifact"]["potential_name"] == "quadratic_sink_potential"
     assert payload["artifact"]["checked_transitions"] > 0
+
+
+def test_boundary_bridge_repair_payload_stays_inside_chip_firing_ontology() -> None:
+    payload = _build_boundary_bridge_repair_payload(
+        problem={"slug": "synthesized_problem_2", "title": "Synthesized Problem 2"},
+        bridge_statuses={
+            "boundary_spill_move_equals_sinked_firing": {
+                "status": "refuted_local",
+                "result_summary_md": "Known exact bridge mismatch.",
+            },
+            "quadratic_potential_descent": {"status": "verified_local"},
+            "firing_commutation_local": {"status": "verified_local"},
+            "stabilization_terminates": {"status": "verified_local"},
+            "local_confluence_or_abelianity": {"status": "verified_local"},
+        },
+        counterexample={
+            "state": [0, 2],
+            "move": 1,
+            "surface_next": [1, 0],
+            "sinked_next": [0, 1, 0, 1],
+        },
+    )
+
+    assert payload is not None
+    assert payload["family_key"] == "chip_firing_boundary_sinks"
+    assert payload["benchmark_status"] == "bounded_proof_program_recovered"
+    assert payload["most_likely_correct_key"] == "boundary_sink_ledger_exact_embedding"
+    assert len(payload["top_revised_bridges"]) == 3
+    assert payload["top_revised_bridges"][0]["key"] == "simulation_up_to_stabilization"
+    assert payload["top_revised_bridges"][1]["key"] == "boundary_sink_ledger_exact_embedding"
+    assert "forgot the new sink mass" in payload["top_revised_bridges"][1]["why_avoids_counterexample_md"]
 
 
 def test_lima_suppresses_repeated_weakened_handoff_without_material_delta(tmp_path: Path) -> None:

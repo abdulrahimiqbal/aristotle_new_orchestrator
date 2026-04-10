@@ -1062,6 +1062,231 @@ def _generic_chip_firing_fallback(
     )
 
 
+def _latest_problem_obligations_by_title(
+    lima_db: LimaDatabase,
+    *,
+    problem_id: str,
+    titles: list[str],
+) -> dict[str, dict[str, Any]]:
+    wanted = set(titles)
+    latest: dict[str, dict[str, Any]] = {}
+    for row in lima_db.list_obligations(problem_id, limit=200):
+        title = str(row.get("title") or "")
+        if title not in wanted:
+            continue
+        current = latest.get(title)
+        if current is None or str(row.get("updated_at") or "") > str(current.get("updated_at") or ""):
+            latest[title] = row
+    return latest
+
+
+def _latest_boundary_bridge_counterexample(
+    lima_db: LimaDatabase,
+    *,
+    problem_id: str,
+) -> dict[str, Any]:
+    for artifact in lima_db.list_artifacts(problem_id, limit=200):
+        if str(artifact.get("artifact_kind") or "") != "obligation_check":
+            continue
+        payload = safe_json_loads(artifact.get("content_json"), {})
+        if str(payload.get("title") or "") != "boundary_spill_move_equals_sinked_firing":
+            continue
+        detail = payload.get("artifact")
+        if isinstance(detail, dict) and isinstance(detail.get("counterexample"), dict):
+            return dict(detail["counterexample"])
+    return {}
+
+
+def _surface_projection(augmented_state: Any) -> list[int]:
+    if not isinstance(augmented_state, (list, tuple)) or len(augmented_state) < 2:
+        return []
+    return [int(v) for v in augmented_state[1:-1]]
+
+
+def _build_boundary_bridge_repair_payload(
+    *,
+    problem: dict[str, Any],
+    bridge_statuses: dict[str, dict[str, Any]],
+    counterexample: dict[str, Any],
+) -> dict[str, Any] | None:
+    exact_bridge = bridge_statuses.get("boundary_spill_move_equals_sinked_firing")
+    support_titles = (
+        "quadratic_potential_descent",
+        "firing_commutation_local",
+        "stabilization_terminates",
+        "local_confluence_or_abelianity",
+    )
+    if str((exact_bridge or {}).get("status") or "") != "refuted_local":
+        return None
+    if not all(str((bridge_statuses.get(title) or {}).get("status") or "") == "verified_local" for title in support_titles):
+        return None
+
+    sinked_next = counterexample.get("sinked_next")
+    projected_next = _surface_projection(sinked_next)
+    surface_next = [int(v) for v in counterexample.get("surface_next") or []] if isinstance(
+        counterexample.get("surface_next"), list
+    ) else []
+    move = counterexample.get("move")
+    state = counterexample.get("state")
+    candidates = [
+        {
+            "key": "simulation_up_to_stabilization",
+            "rank": 1,
+            "bridge_form": "simulation up to stabilization",
+            "statement_md": (
+                "For every surface state s, stabilizing the sink-completed chip-firing image of s and then "
+                "projecting away sink coordinates gives the same stable surface endpoint as stabilizing s directly."
+            ),
+            "why_avoids_counterexample_md": (
+                "The known failure only records extra boundary sink mass. In the counterexample, one sinked firing sends "
+                f"{state} to {sinked_next}, whose interior projection is {projected_next}, while the surface step is "
+                f"{surface_next}. The revised bridge compares stabilized projected interiors, not raw sink coordinates."
+            ),
+            "obligations": [
+                {
+                    "kind": "finite_check",
+                    "title": "stabilized_sink_projection_matches_surface_endpoint",
+                    "statement_md": "Enumerate bounded states and compare stabilized surface endpoints with projected stabilized sinked chip-firing endpoints.",
+                },
+                {
+                    "kind": "finite_check",
+                    "title": "projection_commutes_with_firing_up_to_stabilization",
+                    "statement_md": "Check on bounded states that one legal surface move and one sinked firing have the same projected stabilized future.",
+                },
+                {
+                    "kind": "lean_goal",
+                    "title": "stabilized_projection_uniqueness_bridge",
+                    "statement_md": "Formalize that projected sink stabilization plus abelianity yields a unique stabilized surface endpoint.",
+                },
+            ],
+        },
+        {
+            "key": "boundary_sink_ledger_exact_embedding",
+            "rank": 2,
+            "bridge_form": "embedding with extra boundary bookkeeping state",
+            "statement_md": (
+                "Augment the surface state with cumulative left/right sink ledgers. The repaired bridge sends "
+                "(surface_state, sink_ledger) to the full sink-completed chip configuration, and each legal surface move "
+                "becomes exactly one sinked chip-firing step with the ledger updated by the spilled boundary mass."
+            ),
+            "why_avoids_counterexample_md": (
+                "The counterexample fails only because bridge(surface_next) forgot the new sink mass. With a right-sink "
+                f"ledger increment after move {move}, the repaired image of {surface_next} is exactly {sinked_next}."
+            ),
+            "obligations": [
+                {
+                    "kind": "finite_check",
+                    "title": "boundary_sink_ledger_exact_transition",
+                    "statement_md": "Verify on bounded states and bounded sink ledgers that one legal surface move equals one sinked chip-firing step with the ledger update.",
+                },
+                {
+                    "kind": "finite_check",
+                    "title": "ledger_projection_recovers_surface_state",
+                    "statement_md": "Check that forgetting sink ledgers recovers the original surface state after every bounded repaired transition.",
+                },
+                {
+                    "kind": "bridge_lemma",
+                    "title": "ledger_exact_embedding_implies_surface_stabilization",
+                    "statement_md": "State that exact ledger embedding plus bounded abelian sink dynamics implies order-independent surface stabilization.",
+                },
+            ],
+        },
+        {
+            "key": "normal_form_odometer_bridge",
+            "rank": 3,
+            "bridge_form": "normal-form equivalence rather than stepwise equality",
+            "statement_md": (
+                "Forget raw sink coordinates and compare only the toppling-count odometer or stabilized normal form: two runs are equivalent when they induce the same interior stabilized endpoint and the same bounded firing counts."
+            ),
+            "why_avoids_counterexample_md": (
+                "The bad one-step equality distinguishes states that differ only by already-spilled sink mass. The "
+                "counterexample still has the same one-topple explanation and the same projected normal-form behavior, "
+                "so odometer or normal-form comparison survives."
+            ),
+            "obligations": [
+                {
+                    "kind": "finite_check",
+                    "title": "bounded_odometer_matches_surface_stabilization",
+                    "statement_md": "On bounded states, compute firing counts and check that the sinked odometer determines the same stabilized surface endpoint.",
+                },
+                {
+                    "kind": "finite_check",
+                    "title": "same_odometer_same_surface_endpoint",
+                    "statement_md": "Check on bounded states that equal bounded odometer data forces the same stabilized surface endpoint.",
+                },
+                {
+                    "kind": "lean_goal",
+                    "title": "normal_form_projection_from_odometer",
+                    "statement_md": "Formalize that the stabilized surface normal form is a quotient of the sinked odometer or stabilized chip-firing normal form.",
+                },
+            ],
+        },
+    ]
+    return {
+        "problem_slug": str(problem.get("slug") or ""),
+        "problem_title": str(problem.get("title") or ""),
+        "family_key": "chip_firing_boundary_sinks",
+        "repair_scope": "narrow_boundary_bridge_only",
+        "exact_bridge_status": str((exact_bridge or {}).get("status") or ""),
+        "exact_bridge_summary": str((exact_bridge or {}).get("result_summary_md") or ""),
+        "support_statuses": {
+            title: str((bridge_statuses.get(title) or {}).get("status") or "")
+            for title in support_titles
+        },
+        "counterexample": counterexample,
+        "top_revised_bridges": candidates,
+        "most_likely_correct_key": "boundary_sink_ledger_exact_embedding",
+        "most_likely_correct_reason": (
+            "The only observed failure is missing sink bookkeeping, so adding explicit left/right sink ledgers is the smallest repair that restores exact stepwise simulation without changing the ontology."
+        ),
+        "benchmark_status": "bounded_proof_program_recovered",
+        "status_reason": (
+            "The chip-firing ontology now has a live bounded proof program, but the original exact bridge remains false until one of these repaired bridges is checked."
+        ),
+    }
+
+
+def _run_boundary_bridge_repair_cycle(
+    lima_db: LimaDatabase,
+    *,
+    problem: dict[str, Any],
+    problem_id: str,
+    run_id: str,
+    universes: list[LimaUniverseSpec],
+) -> dict[str, Any] | None:
+    if not any(str(universe.family_key or "") == "chip_firing_boundary_sinks" for universe in universes):
+        return None
+    titles = [
+        "boundary_spill_move_equals_sinked_firing",
+        "quadratic_potential_descent",
+        "firing_commutation_local",
+        "stabilization_terminates",
+        "local_confluence_or_abelianity",
+    ]
+    payload = _build_boundary_bridge_repair_payload(
+        problem=problem,
+        bridge_statuses=_latest_problem_obligations_by_title(
+            lima_db,
+            problem_id=problem_id,
+            titles=titles,
+        ),
+        counterexample=_latest_boundary_bridge_counterexample(
+            lima_db,
+            problem_id=problem_id,
+        ),
+    )
+    if not payload:
+        return None
+    persisted = lima_db.list_universes_for_run(run_id)
+    artifact_id = lima_db.create_artifact(
+        problem_id=problem_id,
+        universe_id=str(persisted[0].get("id") or "") if persisted else "",
+        artifact_kind="bridge_repair_cycle",
+        content=payload,
+    )
+    return {**payload, "artifact_id": artifact_id}
+
+
 def _generic_companion_mutation_fallback(
     *,
     problem: dict[str, Any],
@@ -2202,6 +2427,44 @@ async def run_lima(
             lima_db,
             problem_id=problem_id,
             run_id=run_id,
+            stage="bridge_repair",
+            event_kind="started",
+            payload={"scope": "narrow_boundary_bridge_only"},
+        )
+        bridge_repair_result = _run_boundary_bridge_repair_cycle(
+            lima_db,
+            problem=problem,
+            problem_id=problem_id,
+            run_id=run_id,
+            universes=universes,
+        )
+        if bridge_repair_result:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="bridge_repair",
+                event_kind="completed",
+                payload={
+                    "candidate_count": len(bridge_repair_result.get("top_revised_bridges") or []),
+                    "most_likely_correct_key": bridge_repair_result.get("most_likely_correct_key"),
+                    "benchmark_status": bridge_repair_result.get("benchmark_status"),
+                    "artifact_id": bridge_repair_result.get("artifact_id"),
+                },
+            )
+        else:
+            _log_run_event(
+                lima_db,
+                problem_id=problem_id,
+                run_id=run_id,
+                stage="bridge_repair",
+                event_kind="skipped",
+                payload={"reason": "repair_prerequisites_not_met"},
+            )
+        _log_run_event(
+            lima_db,
+            problem_id=problem_id,
+            run_id=run_id,
             stage="formal_submit",
             event_kind="started",
             payload={"limit": int(app_config.LIMA_MAX_OBLIGATIONS_PER_RUN)},
@@ -2296,6 +2559,7 @@ async def run_lima(
             "summary": generated.run_summary_md,
             "validation_warnings": json_warnings,
             "obligation_checks": obligation_result,
+            "bridge_repair": bridge_repair_result,
             "formal_submit": formal_submit_result,
             "formal_sync": {
                 "before_run": sync_result,

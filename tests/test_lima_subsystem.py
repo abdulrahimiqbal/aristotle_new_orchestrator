@@ -502,6 +502,20 @@ def test_lima_live_fallback_for_synthesized_problem_2_emits_chip_firing_family(
     quadratic_completed_payload = safe_json_loads(quadratic_completed["payload_json"], {})
     assert quadratic_completed_payload["checker_path"] == "boundary_chip_firing"
     assert quadratic_completed_payload["status"] in {"verified_local", "refuted_local"}
+    bridge_repair_event = next(
+        event for event in events if event["stage"] == "bridge_repair" and event["event_kind"] == "completed"
+    )
+    bridge_repair_payload = safe_json_loads(bridge_repair_event["payload_json"], {})
+    assert bridge_repair_payload["candidate_count"] == 3
+    assert bridge_repair_payload["most_likely_correct_key"] == "boundary_sink_ledger_exact_embedding"
+    artifacts = lima.list_artifacts(problem_id, limit=100)
+    bridge_repair_artifact = next(
+        safe_json_loads(artifact["content_json"], {})
+        for artifact in artifacts
+        if artifact["artifact_kind"] == "bridge_repair_cycle"
+    )
+    assert bridge_repair_artifact["benchmark_status"] == "bounded_proof_program_recovered"
+    assert len(bridge_repair_artifact["top_revised_bridges"]) == 3
 
 
 def test_lima_dashboard_run_and_handoff_routes(tmp_path: Path, monkeypatch) -> None:
