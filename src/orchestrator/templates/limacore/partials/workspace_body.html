@@ -3,6 +3,34 @@
 
   {% include "limacore/partials/alert_banner.html" %}
 
+  {% if has_legacy_frontier_cleanup_available %}
+  <section class="rounded-2xl border border-rust/30 bg-rust/10 px-4 py-3 text-sm">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="font-semibold text-rust">Legacy frontier data detected</p>
+        <p class="text-slate-300">Old benchmark-shaped blocker data may be polluting the frontier.</p>
+      </div>
+      <form method="post" action="/api/limacore/problem/{{ problem.slug }}/restart-clean" hx-post="/api/limacore/problem/{{ problem.slug }}/restart-clean" hx-target="#workspace-shell" hx-swap="outerHTML">
+        <button class="rounded-2xl bg-rust px-4 py-2 text-sm font-semibold text-white hover:bg-rust/80">Restart clean</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if flash.cleanup == "success" %}
+  <section class="rounded-2xl border border-algae/30 bg-algae/10 px-4 py-3 text-sm text-algae">
+    <p class="font-semibold">Legacy frontier cleaned</p>
+    <p>Removed nodes: {{ flash.removed_nodes|join(', ') if flash.removed_nodes else 'none' }}</p>
+  </section>
+  {% endif %}
+
+  {% if flash.restart_clean == "success" %}
+  <section class="rounded-2xl border border-algae/30 bg-algae/10 px-4 py-3 text-sm text-algae">
+    <p class="font-semibold">Clean restart completed</p>
+    <p>Removed {{ flash.removed_nodes|length if flash.removed_nodes else 0 }} legacy node(s). {% if flash.rerun_triggered %}Rerun triggered.{% endif %}</p>
+  </section>
+  {% endif %}
+
   <section class="rounded-3xl border border-white/10 bg-white/5 p-5">
     <div class="flex flex-wrap gap-3">
       <form method="post" action="/api/limacore/autopilot/{{ problem.slug }}/start" hx-post="/api/limacore/autopilot/{{ problem.slug }}/start" hx-target="#workspace-shell" hx-swap="outerHTML">

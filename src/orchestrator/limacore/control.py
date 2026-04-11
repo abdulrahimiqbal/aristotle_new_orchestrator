@@ -64,6 +64,14 @@ class ControlSnapshot:
     recent_current_family_reverts: int
     recent_current_family_counterexamples: int
     recent_current_family_last_gain_at: str
+    # NEW: Repeated cohort pattern detection
+    repeated_cohort_pattern_detected: bool
+    repeated_cohort_signature: str
+    recent_accept_count: int
+    recent_revert_count: int
+    # NEW: Current-line KPIs
+    current_line_replayable_gain_rate: float
+    window_size: int
 
 
 def _family_key_for_world_id(world_id: str | None, problem_id: str) -> str:
@@ -278,6 +286,18 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
     # NEW: Recent current-family specific metrics (the key fix)
     recent_family_metrics = _recent_family_metrics(db, problem_id, current_family_key, recent, window)
     
+    # NEW: Detect repeated cohort patterns
+    pattern_detected, pattern_signature = _detect_repeated_cohort_pattern(
+        db, problem_id, current_family_key, recent, window
+    )
+    
+    # NEW: Count accepts/reverts in recent window
+    accept_count = _recent_accept_count(events, window)
+    revert_count = _recent_revert_count(events, window)
+    
+    # NEW: Calculate current-line replayable gain rate
+    gain_rate = _current_line_replayable_gain_rate(recent_family_metrics, window)
+    
     active_alternative_families = _live_family_keys(worlds, current_family_key=current_family_key)
     live_family_count = len(active_alternative_families) + (1 if current_family_key else 0)
     current_family_repeat_count = 0
@@ -365,6 +385,13 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
         recent_current_family_reverts=recent_family_metrics["reverts"],
         recent_current_family_counterexamples=recent_family_metrics["counterexamples"],
         recent_current_family_last_gain_at=recent_family_metrics["last_gain_at"],
+        # NEW: Repeated cohort pattern detection and current-line KPIs
+        repeated_cohort_pattern_detected=pattern_detected,
+        repeated_cohort_signature=pattern_signature,
+        recent_accept_count=accept_count,
+        recent_revert_count=revert_count,
+        current_line_replayable_gain_rate=gain_rate,
+        window_size=window,
     )
 
 
@@ -485,3 +512,169 @@ def is_actionable_fracture(
     if not snapshot.current_required_delta_md.strip() and not required_delta_md.strip():
         return False
     return False
+
+
+def _detect_repeated_cohort_pattern(
+    db: LimaCoreDB,
+    problem_id: str,
+    current_family_key: str,
+    recent_events: list[dict[str, Any]],
+    window: int = 10,
+) -> tuple[bool, str]:
+    """Detect if the same cohort pattern is repeating in recent history.
+    
+    Returns (pattern_detected, signature_string)
+    """
+    if not current_family_key:
+        return False, ""
+    
+    # Get recent cohorts for current family
+    all_cohorts = db.list_cohorts(problem_id)
+    family_cohorts = [
+        cohort for cohort in all_cohorts
+        if _family_key_for_world_id(str(cohort.get("world_id") or ""), problem_id) == current_family_key
+    ]
+    
+    if len(family_cohorts) < 3:
+        return False, ""
+    
+    # Sort by updated_at and take most recent
+    family_cohorts.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+    recent_cohorts = family_cohorts[:window]
+    
+    if len(recent_cohorts) < 3:
+        return False, ""
+    
+    # Check for repeated pattern: similar outcome distribution
+    # Pattern: same family, similar job counts, similar outcome distribution
+    signatures = []
+    for cohort in recent_cohorts:
+        total = int(cohort.get("total_jobs") or 0)
+        failed = int(cohort.get("failed_jobs") or 0)
+        lemmas = int(cohort.get("yielded_lemmas") or 0)
+        cex = int(cohort.get("yielded_counterexamples") or 0)
+        
+        # Create a simple signature based on outcome ratios
+        if total > 0:
+            sig = f"{failed}:{lemmas}:{cex}"
+            signatures.append(sig)
+    
+    if len(signatures) < 3:
+        return False, ""
+    
+    # Check if at least 3 recent cohorts have the same signature
+    from collections import Counter
+    sig_counts = Counter(signatures)
+    most_common = sig_counts.most_common(1)[0]
+    
+    if most_common[1] >= 3:
+        return True, f"repeated_{most_common[0]}"
+    
+    # Also detect if all recent cohorts have zero replayable gain
+    all_zero_gain = all(
+        int(c.get("yielded_lemmas") or 0) == 0
+        for c in recent_cohorts[:3]
+    )
+    
+    if all_zero_gain and len(recent_cohorts) >= 3:
+        return True, "repeated_zero_gain"
+    
+    return False, ""
+
+
+def _recent_accept_count(events: list[dict[str, Any]], window: int = 10) -> int:
+    """Count recent accepts in the event window."""
+    recent = _recent_events(events, window)
+    return sum(1 for e in recent if str(e.get("decision") or "") == "accepted")
+
+
+def _recent_revert_count(events: list[dict[str, Any]], window: int = 10) -> int:
+    """Count recent reverts in the event window."""
+    recent = _recent_events(events, window)
+    return sum(1 for e in recent if str(e.get("decision") or "") == "reverted")
+
+
+def _current_line_replayable_gain_rate(
+    recent_family_metrics: dict[str, Any],
+    window: int = 10,
+) -> float:
+    """Calculate replayable gain rate per iteration in the recent window."""
+    gain = recent_family_metrics.get("replayable_gain", 0)
+    return gain / window if window > 0 else 0.0
+
+
+def materially_changed_required_delta(current: str, proposed: str) -> bool:
+    """Check if proposed required_delta is materially different from current."""
+    current_clean = current.strip().lower()
+    proposed_clean = proposed.strip().lower()
+    
+    if not current_clean and proposed_clean:
+        return True
+    if current_clean == proposed_clean:
+        return False
+    
+    # Check for substantial content differences (not just punctuation/whitespace)
+    import re
+    current_words = set(re.findall(r'\b\w+\b', current_clean))
+    proposed_words = set(re.findall(r'\b\w+\b', proposed_clean))
+    
+    # If significant word overlap changed, it's material
+    if not current_words:
+        return bool(proposed_words)
+    
+    common = current_words & proposed_words
+    total_unique = current_words | proposed_words
+    
+    if not total_unique:
+        return False
+    
+    # If less than 50% word overlap, consider it materially changed
+    similarity = len(common) / len(total_unique)
+    return similarity < 0.5
+
+
+def materially_changed_theorem_skeleton(current: str, proposed: str) -> bool:
+    """Check if proposed theorem skeleton is materially different from current."""
+    return materially_changed_required_delta(current, proposed)
+
+
+def maintenance_churn_penalty(snapshot: ControlSnapshot) -> float:
+    """Calculate penalty for repeated maintenance churn.
+    
+    Returns a penalty value (0.0 to 1.0) based on how much the current
+    line is exhibiting maintenance churn behavior.
+    """
+    penalty = 0.0
+    
+    # Repeated pattern detected
+    if snapshot.repeated_cohort_pattern_detected:
+        penalty += 0.4
+    
+    # Zero replayable gain in recent window
+    if snapshot.recent_current_family_replayable_gain <= 0:
+        penalty += 0.3
+    
+    # More reverts than accepts
+    if snapshot.recent_revert_count > snapshot.recent_accept_count:
+        penalty += 0.2
+    
+    # Family exhausted
+    if snapshot.current_family_exhausted:
+        penalty += 0.3
+    
+    return min(penalty, 1.0)
+
+
+def current_line_stagnant(snapshot: ControlSnapshot, threshold: int = 3) -> bool:
+    """Check if the current line is stagnant based on recent metrics.
+    
+    A line is stagnant if:
+    - No replayable gain in recent window
+    - No yielded lemmas in recent window
+    - Failed cohorts exceed threshold
+    """
+    no_gain = snapshot.recent_current_family_replayable_gain <= 0
+    no_lemmas = snapshot.recent_current_family_yielded_lemmas == 0
+    failing = snapshot.recent_current_family_failed_cohorts >= threshold
+    
+    return no_gain and no_lemmas and failing

@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from .cohorts import summarize_cohort
+from .control import build_control_snapshot
 from .db import LimaCoreDB
 from .frontier import proof_debt
 from .runtime import detect_runtime_status
@@ -33,6 +34,34 @@ def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: 
         "solved": "Inspect solved proof graph",
         "failed": "Inspect failure",
     }[runtime.status]
+    
+    # NEW: Get current-line metrics from control snapshot
+    try:
+        control_snapshot = build_control_snapshot(db, str(problem["id"]))
+        current_line_metrics = {
+            "current_family_key": control_snapshot.current_family_key,
+            "current_family_exhausted": control_snapshot.current_family_exhausted,
+            "recent_accept_count": control_snapshot.recent_accept_count,
+            "recent_revert_count": control_snapshot.recent_revert_count,
+            "recent_current_family_replayable_gain": control_snapshot.recent_current_family_replayable_gain,
+            "recent_current_family_yielded_lemmas": control_snapshot.recent_current_family_yielded_lemmas,
+            "current_line_replayable_gain_rate": control_snapshot.current_line_replayable_gain_rate,
+            "repeated_cohort_pattern_detected": control_snapshot.repeated_cohort_pattern_detected,
+            "repeated_cohort_signature": control_snapshot.repeated_cohort_signature,
+        }
+    except Exception:
+        current_line_metrics = {
+            "current_family_key": "",
+            "current_family_exhausted": False,
+            "recent_accept_count": 0,
+            "recent_revert_count": 0,
+            "recent_current_family_replayable_gain": 0,
+            "recent_current_family_yielded_lemmas": 0,
+            "current_line_replayable_gain_rate": 0.0,
+            "repeated_cohort_pattern_detected": False,
+            "repeated_cohort_signature": "",
+        }
+    
     return {
         "status": runtime.status,
         "reason": runtime.reason,
@@ -50,6 +79,8 @@ def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: 
         "stalled_since": runtime.stalled_since,
         "last_gain_at": runtime.last_gain_at,
         "autopilot_enabled": bool(int(problem.get("autopilot_enabled", 1) or 0)),
+        # NEW: Current-line KPIs
+        **current_line_metrics,
     }
 
 
@@ -73,31 +104,52 @@ def get_workspace_alert_banner(
             "class": status_view["banner_class"],
         }
     if status == "blocked":
+        summary = [
+            f"Blocking node: {status_view['blocked_node_key'] or 'unknown'}",
+            f"Blocker kind: {status_view['blocker_kind'] or 'unknown'}",
+            f"Blocker summary: {status_view['blocker_summary'] or status_view['reason']}",
+            f"Primary family exhausted: {status_view['exhausted_family_key'] or 'no'}",
+            f"Suggested next family: {status_view['suggested_family_key'] or 'unknown'}",
+            f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
+        ]
+        # Add current-line metrics if available
+        if status_view.get('current_family_key'):
+            summary.append(f"Current family: {status_view['current_family_key']}")
+        if status_view.get('current_family_exhausted'):
+            summary.append("⚠️ Current family exhausted - rotation recommended")
+        if status_view.get('repeated_cohort_pattern_detected'):
+            summary.append(f"⚠️ Repeated maintenance pattern: {status_view.get('repeated_cohort_signature', 'detected')}")
+        
         return {
             "kind": "blocked",
             "title": "Blocked: current frontier cannot advance.",
-            "summary": [
-                f"Blocking node: {status_view['blocked_node_key'] or 'unknown'}",
-                f"Blocker kind: {status_view['blocker_kind'] or 'unknown'}",
-                f"Blocker summary: {status_view['blocker_summary'] or status_view['reason']}",
-                f"Primary family exhausted: {status_view['exhausted_family_key'] or 'no'}",
-                f"Suggested next family: {status_view['suggested_family_key'] or 'unknown'}",
-                f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
-            ],
+            "summary": summary,
             "actions": ["Inspect blocker", "Rotate world", "Spawn alternative cohort"],
             "class": status_view["banner_class"],
         }
     if status == "stalled":
+        summary = [
+            f"No replayable gain in last {status_view['stalled_iteration_window']} iterations.",
+            f"Stalled since: {status_view['stalled_since'] or 'recently'}",
+            f"Last meaningful gain: {status_view['last_gain_at'] or 'none recorded'}",
+            f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
+        ]
+        # Add current-line metrics
+        if status_view.get('current_family_key'):
+            summary.append(f"Current family: {status_view['current_family_key']}")
+        if status_view.get('recent_current_family_replayable_gain') is not None:
+            gain = status_view['recent_current_family_replayable_gain']
+            summary.append(f"Recent replayable gain: {gain} (window: {status_view.get('window_size', 10)})")
+        if status_view.get('recent_current_family_yielded_lemmas') is not None:
+            lemmas = status_view['recent_current_family_yielded_lemmas']
+            summary.append(f"Recent lemmas: {lemmas}")
+        if status_view.get('repeated_cohort_pattern_detected'):
+            summary.append(f"⚠️ Repeated maintenance pattern detected: {status_view.get('repeated_cohort_signature', 'unknown')}")
+        
         return {
             "kind": "stalled",
             "title": f"Stalled: no replayable formal gain in the last {status_view['stalled_iteration_window']} iterations.",
-            "summary": [
-                f"No replayable gain in last {status_view['stalled_iteration_window']} iterations.",
-                f"Stalled since: {status_view['stalled_since'] or 'recently'}",
-                f"Last meaningful gain: {status_view['last_gain_at'] or 'none recorded'}",
-                f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
-                f"Current family: {status_view['exhausted_family_key'] or 'unknown'}",
-            ],
+            "summary": summary,
             "actions": ["Inspect fractures", "Force rotation", "Revise program"],
             "class": status_view["banner_class"],
         }
@@ -251,6 +303,41 @@ def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: d
     status_view = get_problem_status_view(db, snapshot["problem"], events=events)
     autopilot_state = get_autopilot_state(snapshot["problem"], status_view)
     cohort_summary = _compute_cohort_summary(cohorts)
+    
+    # NEW: Get control snapshot for current-line metrics
+    try:
+        control_snapshot = build_control_snapshot(db, str(snapshot["problem"]["id"]))
+        current_line_kpis = {
+            "current_family": control_snapshot.current_family_key,
+            "current_family_exhausted": control_snapshot.current_family_exhausted,
+            "exhausted_family": control_snapshot.exhausted_family_key,
+            "suggested_next_family": control_snapshot.suggested_family_key,
+            "recent_replayable_gain": control_snapshot.recent_current_family_replayable_gain,
+            "recent_lemmas": control_snapshot.recent_current_family_yielded_lemmas,
+            "recent_accepts": control_snapshot.recent_accept_count,
+            "recent_reverts": control_snapshot.recent_revert_count,
+            "gain_rate": control_snapshot.current_line_replayable_gain_rate,
+            "repeated_pattern_detected": control_snapshot.repeated_cohort_pattern_detected,
+            "repeated_pattern_signature": control_snapshot.repeated_cohort_signature,
+            "same_blocker_persists": control_snapshot.same_blocker_persists,
+            "window_size": control_snapshot.window_size,
+        }
+    except Exception:
+        current_line_kpis = {
+            "current_family": "",
+            "current_family_exhausted": False,
+            "exhausted_family": "",
+            "suggested_next_family": "",
+            "recent_replayable_gain": 0,
+            "recent_lemmas": 0,
+            "recent_accepts": 0,
+            "recent_reverts": 0,
+            "gain_rate": 0.0,
+            "repeated_pattern_detected": False,
+            "repeated_pattern_signature": "",
+            "same_blocker_persists": False,
+            "window_size": 10,
+        }
 
     # Honest job stats - since jobs are executed inline synchronously:
     # - running_jobs and queued_jobs will typically be 0 after iteration completes
@@ -299,4 +386,16 @@ def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: d
         "status_view": status_view,
         "alert_banner": get_workspace_alert_banner(snapshot["problem"], status_view, strongest_world, solved),
         "autopilot_state": autopilot_state,
+        "has_legacy_frontier_cleanup_available": _detect_legacy_cleanup_available(db, str(snapshot["problem"]["id"])),
+        # NEW: Current-line KPIs for UI
+        "current_line": current_line_kpis,
     }
+
+
+def _detect_legacy_cleanup_available(db: LimaCoreDB, problem_id: str) -> bool:
+    """Check if legacy frontier cleanup is available for this problem."""
+    try:
+        from .cleanup import has_legacy_frontier_cleanup_available
+        return has_legacy_frontier_cleanup_available(db, problem_id)
+    except Exception:
+        return False

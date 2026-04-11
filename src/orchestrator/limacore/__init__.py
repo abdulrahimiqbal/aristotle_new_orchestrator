@@ -1,6 +1,14 @@
 """Lima-core: a compact, event-sourced autonomous research loop."""
 
 from .aristotle import AristotleBackend, LocalAristotleBackend, RealAristotleBackend
+from .cleanup import (
+    LegacyCleanupResult,
+    cleanup_legacy_collatz_frontier,
+    detect_legacy_collatz_frontier_nodes,
+    has_legacy_frontier_cleanup_available,
+    is_legacy_collatz_frontier_node,
+    restart_problem_clean,
+)
 from .db import LimaCoreDB
 from .frontier_derivation import (
     DerivedFrontier,
@@ -38,6 +46,7 @@ __all__ = [
     "FrontierHint",
     "FrontierNode",
     "GroundingBundle",
+    "LegacyCleanupResult",
     "LimaCoreDB",
     "LimaCoreLoop",
     "LocalAristotleBackend",
@@ -49,9 +58,14 @@ __all__ = [
     "SolvedReport",
     "WorldPacket",
     "_scheduler_pass",
+    "cleanup_legacy_collatz_frontier",
     "derive_frontier_updates",
+    "detect_legacy_collatz_frontier_nodes",
+    "has_legacy_frontier_cleanup_available",
+    "is_legacy_collatz_frontier_node",
     "limacore_loop",
     "make_bridge_node",
     "make_local_law_node",
     "make_replay_node",
+    "restart_problem_clean",
 ]

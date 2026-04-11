@@ -35,6 +35,15 @@ class RuntimeStatusView:
     last_gain_at: str = ""
     replayable_gain_rate: int = 0
     last_meaningful_change_at: str = ""
+    # NEW: Current-line KPIs
+    current_family_key: str = ""
+    current_family_exhausted: bool = False
+    repeated_cohort_pattern_detected: bool = False
+    repeated_cohort_signature: str = ""
+    recent_current_family_replayable_gain: int = 0
+    recent_current_family_yielded_lemmas: int = 0
+    recent_accept_count: int = 0
+    recent_revert_count: int = 0
 
 
 def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int = 10) -> RuntimeStatusView:
@@ -48,6 +57,18 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
     solved = solved_checker(db, problem_id)
     last_meaningful_change = str(problem.get("last_gain_at") or problem.get("updated_at") or problem.get("created_at") or "")
     replayable_gain_rate = sum(int((event.get("score_delta") or {}).get("replayable_gain", 0)) for event in events[-stall_window:])
+    # Helper dict for common current-line KPIs
+    current_line_kpis = {
+        "current_family_key": snapshot.current_family_key,
+        "current_family_exhausted": snapshot.current_family_exhausted,
+        "repeated_cohort_pattern_detected": snapshot.repeated_cohort_pattern_detected,
+        "repeated_cohort_signature": snapshot.repeated_cohort_signature,
+        "recent_current_family_replayable_gain": snapshot.recent_current_family_replayable_gain,
+        "recent_current_family_yielded_lemmas": snapshot.recent_current_family_yielded_lemmas,
+        "recent_accept_count": snapshot.recent_accept_count,
+        "recent_revert_count": snapshot.recent_revert_count,
+    }
+    
     if solved.solved:
         return RuntimeStatusView(
             status="solved",
@@ -57,6 +78,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_gain_at=last_meaningful_change,
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     if str(problem.get("runtime_status") or "") == "failed":
         return RuntimeStatusView(
@@ -66,6 +88,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_meaningful_change_at=last_meaningful_change,
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     if int(problem.get("autopilot_enabled", 1) or 0) == 0:
         return RuntimeStatusView(
@@ -75,6 +98,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_meaningful_change_at=last_meaningful_change,
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     blocked_node = next((node for node in frontier if str(node.get("status") or "") == "blocked"), None)
     if stored_status == "running" and not events and blocked_node is None:
@@ -86,6 +110,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_gain_at=str(problem.get("last_gain_at") or ""),
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     # FIXED: Blocked detection now uses recent current-family metrics
     current_family_recently_dead = (
@@ -110,9 +135,13 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         )
     )
     if blocked_now or (stored_status == "blocked" and blocked_node is not None):
+        reason = str(problem.get("status_reason_md") or "Blocked: current frontier cannot advance.")
+        # Add pattern info to reason if detected
+        if snapshot.repeated_cohort_pattern_detected:
+            reason += f" (Repeated pattern: {snapshot.repeated_cohort_signature})"
         return RuntimeStatusView(
             status="blocked",
-            reason=str(problem.get("status_reason_md") or "Blocked: current frontier cannot advance."),
+            reason=reason,
             blocked_node_key=str(problem.get("blocked_node_key") or snapshot.blocked_node_key or ""),
             blocker_kind=str(problem.get("blocker_kind") or snapshot.blocker_kind or ""),
             blocker_summary=str(problem.get("status_reason_md") or snapshot.blocker_summary or ""),
@@ -120,6 +149,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            **current_line_kpis,
         )
     # FIXED: Use recent current-family metrics for stall detection, not lifetime totals
     # This allows a currently dead line to be marked stalled even if the problem had earlier successes
@@ -133,9 +163,13 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         and not blocked_now
     )
     if stalled_now:
+        reason = f"Stalled: no replayable formal gain in the last {stall_window} iterations."
+        # Add pattern detection info
+        if snapshot.repeated_cohort_pattern_detected:
+            reason += f" Repeated maintenance pattern: {snapshot.repeated_cohort_signature}."
         return RuntimeStatusView(
             status="stalled",
-            reason=f"Stalled: no replayable formal gain in the last {stall_window} iterations.",
+            reason=reason,
             stalled_iteration_window=stall_window,
             stalled_since=str(problem.get("stalled_since") or events[-1]["created_at"] if events else problem.get("created_at") or ""),
             last_gain_at=str(problem.get("last_gain_at") or ""),
@@ -143,6 +177,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            **current_line_kpis,
         )
     if stored_status == "stalled" and str(problem.get("stalled_since") or ""):
         return RuntimeStatusView(
@@ -155,6 +190,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            **current_line_kpis,
         )
     if stored_status == "running" and snapshot.recent_replayable_gain > 0:
         return RuntimeStatusView(
@@ -165,6 +201,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_gain_at=str(problem.get("last_gain_at") or ""),
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     if not events and not blocked_node:
         return RuntimeStatusView(
@@ -174,6 +211,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_meaningful_change_at=str(problem.get("created_at") or ""),
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     # FIXED: Multiple live families only count as healthy if there is recent real movement
     # Use recent current-family signals, not just historical success
@@ -192,6 +230,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_gain_at=str(problem.get("last_gain_at") or ""),
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     
     # Only say "multiple non-stale world lines are active" if there's actual recent activity
@@ -203,6 +242,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_meaningful_change_at=last_meaningful_change,
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     if snapshot.current_family_exhausted and blocked_node is not None:
         return RuntimeStatusView(
@@ -215,6 +255,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            **current_line_kpis,
         )
     if stored_status == "running" and (events or frontier) and snapshot.recent_replayable_gain > 0:
         return RuntimeStatusView(
@@ -225,6 +266,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            **current_line_kpis,
         )
     runtime_status = str(problem.get("runtime_status") or "")
     if runtime_status == "booting":
@@ -235,6 +277,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_meaningful_change_at=str(problem.get("created_at") or ""),
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **current_line_kpis,
         )
     return RuntimeStatusView(
         status="stalled" if snapshot.recent_replayable_gain <= 0 else "running",
@@ -244,6 +287,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         last_gain_at=str(problem.get("last_gain_at") or ""),
         exhausted_family_key=snapshot.exhausted_family_key,
         suggested_family_key=snapshot.suggested_family_key,
+        **current_line_kpis,
     )
 
 

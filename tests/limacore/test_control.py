@@ -192,6 +192,13 @@ class TestDuplicateChurnDetection:
             recent_current_family_reverts=1,
             recent_current_family_counterexamples=0,
             recent_current_family_last_gain_at="",
+            # NEW: Pattern detection and KPI fields
+            repeated_cohort_pattern_detected=False,
+            repeated_cohort_signature="",
+            recent_accept_count=0,
+            recent_revert_count=1,
+            current_line_replayable_gain_rate=0.0,
+            window_size=10,
         )
 
         churn = is_duplicate_churn(
@@ -237,6 +244,13 @@ class TestDuplicateChurnDetection:
             current_family_failed_cohorts=1,
             current_family_failed_jobs=4,
             current_family_total_jobs=4,
+            # NEW: Pattern detection and KPI fields
+            repeated_cohort_pattern_detected=False,
+            repeated_cohort_signature="",
+            recent_accept_count=0,
+            recent_revert_count=1,
+            current_line_replayable_gain_rate=0.0,
+            window_size=10,
             live_family_count=2,
             active_alternative_families=("hidden_state",),
             same_blocker_persists=False,
@@ -310,6 +324,13 @@ class TestDuplicateChurnDetection:
             recent_current_family_reverts=0,
             recent_current_family_counterexamples=0,
             recent_current_family_last_gain_at="2026-01-01",
+            # NEW: Pattern detection and KPI fields
+            repeated_cohort_pattern_detected=False,
+            repeated_cohort_signature="",
+            recent_accept_count=1,
+            recent_revert_count=0,
+            current_line_replayable_gain_rate=0.2,
+            window_size=10,
         )
 
         churn = is_duplicate_churn(

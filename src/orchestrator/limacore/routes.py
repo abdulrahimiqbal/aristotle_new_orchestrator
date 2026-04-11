@@ -197,4 +197,66 @@ def build_router(db_or_getter: LimaCoreDB | Callable[[], LimaCoreDB], templates:
         ctx = build_workspace_context(db, problem_slug)
         return JSONResponse({"program": ctx["program"], "throughput": ctx["stats"], "status": ctx["status_view"]})
 
+    @router.post("/api/limacore/problem/{problem_slug}/cleanup-legacy", response_class=HTMLResponse)
+    async def cleanup_legacy(request: Request, problem_slug: str) -> Response:
+        """Clean up legacy frontier nodes for a problem (Collatz-specific)."""
+        db = current_db()
+        from .cleanup import cleanup_legacy_collatz_frontier, has_legacy_frontier_cleanup_available
+
+        problem = db.get_problem(problem_slug)
+        if problem is None:
+            raise HTTPException(status_code=404, detail="problem not found")
+
+        problem_id = str(problem["id"])
+
+        # Check if cleanup is available
+        if not has_legacy_frontier_cleanup_available(db, problem_id):
+            if not _is_htmx(request):
+                return RedirectResponse(f"/limacore/{problem_slug}", status_code=303)
+            return render_workspace(request, problem_slug, flash={"cleanup": "no_legacy_data"})
+
+        # Perform cleanup
+        try:
+            result = cleanup_legacy_collatz_frontier(db, problem_id)
+            flash = {
+                "cleanup": "success",
+                "removed_nodes": result.removed_node_keys,
+                "archived_nodes": result.archived_node_keys,
+            }
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+        if not _is_htmx(request):
+            return RedirectResponse(f"/limacore/{problem_slug}", status_code=303)
+        return render_workspace(request, problem_slug, flash=flash)
+
+    @router.post("/api/limacore/problem/{problem_slug}/restart-clean", response_class=HTMLResponse)
+    async def restart_clean(request: Request, problem_slug: str) -> Response:
+        """Clean up legacy frontier and restart problem with clean state."""
+        db = current_db()
+        from .cleanup import restart_problem_clean, has_legacy_frontier_cleanup_available
+        from .loop import LimaCoreLoop
+
+        problem = db.get_problem(problem_slug)
+        if problem is None:
+            raise HTTPException(status_code=404, detail="problem not found")
+
+        problem_id = str(problem["id"])
+        loop = LimaCoreLoop(db)
+
+        # Perform cleanup and restart
+        try:
+            result = restart_problem_clean(db, loop, problem_id)
+            flash = {
+                "restart_clean": "success",
+                "removed_nodes": result.removed_node_keys,
+                "rerun_triggered": result.rerun_triggered,
+            }
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+        if not _is_htmx(request):
+            return RedirectResponse(f"/limacore/{problem_slug}", status_code=303)
+        return render_workspace(request, problem_slug, flash=flash)
+
     return router
