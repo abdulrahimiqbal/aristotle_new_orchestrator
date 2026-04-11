@@ -1,0 +1,36 @@
+<section class="rounded-3xl border border-white/10 bg-white/5 p-5">
+  <div class="flex items-center justify-between">
+    <h2 class="font-display text-xl font-semibold">Aristotle Farm</h2>
+    <span class="rounded-full bg-black/20 px-3 py-1 text-xs text-slate-300">{{ cohorts|length }} cohorts</span>
+  </div>
+  <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Running</span><p class="mt-1 text-lg font-semibold">{{ stats.running_jobs }}</p></div>
+    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Queued</span><p class="mt-1 text-lg font-semibold">{{ stats.queued_jobs }}</p></div>
+    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Succeeded</span><p class="mt-1 text-lg font-semibold">{{ stats.succeeded_jobs }}</p></div>
+    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Failed</span><p class="mt-1 text-lg font-semibold">{{ stats.failed_jobs }}</p></div>
+    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Lemmas</span><p class="mt-1 text-lg font-semibold">{{ stats.yielded_lemmas }}</p></div>
+    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Counterexamples</span><p class="mt-1 text-lg font-semibold">{{ stats.yielded_counterexamples }}</p></div>
+  </div>
+  <div class="mt-4 rounded-2xl border border-white/10 p-4">
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Cohorts</p>
+    <ul class="mt-2 space-y-2 text-sm">
+      {% for cohort in cohorts[:8] %}
+      <li class="rounded-xl bg-black/20 px-3 py-2">
+        {{ cohort.title }} · {{ cohort.status }} · {{ cohort.succeeded_jobs }}/{{ cohort.total_jobs }} yielded
+      </li>
+      {% else %}
+      <li class="rounded-xl bg-black/20 px-3 py-2 text-slate-400">No cohorts yet.</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="mt-4 rounded-2xl border border-white/10 p-4">
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Stale cohorts</p>
+    <ul class="mt-2 space-y-2 text-sm">
+      {% for cohort in stale_cohorts[:5] %}
+      <li class="rounded-xl bg-rust/10 px-3 py-2">{{ cohort.title }}</li>
+      {% else %}
+      <li class="rounded-xl bg-black/20 px-3 py-2 text-slate-400">None</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>

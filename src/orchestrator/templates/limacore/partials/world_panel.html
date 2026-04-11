@@ -1,0 +1,32 @@
+<section class="rounded-3xl border border-white/10 bg-white/5 p-5">
+  <h2 class="font-display text-xl font-semibold">World / Reduction</h2>
+  <div class="mt-4 rounded-2xl bg-black/20 p-4">
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Strongest surviving world</p>
+    {% if strongest_world %}
+    <p class="mt-2 text-lg font-semibold">{{ strongest_world.world_name }}</p>
+    <p class="mt-1 text-sm text-slate-300">family {{ strongest_world.family_key }} · yield {{ "%.2f"|format(strongest_world.yield_score) }}</p>
+    {% else %}
+    <p class="mt-2 text-sm text-slate-400">No surviving world yet.</p>
+    {% endif %}
+  </div>
+  <div class="mt-4 grid gap-4">
+    <div class="rounded-2xl border border-white/10 p-4">
+      <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Current delta</p>
+      <p class="mt-2 text-sm">{{ current_delta.summary_md if current_delta else "No events yet." }}</p>
+    </div>
+    <div class="rounded-2xl border border-white/10 p-4">
+      <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Current fracture</p>
+      <p class="mt-2 text-sm">{{ fractures[0].blocker_note_md if fractures else "No fracture recorded." }}</p>
+    </div>
+    <div class="rounded-2xl border border-white/10 p-4">
+      <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Recent accepted deltas</p>
+      <ul class="mt-2 space-y-2 text-sm">
+        {% for event in recent_accepted[-5:] %}
+        <li class="rounded-xl bg-black/20 px-3 py-2">{{ event.event_type }} · {{ event.summary_md }}</li>
+        {% else %}
+        <li class="rounded-xl bg-black/20 px-3 py-2 text-slate-400">Nothing accepted yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>

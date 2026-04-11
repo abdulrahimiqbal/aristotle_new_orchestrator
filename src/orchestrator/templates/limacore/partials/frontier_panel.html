@@ -1,0 +1,46 @@
+<section class="rounded-3xl border border-white/10 bg-white/5 p-5">
+  <div class="flex items-center justify-between">
+    <h2 class="font-display text-xl font-semibold">Frontier</h2>
+    <span class="rounded-full bg-black/20 px-3 py-1 text-xs text-slate-300">Debt {{ stats.proof_debt }}</span>
+  </div>
+  <div class="mt-4 rounded-2xl bg-black/20 p-4">
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Target theorem</p>
+    <p class="mt-2 text-sm leading-6">{{ problem.target_theorem or problem.statement_md }}</p>
+  </div>
+  <div class="mt-4 rounded-2xl border border-white/10 p-4">
+    <p class="text-sm font-semibold">Solved checker</p>
+    <p class="mt-2 text-sm {% if solved_report.solved %}text-algae{% else %}text-rust{% endif %}">{{ solved_report.reason }}</p>
+  </div>
+  <div class="mt-5 grid gap-4">
+    <div>
+      <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Open nodes</p>
+      <ul class="mt-2 space-y-2 text-sm">
+        {% for node in open_nodes %}
+        <li class="rounded-2xl bg-black/20 px-3 py-2">{{ node.title }}</li>
+        {% else %}
+        <li class="rounded-2xl bg-black/20 px-3 py-2 text-slate-400">None</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Blocked nodes</p>
+      <ul class="mt-2 space-y-2 text-sm">
+        {% for node in blocked_nodes %}
+        <li class="rounded-2xl bg-rust/10 px-3 py-2">{{ node.title }}: {{ node.blocker_note_md }}</li>
+        {% else %}
+        <li class="rounded-2xl bg-black/20 px-3 py-2 text-slate-400">None</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Newly proved</p>
+      <ul class="mt-2 space-y-2 text-sm">
+        {% for node in proved_nodes %}
+        <li class="rounded-2xl bg-algae/10 px-3 py-2">{{ node.title }}</li>
+        {% else %}
+        <li class="rounded-2xl bg-black/20 px-3 py-2 text-slate-400">None</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>

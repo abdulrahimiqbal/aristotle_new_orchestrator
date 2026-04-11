@@ -1,0 +1,33 @@
+<a href="/limacore/{{ card.problem.slug }}" class="block rounded-3xl border border-white/10 bg-white/5 p-5 transition hover:border-brass/40 hover:bg-white/10">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h3 class="font-display text-xl font-semibold">{{ card.problem.title }}</h3>
+      <p class="mt-2 text-xs uppercase tracking-[0.25em] text-slate-400">{{ card.problem.slug }}</p>
+    </div>
+    <span class="rounded-full px-3 py-1 text-xs font-semibold {% if card.solved_report.solved %}bg-algae/20 text-algae{% else %}bg-rust/20 text-rust{% endif %}">
+      {% if card.solved_report.solved %}Solved{% else %}Open{% endif %}
+    </span>
+  </div>
+  <dl class="mt-5 grid grid-cols-2 gap-3 text-sm">
+    <div class="rounded-2xl bg-black/20 p-3">
+      <dt class="text-slate-400">Frontier debt</dt>
+      <dd class="mt-1 text-lg font-semibold">{{ card.frontier_debt }}</dd>
+    </div>
+    <div class="rounded-2xl bg-black/20 p-3">
+      <dt class="text-slate-400">Active Aristotle jobs</dt>
+      <dd class="mt-1 text-lg font-semibold">{{ card.active_jobs }}</dd>
+    </div>
+    <div class="rounded-2xl bg-black/20 p-3 col-span-2">
+      <dt class="text-slate-400">Strongest world</dt>
+      <dd class="mt-1 font-medium">{{ card.strongest_world.world_name if card.strongest_world else "None yet" }}</dd>
+    </div>
+    <div class="rounded-2xl bg-black/20 p-3 col-span-2">
+      <dt class="text-slate-400">Top blocker</dt>
+      <dd class="mt-1 font-medium">{{ card.top_blocker.blocker_note_md if card.top_blocker else "No fracture recorded" }}</dd>
+    </div>
+    <div class="rounded-2xl bg-black/20 p-3 col-span-2">
+      <dt class="text-slate-400">Replayable gain rate</dt>
+      <dd class="mt-1 font-medium">{{ card.replayable_gain_rate }}</dd>
+    </div>
+  </dl>
+</a>

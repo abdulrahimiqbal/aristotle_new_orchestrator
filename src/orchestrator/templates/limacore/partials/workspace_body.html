@@ -1,0 +1,34 @@
+<div id="workspace-shell" class="space-y-6">
+  <section class="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-white/10 bg-white/5 p-6">
+    <div>
+      <p class="text-xs uppercase tracking-[0.3em] text-slate-400">{{ problem.domain or "research" }}</p>
+      <h1 class="mt-2 font-display text-3xl font-bold">{{ problem.title }}</h1>
+      <p class="mt-2 max-w-4xl text-sm leading-6 text-slate-300">{{ problem.statement_md }}</p>
+    </div>
+    <form
+      action="/api/limacore/run"
+      method="post"
+      hx-post="/api/limacore/run"
+      hx-target="#workspace-shell"
+      hx-swap="outerHTML">
+      <input type="hidden" name="problem" value="{{ problem.slug }}" />
+      <button class="rounded-2xl bg-brass px-5 py-3 text-sm font-semibold text-ink">Run one bounded iteration</button>
+    </form>
+  </section>
+
+  {% if flash.run %}
+  <section class="rounded-2xl border border-algae/20 bg-algae/10 px-4 py-3 text-sm text-algae">
+    Last run: gap {{ flash.run.gap }} · delta {{ flash.run.delta_type }} · accepted {{ flash.run.accepted }}
+  </section>
+  {% endif %}
+
+  <section class="grid gap-6 xl:grid-cols-3">
+    {% include "limacore/partials/frontier_panel.html" %}
+    {% include "limacore/partials/world_panel.html" %}
+    {% include "limacore/partials/aristotle_panel.html" %}
+  </section>
+
+  <section class="rounded-3xl border border-white/10 bg-white/5 p-5">
+    {% include "limacore/partials/activity_panel.html" %}
+  </section>
+</div>

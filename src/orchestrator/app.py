@@ -19,6 +19,9 @@ from orchestrator.lima_agent import lima_loop, run_lima
 from orchestrator.lima_db import LimaDatabase
 from orchestrator.lima_literature import refresh_literature
 from orchestrator.lima_models import slugify
+from orchestrator.limacore.db import LimaCoreDB
+from orchestrator.limacore.loop import limacore_loop
+from orchestrator.limacore.routes import build_router as build_limacore_router
 from orchestrator.lima_obligations import (
     AristotleFormalBackend,
     approve_formal_review_async,
@@ -66,6 +69,7 @@ DATABASE_PATH = app_config.DATABASE_PATH
 
 db = Database(DATABASE_PATH)
 lima_db = LimaDatabase(app_config.LIMA_DATABASE_PATH, reference_database_path=DATABASE_PATH)
+limacore_db = LimaCoreDB(app_config.LIMACORE_DATABASE_PATH)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -502,6 +506,7 @@ def _ticks_view(rows: list[dict]) -> list[dict]:
 async def lifespan(app: FastAPI):
     db.initialize()
     lima_db.initialize()
+    limacore_db.initialize()
     Path(app_config.WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
     migrate_legacy_shared_workspaces(
         db,
@@ -512,13 +517,21 @@ async def lifespan(app: FastAPI):
     shadow_task = asyncio.create_task(shadow_global_loop(db))
     supershadow_task = asyncio.create_task(supershadow_global_loop(db))
     lima_task = asyncio.create_task(lima_loop(lima_db, db))
+    limacore_task = asyncio.create_task(
+        limacore_loop(limacore_db, interval_sec=app_config.LIMACORE_LOOP_INTERVAL_SEC)
+    )
     try:
         yield
     finally:
+        limacore_task.cancel()
         lima_task.cancel()
         supershadow_task.cancel()
         shadow_task.cancel()
         task.cancel()
+        try:
+            await limacore_task
+        except asyncio.CancelledError:
+            pass
         try:
             await lima_task
         except asyncio.CancelledError:
@@ -539,6 +552,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Aristotle Orchestrator", lifespan=lifespan)
 app.include_router(build_admin_router(db))
+app.include_router(build_limacore_router(lambda: limacore_db, templates))
 
 
 @app.get("/health")

@@ -31,6 +31,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 orchestrator = [
   "templates/*.html",
+  "templates/**/*.html",
   "lean_templates/minimal/lean-toolchain",
   "lean_templates/minimal/lakefile.lean",
   "lean_templates/minimal/OrchWorkspace/OrchWorkspace.lean",

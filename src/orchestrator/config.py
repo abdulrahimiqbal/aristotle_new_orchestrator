@@ -114,7 +114,7 @@ ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS = _bool_env(
 # LLM (also read in llm.py via this module for caps / JSON mode)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL", "google/gemma-4-26b-a4b-it")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.6-plus:free")
 LLM_BACKUP_API_KEY = os.environ.get("LLM_BACKUP_API_KEY", "").strip()
 LLM_BACKUP_BASE_URL = os.environ.get("LLM_BACKUP_BASE_URL", "").rstrip("/")
 LLM_BACKUP_MODEL = os.environ.get("LLM_BACKUP_MODEL", "").strip()
@@ -238,5 +238,12 @@ LIMA_ENABLE_ARXIV_BACKEND = _bool_env("LIMA_ENABLE_ARXIV_BACKEND", False)
 LIMA_ENABLE_SEMANTIC_SCHOLAR_BACKEND = _bool_env("LIMA_ENABLE_SEMANTIC_SCHOLAR_BACKEND", False)
 LIMA_ENABLE_CROSSREF_BACKEND = _bool_env("LIMA_ENABLE_CROSSREF_BACKEND", False)
 LIMA_LITERATURE_HTTP_TIMEOUT_SEC = _float_env("LIMA_LITERATURE_HTTP_TIMEOUT_SEC", 8.0)
+
+# Lima-core: compact event-sourced research loop.
+LIMACORE_DATABASE_PATH = os.environ.get(
+    "LIMACORE_DATABASE_PATH",
+    str(Path(DATABASE_PATH).with_name("limacore.db")),
+)
+LIMACORE_LOOP_INTERVAL_SEC = _int_env("LIMACORE_LOOP_INTERVAL_SEC", 300)
 LIMA_SEMANTIC_SCHOLAR_API_KEY = os.environ.get("LIMA_SEMANTIC_SCHOLAR_API_KEY", "").strip()
 LIMA_CROSSREF_MAILTO = os.environ.get("LIMA_CROSSREF_MAILTO", "").strip()
