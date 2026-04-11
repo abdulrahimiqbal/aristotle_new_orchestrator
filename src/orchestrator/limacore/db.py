@@ -111,15 +111,18 @@ class LimaCoreDB:
         score_delta: dict[str, Any] | None = None,
         artifact_refs: list[dict[str, Any]] | None = None,
         summary_md: str = "",
+        family_key: str = "",
     ) -> str:
         event_id = _new_id()
         with self._connect() as conn:
+            # Ensure family_key column exists
+            _ensure_column(conn, "events", "family_key", "TEXT NOT NULL DEFAULT ''")
             conn.execute(
                 """
                 INSERT INTO events(
                     id, problem_id, parent_event_id, event_type, decision, score_delta_json,
-                    artifact_refs_json, summary_md, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    artifact_refs_json, summary_md, family_key, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -130,6 +133,7 @@ class LimaCoreDB:
                     stable_json(score_delta or {}),
                     stable_json(artifact_refs or []),
                     summary_md,
+                    family_key,
                     utc_now(),
                 ),
             )
@@ -350,6 +354,24 @@ class LimaCoreDB:
         d["dependency_keys"] = parse_json(str(row["dependency_keys_json"]), default=[])
         d["replay_ref"] = parse_json(str(row["replay_ref_json"]), default={})
         return d
+
+    def delete_frontier_node(self, problem_id: str, node_key: str) -> bool:
+        """Delete a frontier node by problem_id and node_key.
+
+        Returns:
+            True if a row was deleted, False otherwise.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM frontier_nodes WHERE problem_id = ? AND node_key = ?",
+                (problem_id, node_key),
+            )
+            conn.execute(
+                "UPDATE problems SET updated_at = ? WHERE id = ?",
+                (utc_now(), problem_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def replace_world_head(self, problem_id: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:

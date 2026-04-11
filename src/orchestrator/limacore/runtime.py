@@ -87,17 +87,25 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
         )
+    # FIXED: Blocked detection now uses recent current-family metrics
+    current_family_recently_dead = (
+        snapshot.recent_current_family_replayable_gain <= 0
+        and snapshot.recent_current_family_yielded_lemmas == 0
+        and snapshot.recent_current_family_failed_jobs >= 4
+        and snapshot.recent_current_family_failed_cohorts >= 2
+    )
+    
     blocked_now = bool(
         blocked_node
         and (
-            snapshot.current_family_exhausted
+            snapshot.current_family_exhausted  # Uses recent family metrics now
             or snapshot.same_blocker_persists
-            or snapshot.current_family_failed_jobs >= 4
-            or snapshot.current_family_failed_cohorts >= 2
+            or current_family_recently_dead  # KEY FIX: recent family deadness
             or (
                 snapshot.recent_replayable_gain <= 0
                 and snapshot.recent_proof_debt_delta >= 0
                 and snapshot.recent_fracture_gain <= 0
+                and snapshot.recent_current_family_replayable_gain <= 0  # Also check recent family
             )
         )
     )
@@ -113,12 +121,15 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
         )
+    # FIXED: Use recent current-family metrics for stall detection, not lifetime totals
+    # This allows a currently dead line to be marked stalled even if the problem had earlier successes
     stalled_now = bool(
         snapshot.recent_replayable_gain <= 0
         and snapshot.recent_proof_debt_delta >= 0
         and snapshot.recent_fracture_gain <= 0
-        and snapshot.yielded_lemmas == 0
-        and snapshot.current_family_failed_jobs >= 2
+        and snapshot.recent_current_family_replayable_gain <= 0  # KEY FIX: recent family gain
+        and snapshot.recent_current_family_yielded_lemmas == 0  # KEY FIX: recent family yield
+        and snapshot.recent_current_family_failed_jobs >= 2  # KEY FIX: recent family failures
         and not blocked_now
     )
     if stalled_now:
@@ -164,17 +175,27 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
         )
-    if snapshot.live_family_count >= 2 and snapshot.recent_replayable_gain > 0:
+    # FIXED: Multiple live families only count as healthy if there is recent real movement
+    # Use recent current-family signals, not just historical success
+    has_recent_real_movement = (
+        snapshot.recent_replayable_gain > 0
+        or snapshot.recent_current_family_replayable_gain > 0  # Current family making progress
+        or snapshot.recent_current_family_accepts > 0  # Current family has recent accepts
+    )
+    
+    if snapshot.live_family_count >= 2 and has_recent_real_movement:
         return RuntimeStatusView(
             status="running",
-            reason="Running: autopilot active.",
+            reason="Running: autopilot active with recent progress.",
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
             last_gain_at=str(problem.get("last_gain_at") or ""),
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
         )
-    if snapshot.live_family_count >= 2 and not snapshot.current_family_exhausted:
+    
+    # Only say "multiple non-stale world lines are active" if there's actual recent activity
+    if snapshot.live_family_count >= 2 and not snapshot.current_family_exhausted and has_recent_real_movement:
         return RuntimeStatusView(
             status="running",
             reason="Running: multiple non-stale world lines are active.",

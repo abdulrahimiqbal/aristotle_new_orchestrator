@@ -75,23 +75,85 @@ class Proposer:
                     ],
                 },
             )
+        # FIXED: Collatz proposer now checks current family before emitting kill cohorts
         if problem.slug == "collatz":
-            required_delta = snapshot.current_required_delta_md or "Rotate away from the stale quotient family before retrying the same frontier line."
-            return DeltaProposal(
-                delta_type="kill_delta",
-                title="Kill stale quotient world",
-                summary_md="Attack the quotient family before spending more proof budget.",
-                family_key=str(strongest["family_key"]),
-                target_node_key=str(gap["node_key"]),
-                edits={
-                    "bridge_claim": "Assume the odd-step quotient is informative enough to predict descent.",
-                    "local_law": "Bounded odd-step expansion would force eventual descent.",
-                    "kill_test": "Find a small odd orbit with quotient drift inconsistent with the bounded expansion law.",
-                    "theorem_skeleton": "A failed bounded expansion law collapses the quotient proof program.",
-                    "required_delta_md": required_delta,
-                    "obligations": ["bounded odd-step expansion fails on a small witness"],
-                },
-            )
+            current_family = snapshot.current_family_key
+            
+            # Only emit "Kill stale quotient world" if current family IS quotient
+            if current_family == "quotient":
+                required_delta = snapshot.current_required_delta_md or "Rotate away from the stale quotient family before retrying the same frontier line."
+                return DeltaProposal(
+                    delta_type="kill_delta",
+                    title="Kill stale quotient world",
+                    summary_md="Attack the quotient family before spending more proof budget.",
+                    family_key="quotient",
+                    target_node_key=str(gap["node_key"]),
+                    edits={
+                        "bridge_claim": "Assume the odd-step quotient is informative enough to predict descent.",
+                        "local_law": "Bounded odd-step expansion would force eventual descent.",
+                        "kill_test": "Find a small odd orbit with quotient drift inconsistent with the bounded expansion law.",
+                        "theorem_skeleton": "A failed bounded expansion law collapses the quotient proof program.",
+                        "required_delta_md": required_delta,
+                        "obligations": ["bounded odd-step expansion fails on a small witness"],
+                    },
+                )
+            
+            # If current family is hidden_state, prefer hidden-state bridge/local-law/reduction deltas
+            if current_family == "hidden_state":
+                return DeltaProposal(
+                    delta_type="lemma_delta",
+                    title="Carry-adjusted drift lemma",
+                    summary_md="Convert the hidden carry ledger into replayable local drift structure.",
+                    family_key="hidden_state",
+                    target_node_key=str(gap["node_key"]),
+                    edits={
+                        "bridge_claim": "The carry ledger reconstructs accelerated odd-step drift without losing parity-block information.",
+                        "local_law": "Carry-adjusted debt is monotone on admissible parity return blocks.",
+                        "kill_test": "Look for a calibrated parity block whose ledger debt increases after normalization.",
+                        "theorem_skeleton": "A ledger-stable drift bound reduces global descent to finitely many calibrated return patterns.",
+                        "required_delta_md": "Switch from quotient heuristics to carry-ledger obligations before retrying the same frontier line.",
+                        "obligations": [
+                            "prove the ledger reconstructs odd-step drift",
+                            "prove monotonicity on admissible parity blocks",
+                        ],
+                    },
+                )
+            
+            # If current family is exhausted, rotate to a different family (not back to quotient)
+            if snapshot.current_family_exhausted and current_family:
+                rotation_family = snapshot.suggested_family_key
+                if rotation_family and rotation_family != current_family and rotation_family != "quotient":
+                    packet = self.worldsmith.propose_world(
+                        problem,
+                        gap,
+                        preferred_family_key=rotation_family,
+                        avoid_family_keys={current_family, "quotient"},  # Avoid exhausted family and quotient
+                    ).world_packet
+                    if packet is not None:
+                        return DeltaProposal(
+                            delta_type="world_delta",
+                            title=packet.world_name,
+                            summary_md=packet.novelty_note,
+                            family_key=packet.family_key,
+                            world_packet=packet,
+                            target_node_key=str(gap["node_key"]),
+                        )
+            
+            # For any other family or if rotation failed, propose a world rotation away from stale lines
+            packet = self.worldsmith.propose_world(
+                problem,
+                gap,
+                avoid_family_keys={current_family} if current_family else {"quotient"},
+            ).world_packet
+            if packet is not None:
+                return DeltaProposal(
+                    delta_type="world_delta",
+                    title=packet.world_name,
+                    summary_md=packet.novelty_note,
+                    family_key=packet.family_key,
+                    world_packet=packet,
+                    target_node_key=str(gap["node_key"]),
+                )
         if fractures:
             fracture = fractures[0]
             return DeltaProposal(

@@ -170,6 +170,7 @@ class LimaCoreLoop:
             parent_event_id=select_event,
             artifact_refs=[delta_ref],
             summary_md=delta.summary_md,
+            family_key=delta.family_key,
         )
         if delta.delta_type == "program_delta":
             candidate = write_candidate_program_delta(self.db, problem.id, note=delta.summary_md)
@@ -259,6 +260,7 @@ class LimaCoreLoop:
                 score_delta=asdict(score),
                 artifact_refs=refs,
                 summary_md=score.summary_md,
+                family_key=delta.family_key,
             )
             structured = [{"artifact_kind": kind, "content": content} for kind, content in artifacts]
             apply_event_artifacts(self.db, problem.id, event_id, structured)
@@ -299,6 +301,7 @@ class LimaCoreLoop:
                 score_delta=asdict(score),
                 artifact_refs=refs,
                 summary_md=score.summary_md,
+                family_key=delta.family_key,
             )
             if structured:
                 apply_event_artifacts(self.db, problem.id, event_id, structured)

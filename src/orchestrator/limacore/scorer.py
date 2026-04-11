@@ -79,7 +79,7 @@ def score_results(
         theorem_skeleton_md=theorem_skeleton_md,
         replayable_gain=replayable_gain,
         proof_debt_delta=proof_debt_delta,
-        yielded_lemmas=snapshot.yielded_lemmas,
+        yielded_lemmas=snapshot.recent_current_family_yielded_lemmas,  # FIXED: Use recent family metrics
     )
     narrative_only = (
         replayable_gain == 0
