@@ -1,3 +1,5 @@
+"""Core models for LimaCore event-sourced research loop."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field

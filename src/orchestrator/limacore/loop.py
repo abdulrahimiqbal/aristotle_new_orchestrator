@@ -10,6 +10,12 @@ from .cohorts import build_aristotle_cohorts
 from .db import LimaCoreDB
 from .events import apply_event_artifacts
 from .frontier import ensure_target_frontier, select_frontier_gap
+from .frontier_derivation import (
+    derive_frontier_updates,
+    make_bridge_node,
+    make_local_law_node,
+    make_replay_node,
+)
 from .models import DeltaProposal, FrontierNode, ProblemSpec
 from .prompting import normalize_problem_prompt
 from .program import maybe_accept_program_delta, write_candidate_program_delta
@@ -351,8 +357,15 @@ class LimaCoreLoop:
         return results
 
     def _commit_delta(self, problem: ProblemSpec, delta: DeltaProposal, reduction, jobs: list[dict], score) -> list[tuple[str, dict]]:
+        """Commit a delta by creating/updating frontier nodes using problem-native derivation.
+
+        Replaces the previous hardcoded frontier generation with derivation based on
+        problem context, reduction content, and job results.
+        """
         artifacts: list[tuple[str, dict]] = []
         proved_replay = [job for job in jobs if job["replayable"]]
+
+        # Update world head if we have a world packet
         if delta.world_packet is not None:
             artifacts.append(
                 (
@@ -370,92 +383,51 @@ class LimaCoreLoop:
                     },
                 )
             )
+
+        # Create bridge and local law nodes from proved jobs
         if any(job["job_kind"] == "bridge_lemma" and job["replayable"] for job in jobs):
-            artifacts.append(
-                (
-                    "frontier_node",
-                    FrontierNode(
-                        id=f"{problem.id}-bridge",
-                        problem_id=problem.id,
-                        node_key="bridge_claim",
-                        node_kind="bridge_lemma",
-                        title="Bridge claim",
-                        statement_md=reduction.bridge_claim,
-                        formal_statement=reduction.bridge_claim,
-                        status="proved",
-                        best_world_id=delta.family_key or None,
-                        replay_ref={"replay_certificate": "bridge_claim"},
-                        priority=9.0,
-                        updated_at=utc_now(),
-                    ).to_dict(),
-                )
-            )
+            bridge_node = make_bridge_node(problem, reduction, delta.family_key)
+            artifacts.append(("frontier_node", bridge_node.to_dict()))
+
         if any(job["job_kind"] == "local_law" and job["replayable"] for job in jobs):
-            artifacts.append(
-                (
-                    "frontier_node",
-                    FrontierNode(
-                        id=f"{problem.id}-law",
-                        problem_id=problem.id,
-                        node_key="local_energy_law",
-                        node_kind="local_law",
-                        title="Local energy law",
-                        statement_md=reduction.local_law,
-                        formal_statement=reduction.local_law,
-                        status="proved",
-                        best_world_id=delta.family_key or None,
-                        replay_ref={"replay_certificate": "local_energy_law"},
-                        priority=8.0,
-                        updated_at=utc_now(),
-                    ).to_dict(),
-                )
-            )
-        theorem_status = "blocked"
-        replay_ref = {}
-        if any(job["job_kind"] == "theorem_skeleton_probe" and job["replayable"] for job in jobs):
-            theorem_status = "proved"
-            replay_ref = {"replay_certificate": "terminal_form_uniqueness"}
-        artifacts.append(
-            (
-                "frontier_node",
-                FrontierNode(
-                    id=f"{problem.id}-skeleton",
-                    problem_id=problem.id,
-                    node_key="terminal_form_uniqueness",
-                    node_kind="theorem_skeleton",
-                    title="Terminal form uniqueness",
-                    statement_md=reduction.theorem_skeleton,
-                    formal_statement=reduction.theorem_skeleton,
-                    status=theorem_status,
-                    blocker_kind="" if theorem_status == "proved" else "missing_uniqueness_lemma",
-                    blocker_note_md="" if theorem_status == "proved" else "Need a full canonical balanced-profile lemma.",
-                    best_world_id=delta.family_key or None,
-                    replay_ref=replay_ref,
-                    priority=7.0,
-                    updated_at=utc_now(),
-                ).to_dict(),
-            )
-        )
+            law_node = make_local_law_node(problem, reduction, delta.family_key)
+            artifacts.append(("frontier_node", law_node.to_dict()))
+
+        # Derive problem-native downstream frontier nodes
+        family_key = delta.family_key or (delta.world_packet.family_key if delta.world_packet else "")
+        derived = derive_frontier_updates(problem, family_key, reduction, jobs)
+
+        # Add the downstream node if it exists
+        if derived.downstream_node is not None:
+            artifacts.append(("frontier_node", derived.downstream_node.to_dict()))
+
+        # Create replay closure node if not exists
         if not any(node["node_key"] == "replay_closure" for node in self.db.get_frontier_nodes(problem.id)):
-            artifacts.append(
-                (
-                    "frontier_node",
-                    FrontierNode(
-                        id=f"{problem.id}-replay",
-                        problem_id=problem.id,
-                        node_key="replay_closure",
-                        node_kind="replay_check",
-                        title="Replay closure",
-                        statement_md="All dependencies replay from clean state.",
-                        formal_statement="Replay closure check",
-                        status="open",
-                        priority=6.0,
-                        updated_at=utc_now(),
-                    ).to_dict(),
-                )
-            )
+            replay_node = make_replay_node(problem)
+            artifacts.append(("frontier_node", replay_node.to_dict()))
+
+        # Update target theorem with dynamic dependencies
         target = self.db.get_frontier_node(problem.id, "target_theorem")
         if target is not None:
+            # Collect all proved node keys from artifacts we're about to create
+            proved_node_keys = {
+                artifact[1]["node_key"]
+                for artifact in artifacts
+                if artifact[0] == "frontier_node" and artifact[1].get("status") == "proved"
+            }
+            # Also include already-proved nodes from DB
+            for node in self.db.get_frontier_nodes(problem.id):
+                if str(node.get("status") or "") == "proved":
+                    proved_node_keys.add(str(node.get("node_key") or ""))
+
+            # Determine target status based on dynamic dependencies
+            required_deps = set(derived.target_dependencies)
+            deps_satisfied = required_deps.issubset(proved_node_keys)
+            replay_sufficient = len(proved_replay) >= 2  # At least bridge + local law
+
+            target_status = "proved" if (deps_satisfied and replay_sufficient) else str(target["status"])
+            target_replay_ref = {"replay_certificate": "target_theorem"} if deps_satisfied else {}
+
             target_node = FrontierNode(
                 id=str(target["id"]),
                 problem_id=problem.id,
@@ -464,28 +436,50 @@ class LimaCoreLoop:
                 title=str(target["title"]),
                 statement_md=str(target["statement_md"]),
                 formal_statement=str(target["formal_statement"]),
-                status="proved" if {"bridge_claim", "local_energy_law", "terminal_form_uniqueness", "replay_closure"}.issubset(
-                    {artifact[1]["node_key"] for artifact in artifacts if artifact[0] == "frontier_node" and artifact[1].get("status") == "proved"}
-                ) else str(target["status"]),
-                dependency_keys=list(target.get("dependency_keys") or []),
+                status=target_status,
+                dependency_keys=list(derived.target_dependencies),
                 priority=float(target.get("priority") or 10.0),
-                replay_ref={"replay_certificate": "target_theorem"} if len(proved_replay) >= 4 else dict(target.get("replay_ref") or {}),
+                replay_ref=target_replay_ref,
                 updated_at=utc_now(),
             )
             artifacts.append(("frontier_node", target_node.to_dict()))
+
         return artifacts
 
 
+def _scheduler_pass(db: LimaCoreDB, loop: LimaCoreLoop) -> list[dict]:
+    """Run one scheduler pass: iterate all eligible active problems.
+
+    This is a testable helper that performs a single pass over all problems.
+    The main limacore_loop calls this repeatedly.
+
+    Returns:
+        List of iteration results for each problem processed.
+    """
+    results = []
+    for problem in db.list_problems():
+        if str(problem.get("status") or "active") != "active":
+            continue
+        if int(problem.get("autopilot_enabled", 1) or 0) != 1:
+            continue
+        if str(problem.get("runtime_status") or "") in {"paused", "solved", "failed"}:
+            continue
+        result = loop.run_iteration(str(problem["id"]))
+        results.append({"problem_id": problem["id"], "slug": problem["slug"], "result": result})
+    return results
+
+
 async def limacore_loop(db: LimaCoreDB, *, interval_sec: int = 300) -> None:
+    """Background loop for LimaCore autopilot.
+
+    Runs eligible active problems immediately on startup, then sleeps between passes.
+    This avoids the dead zone where the system would wait a full interval before
+    the first iteration after startup/deploy.
+    """
     loop = LimaCoreLoop(db)
     while True:
-        await asyncio.sleep(interval_sec)
         db.initialize()
-        for problem in db.list_problems():
-            if str(problem.get("status") or "active") != "active":
-                continue
-            if int(problem.get("autopilot_enabled", 1) or 0) != 1:
-                continue
-            if str(problem.get("runtime_status") or "") in {"paused", "solved", "failed"}:
-                continue
-            loop.run_iteration(str(problem["id"]))
+        # Run immediately on first iteration (and each wakeup)
+        _scheduler_pass(db, loop)
+        # Sleep until next pass
+        await asyncio.sleep(interval_sec)

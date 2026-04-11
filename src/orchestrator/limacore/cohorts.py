@@ -14,6 +14,10 @@ def build_aristotle_cohorts(agenda: AristotleAgenda) -> list[dict]:
 
 
 def summarize_cohort(row: dict) -> CohortSummary:
+    """Summarize a cohort row from the database.
+
+    Includes timestamps for tracking cohort completion order.
+    """
     return CohortSummary(
         id=str(row["id"]),
         cohort_kind=str(row["cohort_kind"]),

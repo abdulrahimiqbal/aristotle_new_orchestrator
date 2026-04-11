@@ -1,30 +1,76 @@
 <section class="rounded-3xl border border-white/10 bg-white/5 p-5">
   <div class="flex items-center justify-between">
     <h2 class="font-display text-xl font-semibold">Aristotle Farm</h2>
-    <span class="rounded-full bg-black/20 px-3 py-1 text-xs text-slate-300">{{ cohorts|length }} cohorts</span>
+    <span class="rounded-full bg-black/20 px-3 py-1 text-xs text-slate-300">{{ stats.cohort_summary.total_cohorts }} cohorts</span>
   </div>
+
+  <!-- Honest execution model disclosure -->
+  <div class="mt-3 rounded-2xl border border-white/10 bg-black/10 p-3">
+    <p class="text-xs text-slate-400">
+      Jobs execute inline per iteration. Active job counts reflect current tick state.
+    </p>
+  </div>
+
+  <!-- Current tick state (typically 0 for inline execution) -->
   <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Running</span><p class="mt-1 text-lg font-semibold">{{ stats.running_jobs }}</p></div>
-    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Queued</span><p class="mt-1 text-lg font-semibold">{{ stats.queued_jobs }}</p></div>
-    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Succeeded</span><p class="mt-1 text-lg font-semibold">{{ stats.succeeded_jobs }}</p></div>
-    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Failed</span><p class="mt-1 text-lg font-semibold">{{ stats.failed_jobs }}</p></div>
-    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Lemmas</span><p class="mt-1 text-lg font-semibold">{{ stats.yielded_lemmas }}</p></div>
-    <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Counterexamples</span><p class="mt-1 text-lg font-semibold">{{ stats.yielded_counterexamples }}</p></div>
+    <div class="rounded-2xl bg-black/20 p-3">
+      <span class="text-slate-400">Running (this tick)</span>
+      <p class="mt-1 text-lg font-semibold">{{ stats.running_jobs }}</p>
+    </div>
+    <div class="rounded-2xl bg-black/20 p-3">
+      <span class="text-slate-400">Queued (this tick)</span>
+      <p class="mt-1 text-lg font-semibold">{{ stats.queued_jobs }}</p>
+    </div>
   </div>
+
+  <!-- Historical throughput -->
+  <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 p-3">
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Historical throughput</p>
+    <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
+      <div><span class="text-slate-400">Succeeded:</span> <span class="font-semibold">{{ stats.succeeded_jobs }}</span></div>
+      <div><span class="text-slate-400">Failed:</span> <span class="font-semibold">{{ stats.failed_jobs }}</span></div>
+      <div><span class="text-slate-400">Lemmas:</span> <span class="font-semibold text-algae">{{ stats.yielded_lemmas }}</span></div>
+      <div><span class="text-slate-400">Counterex:</span> <span class="font-semibold text-rust">{{ stats.yielded_counterexamples }}</span></div>
+    </div>
+  </div>
+
+  <!-- Latest cohort outcome -->
   <div class="mt-4 rounded-2xl border border-white/10 p-4">
-    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Cohorts</p>
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Latest cohort</p>
+    {% if stats.has_recent_cohort_activity %}
+    <p class="mt-2 text-sm font-medium">{{ stats.latest_cohort_title }}</p>
+    <p class="mt-1 text-sm text-slate-300">{{ stats.latest_cohort_yield_summary }}</p>
+    {% if stats.latest_cohort_completed_at %}
+    <p class="mt-1 text-xs text-slate-500">Completed: {{ stats.latest_cohort_completed_at }}</p>
+    {% endif %}
+    {% else %}
+    <p class="mt-2 text-sm text-slate-400">No cohorts executed yet.</p>
+    {% endif %}
+  </div>
+
+  <!-- Recent cohorts list -->
+  <div class="mt-4 rounded-2xl border border-white/10 p-4">
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Recent cohorts</p>
     <ul class="mt-2 space-y-2 text-sm">
       {% for cohort in cohorts[:8] %}
       <li class="rounded-xl bg-black/20 px-3 py-2">
-        {{ cohort.title }} · {{ cohort.status }} · {{ cohort.succeeded_jobs }}/{{ cohort.total_jobs }} yielded
+        {{ cohort.title }} · {{ cohort.status }} · {{ cohort.succeeded_jobs }}/{{ cohort.total_jobs }} succeeded
+        {% if cohort.yielded_lemmas > 0 %}
+        <span class="text-algae">· {{ cohort.yielded_lemmas }} lemma(s)</span>
+        {% endif %}
+        {% if cohort.yielded_counterexamples > 0 %}
+        <span class="text-rust">· {{ cohort.yielded_counterexamples }} counterex</span>
+        {% endif %}
       </li>
       {% else %}
       <li class="rounded-xl bg-black/20 px-3 py-2 text-slate-400">No cohorts yet.</li>
       {% endfor %}
     </ul>
   </div>
+
+  <!-- Stale cohorts -->
   <div class="mt-4 rounded-2xl border border-white/10 p-4">
-    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Stale cohorts</p>
+    <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Stale cohorts (no yield)</p>
     <ul class="mt-2 space-y-2 text-sm">
       {% for cohort in stale_cohorts[:5] %}
       <li class="rounded-xl bg-rust/10 px-3 py-2">{{ cohort.title }}</li>

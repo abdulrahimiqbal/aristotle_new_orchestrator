@@ -2,7 +2,15 @@
 
 from .aristotle import AristotleBackend, LocalAristotleBackend, RealAristotleBackend
 from .db import LimaCoreDB
-from .loop import LimaCoreLoop
+from .frontier_derivation import (
+    DerivedFrontier,
+    FrontierHint,
+    derive_frontier_updates,
+    make_bridge_node,
+    make_local_law_node,
+    make_replay_node,
+)
+from .loop import LimaCoreLoop, _scheduler_pass, limacore_loop
 from .models import (
     AristotleAgenda,
     AristotleJobResult,
@@ -25,7 +33,9 @@ __all__ = [
     "AristotleJobResult",
     "AristotleJobSpec",
     "CohortSummary",
+    "DerivedFrontier",
     "FractureRecord",
+    "FrontierHint",
     "FrontierNode",
     "GroundingBundle",
     "LimaCoreDB",
@@ -38,4 +48,10 @@ __all__ = [
     "ScoreDelta",
     "SolvedReport",
     "WorldPacket",
+    "_scheduler_pass",
+    "derive_frontier_updates",
+    "limacore_loop",
+    "make_bridge_node",
+    "make_local_law_node",
+    "make_replay_node",
 ]

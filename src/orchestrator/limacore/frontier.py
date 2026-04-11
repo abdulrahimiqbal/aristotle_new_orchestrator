@@ -6,9 +6,16 @@ from .models import FrontierNode
 
 
 def ensure_target_frontier(db: LimaCoreDB, problem_id: str, *, target_statement: str) -> None:
+    """Ensure the target theorem frontier node exists.
+
+    The target theorem starts with a minimal default dependency list.
+    These dependencies are updated dynamically as the frontier evolves
+    through problem-native derivation in loop._commit_delta().
+    """
     existing = db.get_frontier_node(problem_id, "target_theorem")
     if existing is not None:
         return
+    # Start with minimal deps - will be updated dynamically based on derived frontier
     db.upsert_frontier_node(
         FrontierNode(
             id=f"{problem_id}-target",
@@ -19,7 +26,8 @@ def ensure_target_frontier(db: LimaCoreDB, problem_id: str, *, target_statement:
             statement_md=target_statement,
             formal_statement=target_statement,
             status="open",
-            dependency_keys=["bridge_claim", "local_energy_law", "terminal_form_uniqueness", "replay_closure"],
+            # Default deps - these are updated dynamically by derive_frontier_updates
+            dependency_keys=["bridge_claim", "local_energy_law", "replay_closure"],
             priority=10.0,
             updated_at=utc_now(),
         )
@@ -43,3 +51,29 @@ def select_frontier_gap(db: LimaCoreDB, problem_id: str) -> dict:
         )
     )
     return open_nodes[0]
+
+
+def update_target_dependencies(db: LimaCoreDB, problem_id: str, dependency_keys: list[str]) -> None:
+    """Update the target theorem's dependency keys dynamically.
+
+    This is called by the loop after deriving frontier updates to keep
+    the target theorem's dependencies in sync with the actual proved nodes.
+    """
+    target = db.get_frontier_node(problem_id, "target_theorem")
+    if target is None:
+        return
+    updated_node = FrontierNode(
+        id=str(target["id"]),
+        problem_id=problem_id,
+        node_key="target_theorem",
+        node_kind=str(target["node_kind"]),
+        title=str(target["title"]),
+        statement_md=str(target["statement_md"]),
+        formal_statement=str(target["formal_statement"]),
+        status=str(target["status"]),
+        dependency_keys=list(dependency_keys),
+        priority=float(target.get("priority") or 10.0),
+        replay_ref=dict(target.get("replay_ref") or {}),
+        updated_at=utc_now(),
+    )
+    db.upsert_frontier_node(updated_node)

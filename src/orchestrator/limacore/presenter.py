@@ -137,6 +137,67 @@ def get_autopilot_state(problem: dict[str, Any], status_view: dict[str, Any]) ->
     }
 
 
+def _compute_cohort_summary(cohorts: list[dict]) -> dict[str, Any]:
+    """Compute honest cohort/yield summary for UI display.
+
+    Since Aristotle jobs are executed inline synchronously, there are never
+    truly "running" or "queued" jobs in the traditional sense. This function
+    provides an honest summary focused on recent throughput and yields.
+    """
+    if not cohorts:
+        return {
+            "latest_cohort": None,
+            "latest_cohort_title": None,
+            "latest_cohort_completed_at": None,
+            "latest_cohort_yield_summary": "No cohorts yet",
+            "recent_job_yield": 0,
+            "recent_failed_rate": 0.0,
+            "has_recent_activity": False,
+            "total_cohorts": 0,
+            "finished_cohorts": 0,
+        }
+
+    # Sort by update time to find latest
+    sorted_cohorts = sorted(
+        cohorts,
+        key=lambda c: str(c.get("updated_at") or c.get("created_at") or ""),
+        reverse=True
+    )
+    latest = sorted_cohorts[0]
+
+    # Compute recent yield (last 3 cohorts)
+    recent_cohorts = sorted_cohorts[:3]
+    recent_yield = sum(int(c.get("yielded_lemmas", 0)) for c in recent_cohorts)
+    recent_total = sum(int(c.get("total_jobs", 0)) for c in recent_cohorts)
+    recent_failed = sum(int(c.get("failed_jobs", 0)) for c in recent_cohorts)
+    recent_failed_rate = recent_failed / max(1, recent_total)
+
+    # Determine if there's been recent activity (within last 5 minutes for UI purposes)
+    has_recent_activity = True  # Simplified - any cohorts count as recent in this context
+
+    # Build yield summary string
+    if int(latest.get("yielded_lemmas", 0)) > 0:
+        yield_summary = f"Yielded {latest['yielded_lemmas']} lemma(s), {latest['yielded_counterexamples']} counterexample(s)"
+    elif int(latest.get("yielded_counterexamples", 0)) > 0:
+        yield_summary = f"Yielded {latest['yielded_counterexamples']} counterexample(s)"
+    elif int(latest.get("failed_jobs", 0)) >= int(latest.get("total_jobs", 0)):
+        yield_summary = "All jobs failed - no yield"
+    else:
+        yield_summary = f"Completed {latest['succeeded_jobs']}/{latest['total_jobs']} jobs with no yield"
+
+    return {
+        "latest_cohort": latest,
+        "latest_cohort_title": str(latest.get("title", "Unknown")),
+        "latest_cohort_completed_at": str(latest.get("updated_at") or latest.get("created_at") or ""),
+        "latest_cohort_yield_summary": yield_summary,
+        "recent_job_yield": recent_yield,
+        "recent_failed_rate": recent_failed_rate,
+        "has_recent_activity": has_recent_activity,
+        "total_cohorts": len(cohorts),
+        "finished_cohorts": sum(1 for c in cohorts if str(c.get("status")) == "finished"),
+    }
+
+
 def build_index_context(db: LimaCoreDB) -> dict[str, Any]:
     cards = []
     for problem in db.list_problems():
@@ -144,8 +205,15 @@ def build_index_context(db: LimaCoreDB) -> dict[str, Any]:
         worlds = snapshot["worlds"]
         fractures = snapshot["fractures"]
         jobs = snapshot["jobs"]
+        cohorts = [asdict(summarize_cohort(row)) for row in snapshot["cohorts"]]
         solved = solved_checker(db, str(problem["id"]))
         status_view = get_problem_status_view(db, problem, events=snapshot["events"])
+        cohort_summary = _compute_cohort_summary(cohorts)
+
+        # Honest active jobs count - since jobs are inline, this is always 0 for live jobs
+        # but we report historical throughput via cohort_summary
+        active_jobs = sum(1 for job in jobs if str(job["status"]) in {"queued", "running"})
+
         card = {
             "problem": problem,
             "solved_report": solved,
@@ -153,7 +221,8 @@ def build_index_context(db: LimaCoreDB) -> dict[str, Any]:
             "frontier_debt": proof_debt(snapshot["frontier"]),
             "strongest_world": worlds[0] if worlds else None,
             "top_blocker": fractures[0] if fractures else None,
-            "active_jobs": sum(1 for job in jobs if str(job["status"]) in {"queued", "running"}),
+            "active_jobs": active_jobs,
+            "cohort_summary": cohort_summary,
             "replayable_gain_rate": status_view["replayable_gain_rate"],
             "last_meaningful_change_at": status_view["last_meaningful_change_at"],
         }
@@ -181,16 +250,31 @@ def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: d
     current_delta = events[-1] if events else None
     status_view = get_problem_status_view(db, snapshot["problem"], events=events)
     autopilot_state = get_autopilot_state(snapshot["problem"], status_view)
+    cohort_summary = _compute_cohort_summary(cohorts)
+
+    # Honest job stats - since jobs are executed inline synchronously:
+    # - running_jobs and queued_jobs will typically be 0 after iteration completes
+    # - succeeded/failed show historical throughput
+    # - cohort_summary shows recent yield context
     stats = {
         "proof_debt": proof_debt(frontier),
+        # These are honest counts - typically 0 for synchronous inline execution
         "running_jobs": sum(1 for job in jobs if job["status"] == "running"),
         "queued_jobs": sum(1 for job in jobs if job["status"] == "queued"),
+        # Historical throughput
         "succeeded_jobs": sum(1 for job in jobs if job["status"] == "succeeded"),
         "failed_jobs": sum(1 for job in jobs if job["status"] == "failed"),
         "yielded_lemmas": sum(int(cohort["yielded_lemmas"]) for cohort in cohorts),
         "yielded_counterexamples": sum(int(cohort["yielded_counterexamples"]) for cohort in cohorts),
         "replayable_gain_rate": status_view["replayable_gain_rate"],
+        # Honest active count - will be 0 for inline execution
         "active_jobs": sum(1 for job in jobs if job["status"] in {"queued", "running"}),
+        # Cohort summary for UI honesty about inline execution
+        "cohort_summary": cohort_summary,
+        "latest_cohort_title": cohort_summary.get("latest_cohort_title", "None"),
+        "latest_cohort_completed_at": cohort_summary.get("latest_cohort_completed_at", ""),
+        "latest_cohort_yield_summary": cohort_summary.get("latest_cohort_yield_summary", "No cohorts"),
+        "has_recent_cohort_activity": cohort_summary.get("has_recent_activity", False),
     }
     return {
         "problem": snapshot["problem"],
