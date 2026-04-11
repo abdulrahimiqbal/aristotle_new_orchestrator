@@ -50,3 +50,31 @@ def test_program_delta_only_kept_on_verified_yield(tmp_path: Path) -> None:
     loop.run_iteration(str(problem["id"]))
     candidate = write_candidate_program_delta(db, str(problem["id"]), note="tighten acceptance wording")
     assert maybe_accept_program_delta(db, str(problem["id"]), candidate) is True
+
+
+def test_collatz_rotates_off_stale_quotient_loop_and_earns_new_replayable_gain(tmp_path: Path) -> None:
+    db = LimaCoreDB(str(tmp_path / "limacore.db"))
+    db.initialize()
+    loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
+
+    first = loop.run_iteration("collatz")
+    second = loop.run_iteration("collatz")
+    third = loop.run_iteration("collatz")
+    fourth = loop.run_iteration("collatz")
+
+    assert first["accepted"] is True
+    assert second["accepted"] is False
+    assert third["accepted"] is False
+    assert fourth["accepted"] is True
+
+    worlds = db.list_world_heads(str(db.get_problem("collatz")["id"]))
+    families = {str(world["family_key"]) for world in worlds}
+    assert "hidden_state" in families
+
+    frontier = db.get_frontier_nodes(str(db.get_problem("collatz")["id"]))
+    proved = {str(node["node_key"]) for node in frontier if str(node["status"]) == "proved"}
+    assert {"bridge_claim", "local_energy_law"}.issubset(proved)
+
+    fifth = loop.run_iteration("collatz")
+    assert fifth["score"]["replayable_gain"] == 0
+    assert fifth["accepted"] is False
