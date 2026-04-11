@@ -74,6 +74,12 @@ def _extract_message_text(message: Any) -> str:
     return "\n".join(parts).strip()
 
 
+class LLMDisabledError(Exception):
+    """Raised when LLM is disabled via LLM_DISABLED config."""
+
+    pass
+
+
 async def _post_chat_completions(
     payload: dict[str, Any],
     *,
@@ -86,7 +92,13 @@ async def _post_chat_completions(
     Each *wave* runs up to ``LLM_MAX_RETRIES_429 + 1`` POST attempts; on 429 we sleep
     (Retry-After or exponential backoff) and retry. If every attempt in a wave is 429,
     we sleep ``LLM_429_WAVE_GAP_SEC`` and start another wave, up to ``1 + LLM_EXTRA_429_WAVES`` waves.
+
+    Raises:
+        LLMDisabledError: If LLM_DISABLED is set in config (non-limacore LLM calls blocked).
     """
+    if app_config.LLM_DISABLED:
+        raise LLMDisabledError("LLM calls are disabled (LLM_DISABLED=1). Only limacore should make LLM calls.")
+
     global _llm_next_allowed_monotonic
     url = f"{(base_url or app_config.LLM_BASE_URL).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key or app_config.LLM_API_KEY}"}
@@ -183,7 +195,7 @@ def _llm_provider_chain(primary_model: str | None = None) -> list[dict[str, str]
         backup = {
             "name": "backup",
             "base_url": app_config.LLM_BACKUP_BASE_URL,
-            "api_key": app_config.LLM_BACKUP_API_KEY or "modal",
+            "api_key": app_config.LLM_BACKUP_API_KEY or app_config.LLM_API_KEY or "modal",
             "model": app_config.LLM_BACKUP_MODEL or primary_model or app_config.LLM_MODEL,
         }
         if (

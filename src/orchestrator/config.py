@@ -112,6 +112,8 @@ ALLOW_CAMPAIGN_COMPLETE_WITH_ACTIVE_JOBS = _bool_env(
 )
 
 # LLM (also read in llm.py via this module for caps / JSON mode)
+# Kill switch: set LLM_DISABLED=1 to disable all LLM API calls (non-limacore components)
+LLM_DISABLED = _bool_env("LLM_DISABLED", False)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.6-plus:free")
