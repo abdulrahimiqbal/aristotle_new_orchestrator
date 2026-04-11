@@ -52,6 +52,38 @@ class LocalAristotleBackend:
                 artifact={"search_bound": 64},
             )
         if problem.slug == "collatz":
+            if family == "hidden_state":
+                if spec.job_kind == "bridge_lemma":
+                    return AristotleJobResult(
+                        job_kind=spec.job_kind,
+                        verdict="proved",
+                        replayable=True,
+                        summary_md="Replayable carry-ledger bridge proved for accelerated odd-step drift.",
+                        artifact={"replay_certificate": "collatz_carry_ledger_bridge", "status": "proved"},
+                    )
+                if spec.job_kind == "local_law":
+                    return AristotleJobResult(
+                        job_kind=spec.job_kind,
+                        verdict="proved",
+                        replayable=True,
+                        summary_md="Replayable parity-block drift bound proved in the carry ledger world.",
+                        artifact={"replay_certificate": "collatz_parity_block_drift", "status": "proved"},
+                    )
+                if spec.job_kind == "counterexample_search":
+                    return AristotleJobResult(
+                        job_kind=spec.job_kind,
+                        verdict="inconclusive",
+                        replayable=False,
+                        summary_md="No short carry-ledger counterexample found in bounded parity-block search.",
+                        artifact={"search_bound": 48},
+                    )
+                return AristotleJobResult(
+                    job_kind=spec.job_kind,
+                    verdict="blocked",
+                    replayable=False,
+                    summary_md="Blocked on extending the carry-ledger drift bound to all return patterns.",
+                    artifact={"blocker": "global_return_pattern_closure"},
+                )
             if spec.job_kind == "counterexample_search":
                 return AristotleJobResult(
                     job_kind=spec.job_kind,

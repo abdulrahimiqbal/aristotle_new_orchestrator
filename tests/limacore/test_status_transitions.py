@@ -95,3 +95,40 @@ def test_status_transitions_running_blocked_stalled_paused_solved(tmp_path: Path
     )
     solved = persist_runtime_status(db, problem_id)
     assert solved["runtime_status"] == "solved"
+
+
+def test_detect_runtime_status_prefers_blocked_nodes_over_open_target(tmp_path: Path) -> None:
+    db = LimaCoreDB(str(tmp_path / "limacore.db"))
+    db.initialize()
+    problem = db.get_problem("collatz")
+    assert problem is not None
+    problem_id = str(problem["id"])
+
+    db.upsert_frontier_node(
+        FrontierNode(
+            id="blocked-terminal",
+            problem_id=problem_id,
+            node_key="terminal_form_uniqueness",
+            node_kind="theorem_skeleton",
+            title="Terminal form uniqueness",
+            status="blocked",
+            blocker_kind="missing_uniqueness_lemma",
+            blocker_note_md="Need a full canonical balanced-profile lemma.",
+            priority=7.0,
+            updated_at=utc_now(),
+        )
+    )
+    db.replace_world_head(
+        problem_id,
+        {
+            "family_key": "quotient",
+            "world_name": "Odd-step quotient probe",
+            "status": "surviving",
+            "yield_score": 0.32,
+            "updated_at": utc_now(),
+        },
+    )
+
+    status = detect_runtime_status(db, problem_id)
+    assert status.status == "blocked"
+    assert status.blocked_node_key == "terminal_form_uniqueness"

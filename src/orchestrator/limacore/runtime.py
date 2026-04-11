@@ -103,31 +103,31 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             replayable_gain_rate=0,
             last_meaningful_change_at=str(problem.get("created_at") or ""),
         )
-    top_node = next((node for node in frontier if str(node.get("status") or "") in {"blocked", "open"}), None)
-    if top_node and str(top_node.get("status") or "") == "blocked":
+    blocked_node = next((node for node in frontier if str(node.get("status") or "") == "blocked"), None)
+    if blocked_node:
         strongest_world = worlds[0] if worlds else None
-        blocker_summary = str(top_node.get("blocker_note_md") or "")
+        blocker_summary = str(blocked_node.get("blocker_note_md") or "")
         if strongest_world is not None or blocker_summary:
             return RuntimeStatusView(
                 status="blocked",
-                reason=f"Blocked: no frontier movement because {top_node['title'].lower()} is failing.",
-                blocked_node_key=str(top_node["node_key"]),
-                blocker_kind=str(top_node.get("blocker_kind") or problem.get("blocker_kind") or "missing_dependency"),
+                reason=f"Blocked: no frontier movement because {blocked_node['title'].lower()} is failing.",
+                blocked_node_key=str(blocked_node["node_key"]),
+                blocker_kind=str(blocked_node.get("blocker_kind") or problem.get("blocker_kind") or "missing_dependency"),
                 blocker_summary=blocker_summary or str(problem.get("status_reason_md") or ""),
                 replayable_gain_rate=replayable_gain_rate,
                 last_meaningful_change_at=last_meaningful_change,
             )
     recent = events[-stall_window:]
-    no_gain = all(
+    no_verified_progress = all(
         int((event.get("score_delta") or {}).get("replayable_gain", 0)) <= 0
-        and int((event.get("score_delta") or {}).get("fracture_gain", 0)) <= 0
+        and int((event.get("score_delta") or {}).get("proof_debt_delta", 0)) >= 0
         for event in recent
         if event.get("event_type") in {"frontier_improved", "delta_reverted", "program_updated"}
     )
     decision_events = [
         event for event in recent if event.get("event_type") in {"frontier_improved", "delta_reverted", "program_updated"}
     ]
-    if len(decision_events) >= stall_window and no_gain:
+    if len(decision_events) >= stall_window and no_verified_progress:
         return RuntimeStatusView(
             status="stalled",
             reason=f"Stalled: no replayable formal gain in the last {stall_window} iterations.",
