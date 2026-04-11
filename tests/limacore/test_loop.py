@@ -53,41 +53,38 @@ def test_program_delta_only_kept_on_verified_yield(tmp_path: Path) -> None:
 
 
 def test_collatz_rotates_off_stale_quotient_loop_and_earns_new_replayable_gain(tmp_path: Path) -> None:
-    """Test that Collatz control law prevents infinite quotient kill churn.
+    """Test that Collatz control law rotates off stale quotient to productive families.
     
-    With the new control-law patch:
-    - First iteration creates a world (accepted)
-    - Subsequent duplicate kill deltas on same family are rejected as churn
-    - This prevents the infinite "Kill stale quotient world" loop
+    With the fixed control-law patch:
+    - First iteration creates quotient world
+    - Exhaustion detected (no replayable gain + failed jobs)
+    - System rotates to hidden_state family
+    - hidden_state produces replayable lemmas
     """
     db = LimaCoreDB(str(tmp_path / "limacore.db"))
     db.initialize()
     loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
 
-    first = loop.run_iteration("collatz")
-    second = loop.run_iteration("collatz")
-    third = loop.run_iteration("collatz")
-    fourth = loop.run_iteration("collatz")
+    # Run 6 iterations to see rotation behavior
+    results = [loop.run_iteration("collatz") for _ in range(6)]
 
     # First should always create a world
-    assert first["accepted"] is True, "First iteration should create a world"
+    assert results[0]["accepted"] is True, "First iteration should create a world"
     
-    # With new control law, duplicate churn on same family should be rejected
-    # After first iteration, subsequent kill deltas on same family are rejected
-    
-    # At least 2 of the subsequent 3 should be rejected
-    subsequent_accepted = sum(1 for r in [second, third, fourth] if r["accepted"])
-    assert subsequent_accepted <= 1, f"Too many subsequent deltas accepted: {subsequent_accepted}"
-    
-    # The second should be rejected (duplicate churn detection)
-    # This is the key fix - prevent repeated "Kill stale quotient world" when current family is quotient
-    assert second["accepted"] is False, "Second iteration should be rejected as duplicate churn"
-
-    worlds = db.list_world_heads(str(db.get_problem("collatz")["id"]))
+    # Check that we eventually rotate to hidden_state and make progress
+    problem = db.get_problem("collatz")
+    worlds = db.list_world_heads(str(problem["id"]))
     families = {str(world["family_key"]) for world in worlds}
     
-    # We should have the initial quotient world
-    assert "quotient" in families, "Should have quotient family world"
+    # Should have rotated to hidden_state
+    assert "hidden_state" in families, "Should rotate to hidden_state family"
+    
+    # Check cohorts for lemmas
+    cohorts = db.list_cohorts(str(problem["id"]))
+    total_lemmas = sum(int(c.get("yielded_lemmas", 0)) for c in cohorts)
+    
+    # Should have yielded some lemmas from hidden_state
+    assert total_lemmas > 0, f"Should have yielded lemmas, got {total_lemmas}"
 
 
 def test_collatz_produces_native_frontier_nodes_not_benchmark_shaped(tmp_path: Path) -> None:

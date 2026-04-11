@@ -264,7 +264,8 @@ class LimaCoreLoop:
             )
             structured = [{"artifact_kind": kind, "content": content} for kind, content in artifacts]
             apply_event_artifacts(self.db, problem.id, event_id, structured)
-            if score.replayable_gain > 0 or score.fracture_gain > 0:
+            if score.replayable_gain > 0:
+                # Real progress - clear blocked state
                 self.db.update_problem_runtime(
                     problem.id,
                     runtime_status="running",
@@ -276,6 +277,18 @@ class LimaCoreLoop:
                     exhausted_family_since="",
                     stalled_since="",
                 )
+            else:
+                # No replayable gain - persist blocked node for exhaustion detection
+                frontier = self.db.get_frontier_nodes(problem.id)
+                blocked_node = next((n for n in frontier if str(n.get("status") or "") == "blocked"), None)
+                if blocked_node:
+                    self.db.update_problem_runtime(
+                        problem.id,
+                        runtime_status="blocked" if not score.accepted else "running",
+                        blocked_node_key=str(blocked_node.get("node_key") or ""),
+                        blocker_kind=str(blocked_node.get("blocker_kind") or ""),
+                        status_reason_md=str(blocked_node.get("blocker_note_md") or "Blocked: frontier node cannot advance."),
+                    )
         else:
             refs = []
             structured = []
