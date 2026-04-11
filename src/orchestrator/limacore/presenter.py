@@ -7,7 +7,7 @@ from .cohorts import summarize_cohort
 from .control import build_control_snapshot
 from .db import LimaCoreDB
 from .frontier import proof_debt
-from .runtime import detect_runtime_status
+from .runtime import detect_runtime_status, get_scheduler_health_view
 from .solved import solved_checker
 
 
@@ -22,9 +22,63 @@ STATUS_STYLES = {
 }
 
 
+def _format_age(seconds: int) -> str:
+    if seconds <= 0:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 1:
+        return f"{seconds}s ago"
+    if minutes == 1:
+        return "1 minute ago"
+    if minutes < 60:
+        return f"{minutes} minutes ago"
+    hours = minutes // 60
+    if hours == 1:
+        return "1 hour ago"
+    return f"{hours} hours ago"
+
+
+def build_scheduler_ui_view(db: LimaCoreDB) -> dict[str, Any]:
+    scheduler = get_scheduler_health_view(db)
+    last_completed = scheduler.get("scheduler_last_pass_completed_at") or ""
+    if scheduler["scheduler_stale"]:
+        headline = f"Autopilot unhealthy: no scheduler pass completed in {_format_age(int(scheduler['scheduler_age_seconds']))}."
+    elif scheduler["scheduler_status"] == "not_started":
+        headline = "Autopilot awaiting the first scheduler pass."
+    else:
+        headline = f"Autopilot healthy: last scheduler pass {_format_age(int(scheduler['scheduler_age_seconds']))}."
+    banner = None
+    if scheduler["scheduler_stale"]:
+        banner = {
+            "kind": "scheduler_unhealthy",
+            "title": "Autopilot unhealthy: scheduler heartbeat stale.",
+            "summary": [
+                f"Last pass started: {scheduler['scheduler_last_pass_started_at'] or 'never'}",
+                f"Last pass completed: {last_completed or 'never'}",
+                f"Last scheduler error: {scheduler['scheduler_last_error_md'] or 'none recorded'}",
+                f"Pass count: {scheduler['scheduler_pass_count']}",
+                f"Failure count: {scheduler['scheduler_failure_count']}",
+            ],
+            "actions": ["Inspect scheduler ops"],
+            "class": "border-rust/40 bg-rust/10 text-rust",
+        }
+    return {
+        "scheduler": scheduler,
+        "scheduler_headline": headline,
+        "scheduler_banner": banner,
+        "scheduler_last_error_md": scheduler["scheduler_last_error_md"],
+        "scheduler_last_pass_completed_at": scheduler["scheduler_last_pass_completed_at"],
+        "scheduler_last_pass_started_at": scheduler["scheduler_last_pass_started_at"],
+        "scheduler_pass_count": scheduler["scheduler_pass_count"],
+        "scheduler_failure_count": scheduler["scheduler_failure_count"],
+        "scheduler_age_text": _format_age(int(scheduler["scheduler_age_seconds"])),
+    }
+
+
 def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     runtime = detect_runtime_status(db, str(problem["id"]))
     style = STATUS_STYLES[runtime.status]
+    scheduler_ui = build_scheduler_ui_view(db)
     cta = {
         "booting": "Workspace is normalizing the theorem and seeding the first world line.",
         "running": "Autopilot is active.",
@@ -79,6 +133,18 @@ def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: 
         "stalled_since": runtime.stalled_since,
         "last_gain_at": runtime.last_gain_at,
         "autopilot_enabled": bool(int(problem.get("autopilot_enabled", 1) or 0)),
+        "scheduler": scheduler_ui["scheduler"],
+        "scheduler_status": scheduler_ui["scheduler"]["scheduler_status"],
+        "scheduler_healthy": scheduler_ui["scheduler"]["scheduler_healthy"],
+        "scheduler_stale": scheduler_ui["scheduler"]["scheduler_stale"],
+        "scheduler_headline": scheduler_ui["scheduler_headline"],
+        "scheduler_banner": scheduler_ui["scheduler_banner"],
+        "scheduler_last_error_md": scheduler_ui["scheduler_last_error_md"],
+        "scheduler_last_pass_completed_at": scheduler_ui["scheduler_last_pass_completed_at"],
+        "scheduler_last_pass_started_at": scheduler_ui["scheduler_last_pass_started_at"],
+        "scheduler_pass_count": scheduler_ui["scheduler_pass_count"],
+        "scheduler_failure_count": scheduler_ui["scheduler_failure_count"],
+        "scheduler_age_text": scheduler_ui["scheduler_age_text"],
         # NEW: Current-line KPIs
         **current_line_metrics,
     }
@@ -103,6 +169,9 @@ def get_workspace_alert_banner(
             "actions": ["Inspect solved proof graph"],
             "class": status_view["banner_class"],
         }
+    scheduler = status_view.get("scheduler") or {}
+    if scheduler.get("scheduler_stale"):
+        return status_view.get("scheduler_banner")
     if status == "blocked":
         summary = [
             f"Blocking node: {status_view['blocked_node_key'] or 'unknown'}",
@@ -168,6 +237,9 @@ def get_problem_card_summary(card: dict[str, Any]) -> str:
     status = card["status_view"]["status"]
     if status == "solved":
         return "Solved: target theorem closed and replay check passed."
+    scheduler = card["status_view"].get("scheduler") or {}
+    if scheduler.get("scheduler_stale"):
+        return card["status_view"].get("scheduler_headline") or "Autopilot unhealthy."
     if status == "blocked":
         family = card["status_view"].get("exhausted_family_key") or "unknown"
         return f"Blocked on {card['status_view']['blocked_node_key'] or 'unknown'}; family {family} exhausted."
@@ -177,15 +249,26 @@ def get_problem_card_summary(card: dict[str, Any]) -> str:
 
 
 def get_autopilot_state(problem: dict[str, Any], status_view: dict[str, Any]) -> dict[str, Any]:
-    running = status_view["status"] in {"running", "booting", "blocked", "stalled"} and status_view["autopilot_enabled"]
+    scheduler = status_view.get("scheduler") or {}
+    running = (
+        status_view["status"] in {"running", "booting", "blocked", "stalled"}
+        and status_view["autopilot_enabled"]
+        and not scheduler.get("scheduler_stale")
+    )
     return {
         "enabled": status_view["autopilot_enabled"],
         "running": running,
-        "label": "Autopilot on" if status_view["autopilot_enabled"] else "Autopilot paused",
-        "state_text": status_view["reason"],
+        "label": (
+            "Autopilot unhealthy"
+            if scheduler.get("scheduler_stale")
+            else ("Autopilot on" if status_view["autopilot_enabled"] else "Autopilot paused")
+        ),
+        "state_text": scheduler.get("scheduler_status_reason") or status_view["reason"],
         "can_start": status_view["status"] in {"paused", "blocked", "stalled", "running", "booting"},
         "can_pause": status_view["autopilot_enabled"] and status_view["status"] not in {"solved", "failed"},
         "can_iterate": status_view["status"] != "failed",
+        "scheduler_stale": bool(scheduler.get("scheduler_stale")),
+        "scheduler_status": scheduler.get("scheduler_status", "not_started"),
     }
 
 
@@ -251,6 +334,7 @@ def _compute_cohort_summary(cohorts: list[dict]) -> dict[str, Any]:
 
 
 def build_index_context(db: LimaCoreDB) -> dict[str, Any]:
+    scheduler_ui = build_scheduler_ui_view(db)
     cards = []
     for problem in db.list_problems():
         snapshot = db.snapshot(str(problem["id"]))
@@ -280,10 +364,11 @@ def build_index_context(db: LimaCoreDB) -> dict[str, Any]:
         }
         card["summary_text"] = get_problem_card_summary(card)
         cards.append(card)
-    return {"cards": cards}
+    return {"cards": cards, **scheduler_ui}
 
 
 def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: dict[str, Any] | None = None) -> dict[str, Any]:
+    scheduler_ui = build_scheduler_ui_view(db)
     snapshot = db.snapshot(problem_slug_or_id)
     solved = solved_checker(db, str(snapshot["problem"]["id"]))
     frontier = snapshot["frontier"]
@@ -389,6 +474,7 @@ def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: d
         "has_legacy_frontier_cleanup_available": _detect_legacy_cleanup_available(db, str(snapshot["problem"]["id"])),
         # NEW: Current-line KPIs for UI
         "current_line": current_line_kpis,
+        **scheduler_ui,
     }
 
 

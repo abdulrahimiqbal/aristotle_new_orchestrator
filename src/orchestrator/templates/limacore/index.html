@@ -57,6 +57,39 @@
       </div>
     </section>
 
+    <section class="mt-8 rounded-3xl border border-white/10 bg-white/5 p-5">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-400">Scheduler</p>
+          <h2 class="mt-2 font-display text-2xl font-semibold">{{ scheduler_headline }}</h2>
+          <p class="mt-2 text-sm text-slate-300">Last pass started {{ scheduler_last_pass_started_at or 'never' }} · completed {{ scheduler_last_pass_completed_at or 'never' }} · pass count {{ scheduler_pass_count }}</p>
+        </div>
+        <div class="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-200">
+          <p class="font-semibold">Last scheduler error</p>
+          <p class="mt-1 max-w-xl text-slate-300">{{ scheduler_last_error_md or 'none recorded' }}</p>
+        </div>
+      </div>
+    </section>
+    {% if scheduler_banner %}
+    <section class="mt-4 rounded-3xl border p-5 {{ scheduler_banner.class }}">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 class="font-display text-xl font-semibold">{{ scheduler_banner.title }}</h2>
+          <ul class="mt-3 space-y-2 text-sm">
+            {% for line in scheduler_banner.summary %}
+            <li>{{ line }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          {% for action in scheduler_banner.actions %}
+          <span class="rounded-full border border-current/25 px-3 py-2 text-xs font-semibold">{{ action }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
     <section class="mt-8" id="limacore-index-cards" hx-get="/limacore" hx-trigger="every 15s" hx-select="#limacore-index-cards" hx-swap="outerHTML">
       <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         {% for card in cards %}

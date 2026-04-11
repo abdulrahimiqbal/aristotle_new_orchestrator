@@ -141,4 +141,20 @@ CREATE TABLE IF NOT EXISTS program_state (
     payload_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS limacore_scheduler_state (
+    scheduler_name TEXT PRIMARY KEY,
+    last_pass_started_at TEXT NOT NULL DEFAULT '',
+    last_pass_completed_at TEXT NOT NULL DEFAULT '',
+    last_successful_problem_id TEXT NOT NULL DEFAULT '',
+    last_error_at TEXT NOT NULL DEFAULT '',
+    last_error_md TEXT NOT NULL DEFAULT '',
+    pass_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    currently_running INTEGER NOT NULL DEFAULT 0,
+    current_problem_id TEXT NOT NULL DEFAULT '',
+    current_pass_problem_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """

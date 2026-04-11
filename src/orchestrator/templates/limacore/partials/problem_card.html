@@ -11,6 +11,11 @@
   <div class="mt-4 rounded-2xl border p-3 {{ card.status_view.banner_class }}">
     <p class="text-sm font-semibold">{{ card.summary_text }}</p>
   </div>
+  {% if card.status_view.scheduler and card.status_view.scheduler.scheduler_stale %}
+  <div class="mt-3 rounded-2xl border border-rust/30 bg-rust/10 p-3 text-sm text-rust">
+    Scheduler heartbeat stale. Last pass completed {{ card.status_view.scheduler_age_text }}.
+  </div>
+  {% endif %}
   <dl class="mt-5 grid grid-cols-2 gap-3 text-sm">
     <div class="rounded-2xl bg-black/20 p-3">
       <dt class="text-slate-400">Frontier debt</dt>
@@ -52,6 +57,10 @@
     <div class="rounded-2xl bg-black/20 p-3 col-span-2">
       <dt class="text-slate-400">Last meaningful change</dt>
       <dd class="mt-1 font-medium">{{ card.last_meaningful_change_at }}</dd>
+    </div>
+    <div class="rounded-2xl bg-black/20 p-3 col-span-2">
+      <dt class="text-slate-400">Scheduler</dt>
+      <dd class="mt-1 font-medium">{{ card.status_view.scheduler_headline }}</dd>
     </div>
   </dl>
   <div class="mt-4">

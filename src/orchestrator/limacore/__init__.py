@@ -18,7 +18,7 @@ from .frontier_derivation import (
     make_local_law_node,
     make_replay_node,
 )
-from .loop import LimaCoreLoop, _scheduler_pass, limacore_loop
+from .loop import LimaCoreLoop, limacore_loop
 from .models import (
     AristotleAgenda,
     AristotleJobResult,
@@ -57,7 +57,6 @@ __all__ = [
     "ScoreDelta",
     "SolvedReport",
     "WorldPacket",
-    "_scheduler_pass",
     "cleanup_legacy_collatz_frontier",
     "derive_frontier_updates",
     "detect_legacy_collatz_frontier_nodes",

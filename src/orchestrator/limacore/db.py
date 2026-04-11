@@ -655,6 +655,168 @@ class LimaCoreDB:
         loaded = parse_json(str(row["payload_json"]), default=payload)
         return ProgramState(**loaded)
 
+    def get_scheduler_state(self, scheduler_name: str = "limacore_autopilot") -> dict[str, Any]:
+        now = utc_now()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM limacore_scheduler_state WHERE scheduler_name = ?",
+                (scheduler_name,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO limacore_scheduler_state(
+                        scheduler_name, last_pass_started_at, last_pass_completed_at,
+                        last_successful_problem_id, last_error_at, last_error_md,
+                        pass_count, failure_count, currently_running, current_problem_id,
+                        current_pass_problem_count, created_at, updated_at
+                    ) VALUES(?, '', '', '', '', '', 0, 0, 0, '', 0, ?, ?)
+                    """,
+                    (scheduler_name, now, now),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM limacore_scheduler_state WHERE scheduler_name = ?",
+                    (scheduler_name,),
+                ).fetchone()
+        return dict(row) if row is not None else {}
+
+    def record_scheduler_pass_start(
+        self,
+        scheduler_name: str = "limacore_autopilot",
+        *,
+        current_pass_problem_count: int = 0,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO limacore_scheduler_state(
+                    scheduler_name, last_pass_started_at, last_pass_completed_at,
+                    last_successful_problem_id, last_error_at, last_error_md,
+                    pass_count, failure_count, currently_running, current_problem_id,
+                    current_pass_problem_count, created_at, updated_at
+                ) VALUES(?, ?, '', '', '', '', 1, 0, 1, '', ?, ?, ?)
+                ON CONFLICT(scheduler_name) DO UPDATE SET
+                    last_pass_started_at = excluded.last_pass_started_at,
+                    currently_running = 1,
+                    current_problem_id = '',
+                    current_pass_problem_count = excluded.current_pass_problem_count,
+                    pass_count = limacore_scheduler_state.pass_count + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    scheduler_name,
+                    now,
+                    current_pass_problem_count,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        return self.get_scheduler_state(scheduler_name)
+
+    def record_scheduler_pass_complete(
+        self,
+        scheduler_name: str = "limacore_autopilot",
+        *,
+        last_successful_problem_id: str = "",
+        current_pass_problem_count: int | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        self.get_scheduler_state(scheduler_name)
+        with self._connect() as conn:
+            assignments = [
+                "last_pass_completed_at = ?",
+                "currently_running = 0",
+                "current_problem_id = ''",
+                "updated_at = ?",
+            ]
+            values: list[Any] = [now, now]
+            if last_successful_problem_id:
+                assignments.insert(1, "last_successful_problem_id = ?")
+                values.insert(1, last_successful_problem_id)
+            if current_pass_problem_count is not None:
+                assignments.insert(-1, "current_pass_problem_count = ?")
+                values.insert(-1, current_pass_problem_count)
+            conn.execute(
+                f"""
+                UPDATE limacore_scheduler_state
+                SET {', '.join(assignments)}
+                WHERE scheduler_name = ?
+                """,
+                (*values, scheduler_name),
+            )
+            conn.commit()
+        return self.get_scheduler_state(scheduler_name)
+
+    def record_scheduler_problem_success(
+        self,
+        problem_id: str,
+        scheduler_name: str = "limacore_autopilot",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        self.get_scheduler_state(scheduler_name)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE limacore_scheduler_state
+                SET last_successful_problem_id = ?, updated_at = ?
+                WHERE scheduler_name = ?
+                """,
+                (problem_id, now, scheduler_name),
+            )
+            conn.commit()
+        return self.get_scheduler_state(scheduler_name)
+
+    def record_scheduler_problem_failure(
+        self,
+        problem_id: str,
+        error_md: str,
+        scheduler_name: str = "limacore_autopilot",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        self.get_scheduler_state(scheduler_name)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE limacore_scheduler_state
+                SET last_error_at = ?,
+                    last_error_md = ?,
+                    failure_count = failure_count + 1,
+                    current_problem_id = ?,
+                    updated_at = ?
+                WHERE scheduler_name = ?
+                """,
+                (now, error_md[:1000], problem_id, now, scheduler_name),
+            )
+            conn.commit()
+        return self.get_scheduler_state(scheduler_name)
+
+    def record_scheduler_error(
+        self,
+        error_md: str,
+        scheduler_name: str = "limacore_autopilot",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        self.get_scheduler_state(scheduler_name)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE limacore_scheduler_state
+                SET last_error_at = ?,
+                    last_error_md = ?,
+                    failure_count = failure_count + 1,
+                    currently_running = 0,
+                    current_problem_id = '',
+                    updated_at = ?
+                WHERE scheduler_name = ?
+                """,
+                (now, error_md[:1000], now, scheduler_name),
+            )
+            conn.commit()
+        return self.get_scheduler_state(scheduler_name)
+
     def get_program_state(self, problem_id: str) -> ProgramState:
         return self.ensure_program_state(problem_id)
 

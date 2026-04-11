@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict
+from typing import Any
 
 from .aristotle import AristotleBackend, LocalAristotleBackend, poll_results, submit_aristotle_jobs
 from .artifacts import utc_now
@@ -24,6 +26,9 @@ from .retriever import Retriever
 from .runtime import detect_runtime_status, persist_runtime_status
 from .scorer import score_results
 from .solved import solved_checker
+
+
+logger = logging.getLogger(__name__)
 
 
 class LimaCoreLoop:
@@ -463,39 +468,104 @@ class LimaCoreLoop:
         return artifacts
 
 
-def _scheduler_pass(db: LimaCoreDB, loop: LimaCoreLoop) -> list[dict]:
-    """Run one scheduler pass: iterate all eligible active problems.
-
-    This is a testable helper that performs a single pass over all problems.
-    The main limacore_loop calls this repeatedly.
-
-    Returns:
-        List of iteration results for each problem processed.
-    """
-    results = []
-    for problem in db.list_problems():
-        if str(problem.get("status") or "active") != "active":
-            continue
-        if int(problem.get("autopilot_enabled", 1) or 0) != 1:
-            continue
-        if str(problem.get("runtime_status") or "") in {"paused", "solved", "failed"}:
-            continue
-        result = loop.run_iteration(str(problem["id"]))
-        results.append({"problem_id": problem["id"], "slug": problem["slug"], "result": result})
-    return results
+def _problem_is_eligible(problem: dict[str, Any]) -> bool:
+    if str(problem.get("status") or "active") != "active":
+        return False
+    if int(problem.get("autopilot_enabled", 1) or 0) != 1:
+        return False
+    if str(problem.get("runtime_status") or "") in {"paused", "solved", "failed"}:
+        return False
+    return True
 
 
-async def limacore_loop(db: LimaCoreDB, *, interval_sec: int = 300) -> None:
-    """Background loop for LimaCore autopilot.
+def _problem_error_summary(problem: dict[str, Any], exc: Exception) -> str:
+    slug = str(problem.get("slug") or problem.get("id") or "unknown-problem")
+    return f"Autopilot iteration failed for {slug}: {exc.__class__.__name__}: {exc}"
 
-    Runs eligible active problems immediately on startup, then sleeps between passes.
-    This avoids the dead zone where the system would wait a full interval before
-    the first iteration after startup/deploy.
-    """
-    loop = LimaCoreLoop(db)
+
+def run_scheduler_pass(
+    db: LimaCoreDB,
+    *,
+    backend: AristotleBackend | None = None,
+) -> dict[str, Any]:
+    """Run one Lima-core scheduler pass across all eligible problems."""
+
+    db.initialize()
+    loop = LimaCoreLoop(db, backend=backend)
+    eligible = [problem for problem in db.list_problems() if _problem_is_eligible(problem)]
+    started_at = utc_now()
+    db.record_scheduler_pass_start(current_pass_problem_count=len(eligible))
+
+    problems_ran = 0
+    problems_failed = 0
+    last_successful_problem_id = ""
+
+    for problem in eligible:
+        problem_id = str(problem["id"])
+        try:
+            result = loop.run_iteration(problem_id)
+            problems_ran += 1
+            last_successful_problem_id = problem_id
+            db.record_scheduler_problem_success(problem_id)
+            logger.info(
+                "Lima-core autopilot ran problem %s (%s): %s",
+                problem_id,
+                problem.get("slug") or "",
+                result.get("status") if isinstance(result, dict) else "ok",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            problems_failed += 1
+            error_md = _problem_error_summary(problem, exc)
+            db.append_event(
+                problem_id,
+                "autopilot_iteration_failed",
+                "failed",
+                summary_md=error_md,
+            )
+            db.update_problem_runtime(
+                problem_id,
+                runtime_status="failed",
+                status_reason_md=error_md,
+            )
+            db.record_scheduler_problem_failure(problem_id, error_md)
+            logger.exception("Lima-core problem iteration failed for %s", problem_id)
+
+    completed_at = utc_now()
+    db.record_scheduler_pass_complete(
+        last_successful_problem_id=last_successful_problem_id,
+        current_pass_problem_count=len(eligible),
+    )
+    return {
+        "problems_seen": len(eligible),
+        "problems_ran": problems_ran,
+        "problems_failed": problems_failed,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "last_successful_problem_id": last_successful_problem_id,
+    }
+
+
+async def limacore_loop(
+    db: LimaCoreDB,
+    *,
+    interval_sec: int = 300,
+    backend: AristotleBackend | None = None,
+) -> None:
+    """Background loop for LimaCore autopilot."""
+
+    db.initialize()
     while True:
-        db.initialize()
-        # Run immediately on first iteration (and each wakeup)
-        _scheduler_pass(db, loop)
-        # Sleep until next pass
-        await asyncio.sleep(interval_sec)
+        try:
+            run_scheduler_pass(db, backend=backend)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error_md = f"Autopilot scheduler error: {exc.__class__.__name__}: {exc}"
+            db.record_scheduler_error(error_md)
+            logger.exception("Lima-core scheduler pass failed")
+        try:
+            await asyncio.sleep(interval_sec)
+        except asyncio.CancelledError:
+            raise

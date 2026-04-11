@@ -8,7 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from .db import LimaCoreDB
 from .loop import LimaCoreLoop
-from .presenter import build_index_context, build_workspace_context
+from .presenter import build_index_context, build_scheduler_ui_view, build_workspace_context
 
 
 def _is_htmx(request: Request) -> bool:
@@ -196,6 +196,45 @@ def build_router(db_or_getter: LimaCoreDB | Callable[[], LimaCoreDB], templates:
         db = current_db()
         ctx = build_workspace_context(db, problem_slug)
         return JSONResponse({"program": ctx["program"], "throughput": ctx["stats"], "status": ctx["status_view"]})
+
+    @router.get("/api/limacore/ops")
+    async def ops() -> JSONResponse:
+        db = current_db()
+        scheduler = build_scheduler_ui_view(db)
+        scheduler_state = db.get_scheduler_state()
+        return JSONResponse(
+            {
+                "scheduler_state": scheduler_state,
+                "scheduler_health": scheduler["scheduler"],
+                "healthy": bool(scheduler["scheduler"]["scheduler_healthy"]),
+                "stale": bool(scheduler["scheduler"]["scheduler_stale"]),
+                "scheduler_headline": scheduler["scheduler_headline"],
+                "scheduler_last_pass_started_at": scheduler["scheduler_last_pass_started_at"],
+                "scheduler_last_pass_completed_at": scheduler["scheduler_last_pass_completed_at"],
+                "scheduler_last_error_md": scheduler["scheduler_last_error_md"],
+                "scheduler_pass_count": scheduler["scheduler_pass_count"],
+                "scheduler_failure_count": scheduler["scheduler_failure_count"],
+            }
+        )
+
+    @router.get("/api/limacore/problem/{problem_slug}/ops")
+    async def problem_ops(problem_slug: str) -> JSONResponse:
+        db = current_db()
+        try:
+            ctx = build_workspace_context(db, problem_slug)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Problem not found") from exc
+        return JSONResponse(
+            {
+                "problem": ctx["problem"],
+                "status_view": ctx["status_view"],
+                "autopilot_state": ctx["autopilot_state"],
+                "scheduler_state": db.get_scheduler_state(),
+                "scheduler_health": ctx["scheduler"],
+                "healthy": bool(ctx["scheduler"]["scheduler_healthy"]),
+                "stale": bool(ctx["scheduler"]["scheduler_stale"]),
+            }
+        )
 
     @router.post("/api/limacore/problem/{problem_slug}/cleanup-legacy", response_class=HTMLResponse)
     async def cleanup_legacy(request: Request, problem_slug: str) -> Response:

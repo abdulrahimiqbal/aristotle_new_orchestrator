@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from orchestrator import config as app_config
 
 from .artifacts import utc_now
 from .control import build_control_snapshot
@@ -35,7 +38,6 @@ class RuntimeStatusView:
     last_gain_at: str = ""
     replayable_gain_rate: int = 0
     last_meaningful_change_at: str = ""
-    # NEW: Current-line KPIs
     current_family_key: str = ""
     current_family_exhausted: bool = False
     repeated_cohort_pattern_detected: bool = False
@@ -44,20 +46,116 @@ class RuntimeStatusView:
     recent_current_family_yielded_lemmas: int = 0
     recent_accept_count: int = 0
     recent_revert_count: int = 0
+    scheduler_status: str = "not_started"
+    scheduler_healthy: bool = True
+    scheduler_stale: bool = False
+    scheduler_initialized: bool = False
+    scheduler_last_pass_started_at: str = ""
+    scheduler_last_pass_completed_at: str = ""
+    scheduler_last_successful_problem_id: str = ""
+    scheduler_last_error_at: str = ""
+    scheduler_last_error_md: str = ""
+    scheduler_pass_count: int = 0
+    scheduler_failure_count: int = 0
+    scheduler_current_problem_id: str = ""
+    scheduler_current_pass_problem_count: int = 0
+    scheduler_age_seconds: int = 0
+    scheduler_expected_next_pass_at: str = ""
+    scheduler_status_reason: str = ""
+    scheduler_name: str = "limacore_autopilot"
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _scheduler_health_reason(state: dict[str, Any], *, stale: bool, initialized: bool, age_seconds: int) -> str:
+    if stale:
+        last_completed = str(state.get("last_pass_completed_at") or "never")
+        return f"Autopilot unhealthy: scheduler heartbeat stale. Last completed pass: {last_completed}. Age: {age_seconds}s."
+    if initialized:
+        if int(state.get("failure_count") or 0) > 0 and str(state.get("last_error_md") or ""):
+            return f"Autopilot healthy. Last scheduler error: {state['last_error_md']}"
+        return "Autopilot healthy: scheduler heartbeat fresh."
+    return "Autopilot awaiting first scheduler pass."
+
+
+def get_scheduler_health_view(
+    db: LimaCoreDB,
+    *,
+    scheduler_name: str = "limacore_autopilot",
+    interval_sec: int | None = None,
+) -> dict[str, Any]:
+    state = db.get_scheduler_state(scheduler_name)
+    interval = max(1, int(interval_sec or app_config.LIMACORE_LOOP_INTERVAL_SEC or 300))
+    last_started = _parse_timestamp(str(state.get("last_pass_started_at") or ""))
+    last_completed = _parse_timestamp(str(state.get("last_pass_completed_at") or ""))
+    last_activity = last_completed or last_started
+    now = datetime.now(timezone.utc)
+    age_seconds = int((now - last_activity).total_seconds()) if last_activity else 0
+    initialized = bool(
+        int(state.get("pass_count") or 0) > 0
+        or str(state.get("last_pass_started_at") or "")
+        or str(state.get("last_pass_completed_at") or "")
+    )
+    stale = bool(last_activity and age_seconds > (2 * interval))
+    healthy = not stale
+    status = "not_started"
+    if stale:
+        status = "stale"
+    elif initialized and int(state.get("currently_running") or 0):
+        status = "running"
+    elif initialized:
+        status = "healthy"
+    next_pass_at = ""
+    if last_completed is not None:
+        next_pass_at = (last_completed + timedelta(seconds=interval)).astimezone(timezone.utc).isoformat()
+    elif last_started is not None:
+        next_pass_at = (last_started + timedelta(seconds=interval)).astimezone(timezone.utc).isoformat()
+    return {
+        "scheduler_name": scheduler_name,
+        "scheduler_status": status,
+        "scheduler_healthy": healthy,
+        "scheduler_stale": stale,
+        "scheduler_initialized": initialized,
+        "scheduler_last_pass_started_at": str(state.get("last_pass_started_at") or ""),
+        "scheduler_last_pass_completed_at": str(state.get("last_pass_completed_at") or ""),
+        "scheduler_last_successful_problem_id": str(state.get("last_successful_problem_id") or ""),
+        "scheduler_last_error_at": str(state.get("last_error_at") or ""),
+        "scheduler_last_error_md": str(state.get("last_error_md") or ""),
+        "scheduler_pass_count": int(state.get("pass_count") or 0),
+        "scheduler_failure_count": int(state.get("failure_count") or 0),
+        "scheduler_current_problem_id": str(state.get("current_problem_id") or ""),
+        "scheduler_current_pass_problem_count": int(state.get("current_pass_problem_count") or 0),
+        "scheduler_age_seconds": age_seconds,
+        "scheduler_expected_next_pass_at": next_pass_at,
+        "scheduler_status_reason": _scheduler_health_reason(state, stale=stale, initialized=initialized, age_seconds=age_seconds),
+    }
 
 
 def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int = 10) -> RuntimeStatusView:
     problem = db.get_problem(problem_id)
     if problem is None:
         raise KeyError(problem_id)
+
     stored_status = str(problem.get("runtime_status") or "")
     snapshot = build_control_snapshot(db, problem_id, window=stall_window)
     events = db.list_events(problem_id, limit=max(stall_window, 20))
     frontier = db.get_frontier_nodes(problem_id)
     solved = solved_checker(db, problem_id)
-    last_meaningful_change = str(problem.get("last_gain_at") or problem.get("updated_at") or problem.get("created_at") or "")
+    last_meaningful_change = str(
+        problem.get("last_gain_at") or problem.get("updated_at") or problem.get("created_at") or ""
+    )
     replayable_gain_rate = sum(int((event.get("score_delta") or {}).get("replayable_gain", 0)) for event in events[-stall_window:])
-    # Helper dict for common current-line KPIs
+    scheduler_view = get_scheduler_health_view(db, interval_sec=app_config.LIMACORE_LOOP_INTERVAL_SEC)
     current_line_kpis = {
         "current_family_key": snapshot.current_family_key,
         "current_family_exhausted": snapshot.current_family_exhausted,
@@ -68,226 +166,145 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         "recent_accept_count": snapshot.recent_accept_count,
         "recent_revert_count": snapshot.recent_revert_count,
     }
-    
-    if solved.solved:
+
+    def _view(**kwargs: Any) -> RuntimeStatusView:
         return RuntimeStatusView(
+            replayable_gain_rate=replayable_gain_rate,
+            last_meaningful_change_at=last_meaningful_change,
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
+            **scheduler_view,
+            **current_line_kpis,
+            **kwargs,
+        )
+
+    if solved.solved:
+        return _view(
             status="solved",
             reason="Solved: target theorem closed and replay check passed.",
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            last_gain_at=last_meaningful_change,
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
+
     if str(problem.get("runtime_status") or "") == "failed":
-        return RuntimeStatusView(
+        return _view(
             status="failed",
             reason=str(problem.get("status_reason_md") or "Failed: unexpected internal error."),
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
+
     if int(problem.get("autopilot_enabled", 1) or 0) == 0:
-        return RuntimeStatusView(
+        return _view(
             status="paused",
             reason=str(problem.get("status_reason_md") or "Paused: autopilot disabled."),
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
+
     blocked_node = next((node for node in frontier if str(node.get("status") or "") == "blocked"), None)
-    if stored_status == "running" and not events and blocked_node is None:
-        return RuntimeStatusView(
-            status="running",
-            reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            last_gain_at=str(problem.get("last_gain_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
-        )
-    # FIXED: Blocked detection now uses recent current-family metrics
     current_family_recently_dead = (
         snapshot.recent_current_family_replayable_gain <= 0
         and snapshot.recent_current_family_yielded_lemmas == 0
         and snapshot.recent_current_family_failed_jobs >= 4
         and snapshot.recent_current_family_failed_cohorts >= 2
     )
-    
+
     blocked_now = bool(
         blocked_node
         and (
-            snapshot.current_family_exhausted  # Uses recent family metrics now
+            snapshot.current_family_exhausted
             or snapshot.same_blocker_persists
-            or current_family_recently_dead  # KEY FIX: recent family deadness
+            or current_family_recently_dead
             or (
                 snapshot.recent_replayable_gain <= 0
                 and snapshot.recent_proof_debt_delta >= 0
                 and snapshot.recent_fracture_gain <= 0
-                and snapshot.recent_current_family_replayable_gain <= 0  # Also check recent family
+                and snapshot.recent_current_family_replayable_gain <= 0
             )
         )
     )
     if blocked_now or (stored_status == "blocked" and blocked_node is not None):
         reason = str(problem.get("status_reason_md") or "Blocked: current frontier cannot advance.")
-        # Add pattern info to reason if detected
         if snapshot.repeated_cohort_pattern_detected:
             reason += f" (Repeated pattern: {snapshot.repeated_cohort_signature})"
-        return RuntimeStatusView(
+        return _view(
             status="blocked",
             reason=reason,
             blocked_node_key=str(problem.get("blocked_node_key") or snapshot.blocked_node_key or ""),
             blocker_kind=str(problem.get("blocker_kind") or snapshot.blocker_kind or ""),
             blocker_summary=str(problem.get("status_reason_md") or snapshot.blocker_summary or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            **current_line_kpis,
         )
-    # FIXED: Use recent current-family metrics for stall detection, not lifetime totals
-    # This allows a currently dead line to be marked stalled even if the problem had earlier successes
-    stalled_now = bool(
-        snapshot.recent_replayable_gain <= 0
-        and snapshot.recent_proof_debt_delta >= 0
-        and snapshot.recent_fracture_gain <= 0
-        and snapshot.recent_current_family_replayable_gain <= 0  # KEY FIX: recent family gain
-        and snapshot.recent_current_family_yielded_lemmas == 0  # KEY FIX: recent family yield
-        and snapshot.recent_current_family_failed_jobs >= 2  # KEY FIX: recent family failures
-        and not blocked_now
-    )
-    if stalled_now:
-        reason = f"Stalled: no replayable formal gain in the last {stall_window} iterations."
-        # Add pattern detection info
-        if snapshot.repeated_cohort_pattern_detected:
-            reason += f" Repeated maintenance pattern: {snapshot.repeated_cohort_signature}."
-        return RuntimeStatusView(
+
+    if scheduler_view["scheduler_stale"]:
+        reason = scheduler_view["scheduler_status_reason"]
+        return _view(
             status="stalled",
             reason=reason,
             stalled_iteration_window=stall_window,
             stalled_since=str(problem.get("stalled_since") or events[-1]["created_at"] if events else problem.get("created_at") or ""),
             last_gain_at=str(problem.get("last_gain_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            **current_line_kpis,
         )
-    if stored_status == "stalled" and str(problem.get("stalled_since") or ""):
-        return RuntimeStatusView(
-            status="stalled",
-            reason=str(problem.get("status_reason_md") or f"Stalled: no replayable formal gain in the last {stall_window} iterations."),
-            stalled_iteration_window=stall_window,
-            stalled_since=str(problem.get("stalled_since") or ""),
-            last_gain_at=str(problem.get("last_gain_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            **current_line_kpis,
-        )
-    if stored_status == "running" and snapshot.recent_replayable_gain > 0:
-        return RuntimeStatusView(
+
+    if stored_status == "running" and not events and blocked_node is None:
+        return _view(
             status="running",
             reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
             last_gain_at=str(problem.get("last_gain_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
-    if not events and not blocked_node:
-        return RuntimeStatusView(
+
+    if stored_status == "running" and snapshot.recent_replayable_gain > 0:
+        return _view(
+            status="running",
+            reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
+            last_gain_at=str(problem.get("last_gain_at") or ""),
+        )
+
+    runtime_status = str(problem.get("runtime_status") or "")
+    if runtime_status == "booting":
+        return _view(
             status="booting",
             reason="Booting: creating normalized theorem and initial world line.",
-            replayable_gain_rate=0,
             last_meaningful_change_at=str(problem.get("created_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
-    # FIXED: Multiple live families only count as healthy if there is recent real movement
-    # Use recent current-family signals, not just historical success
+
     has_recent_real_movement = (
         snapshot.recent_replayable_gain > 0
-        or snapshot.recent_current_family_replayable_gain > 0  # Current family making progress
-        or snapshot.recent_current_family_accepts > 0  # Current family has recent accepts
+        or snapshot.recent_current_family_replayable_gain > 0
+        or snapshot.recent_current_family_accepts > 0
     )
-    
+
     if snapshot.live_family_count >= 2 and has_recent_real_movement:
-        return RuntimeStatusView(
+        return _view(
             status="running",
             reason="Running: autopilot active with recent progress.",
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
             last_gain_at=str(problem.get("last_gain_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
-    
-    # Only say "multiple non-stale world lines are active" if there's actual recent activity
+
     if snapshot.live_family_count >= 2 and not snapshot.current_family_exhausted and has_recent_real_movement:
-        return RuntimeStatusView(
+        return _view(
             status="running",
             reason="Running: multiple non-stale world lines are active.",
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
         )
+
     if snapshot.current_family_exhausted and blocked_node is not None:
-        return RuntimeStatusView(
+        return _view(
             status="blocked",
             reason=str(problem.get("status_reason_md") or f"Blocked: family {snapshot.current_family_key} is exhausted."),
             blocked_node_key=snapshot.blocked_node_key,
             blocker_kind=snapshot.blocker_kind,
             blocker_summary=snapshot.blocker_summary,
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            **current_line_kpis,
         )
+
     if stored_status == "running" and (events or frontier) and snapshot.recent_replayable_gain > 0:
-        return RuntimeStatusView(
+        return _view(
             status="running",
             reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
             last_gain_at=str(problem.get("last_gain_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=last_meaningful_change,
-            **current_line_kpis,
         )
-    runtime_status = str(problem.get("runtime_status") or "")
-    if runtime_status == "booting":
-        return RuntimeStatusView(
-            status="booting",
-            reason="Booting: creating normalized theorem and initial world line.",
-            replayable_gain_rate=replayable_gain_rate,
-            last_meaningful_change_at=str(problem.get("created_at") or ""),
-            exhausted_family_key=snapshot.exhausted_family_key,
-            suggested_family_key=snapshot.suggested_family_key,
-            **current_line_kpis,
-        )
-    return RuntimeStatusView(
+
+    return _view(
         status="stalled" if snapshot.recent_replayable_gain <= 0 else "running",
-        reason="Stalled: no replayable formal gain in the last window." if snapshot.recent_replayable_gain <= 0 else "Running: autopilot active.",
-        replayable_gain_rate=replayable_gain_rate,
-        last_meaningful_change_at=last_meaningful_change,
+        reason=(
+            "Stalled: no replayable formal gain in the last window."
+            if snapshot.recent_replayable_gain <= 0
+            else "Running: autopilot active."
+        ),
         last_gain_at=str(problem.get("last_gain_at") or ""),
-        exhausted_family_key=snapshot.exhausted_family_key,
-        suggested_family_key=snapshot.suggested_family_key,
-        **current_line_kpis,
     )
 
 

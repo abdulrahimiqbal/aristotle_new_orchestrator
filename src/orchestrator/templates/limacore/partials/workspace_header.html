@@ -8,17 +8,24 @@
       </div>
       <p class="max-w-4xl text-sm leading-6 text-slate-300">{{ problem.normalized_statement_md or problem.statement_md }}</p>
       <p class="text-sm text-slate-300">{{ status_view.reason }}</p>
+      <p class="text-sm text-slate-400">{{ scheduler_headline }}</p>
       {% if status_view.exhausted_family_key %}
       <p class="text-sm text-rust">Primary family exhausted: {{ status_view.exhausted_family_key }} · rotate toward {{ status_view.suggested_family_key }}</p>
+      {% endif %}
+      {% if scheduler_last_error_md %}
+      <p class="text-sm text-brass">Last scheduler error: {{ scheduler_last_error_md }}</p>
       {% endif %}
     </div>
     <div class="grid min-w-[280px] grid-cols-2 gap-3 text-sm">
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Autopilot</span><p class="mt-1 font-semibold">{{ autopilot_state.label }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Scheduler</span><p class="mt-1 font-semibold">{{ scheduler_age_text }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Program</span><p class="mt-1 font-semibold">v{{ program.version }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Frontier debt</span><p class="mt-1 font-semibold">{{ stats.proof_debt }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Active Aristotle jobs</span><p class="mt-1 font-semibold">{{ stats.active_jobs }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Replayable gain rate</span><p class="mt-1 font-semibold">{{ stats.replayable_gain_rate }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Exhausted family</span><p class="mt-1 font-semibold">{{ status_view.exhausted_family_key or "none" }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Scheduler passes</span><p class="mt-1 font-semibold">{{ scheduler_pass_count }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Scheduler failures</span><p class="mt-1 font-semibold">{{ scheduler_failure_count }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Current state</span><p class="mt-1 font-semibold">{{ status_view.status }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3 col-span-2"><span class="text-slate-400">Escalation</span><p class="mt-1 font-semibold">{{ status_view.cta_text }}</p></div>
     </div>

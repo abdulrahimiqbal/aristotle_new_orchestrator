@@ -64,6 +64,7 @@ from orchestrator.supershadow_agent import (
 from orchestrator.supershadow_presenter import build_supershadow_ui_context
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 DATABASE_PATH = app_config.DATABASE_PATH
 
@@ -502,6 +503,27 @@ def _ticks_view(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _create_logged_task(name: str, coro: Any) -> asyncio.Task[Any]:
+    task = asyncio.create_task(coro, name=name)
+
+    def _log_unexpected_failure(done: asyncio.Task[Any]) -> None:
+        if done.cancelled():
+            return
+        try:
+            exc = done.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.error(
+                "Background task %s exited unexpectedly",
+                name,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+
+    task.add_done_callback(_log_unexpected_failure)
+    return task
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.initialize()
@@ -513,12 +535,13 @@ async def lifespan(app: FastAPI):
         workspace_root=app_config.WORKSPACE_ROOT,
         legacy_dir=app_config.WORKSPACE_LEGACY_DIR or None,
     )
-    task = asyncio.create_task(manager_loop(db))
-    shadow_task = asyncio.create_task(shadow_global_loop(db))
-    supershadow_task = asyncio.create_task(supershadow_global_loop(db))
-    lima_task = asyncio.create_task(lima_loop(lima_db, db))
-    limacore_task = asyncio.create_task(
-        limacore_loop(limacore_db, interval_sec=app_config.LIMACORE_LOOP_INTERVAL_SEC)
+    task = _create_logged_task("manager-loop", manager_loop(db))
+    shadow_task = _create_logged_task("shadow-loop", shadow_global_loop(db))
+    supershadow_task = _create_logged_task("supershadow-loop", supershadow_global_loop(db))
+    lima_task = _create_logged_task("lima-loop", lima_loop(lima_db, db))
+    limacore_task = _create_logged_task(
+        "limacore-autopilot",
+        limacore_loop(limacore_db, interval_sec=app_config.LIMACORE_LOOP_INTERVAL_SEC),
     )
     try:
         yield
