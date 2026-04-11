@@ -9,6 +9,17 @@ from uuid import uuid4
 from .artifacts import artifact_hash, parse_json, stable_json, utc_now
 from .models import FrontierNode, ProblemSpec, ProgramState
 from .schema import SCHEMA_SQL
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    if column not in _column_names(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _new_id() -> str:
     return uuid4().hex
 
@@ -27,10 +38,27 @@ class LimaCoreDB:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA_SQL)
+            self._run_migrations(conn)
             conn.commit()
         from .seed import ensure_seed_data
 
         ensure_seed_data(self)
+
+    def _run_migrations(self, conn: sqlite3.Connection) -> None:
+        problem_columns = [
+            ("original_prompt", "TEXT NOT NULL DEFAULT ''"),
+            ("normalized_statement_md", "TEXT NOT NULL DEFAULT ''"),
+            ("runtime_status", "TEXT NOT NULL DEFAULT 'booting'"),
+            ("status_reason_md", "TEXT NOT NULL DEFAULT ''"),
+            ("blocked_node_key", "TEXT NOT NULL DEFAULT ''"),
+            ("blocker_kind", "TEXT NOT NULL DEFAULT ''"),
+            ("stalled_since", "TEXT NOT NULL DEFAULT ''"),
+            ("last_gain_at", "TEXT NOT NULL DEFAULT ''"),
+            ("since_timestamp", "TEXT NOT NULL DEFAULT ''"),
+            ("autopilot_enabled", "INTEGER NOT NULL DEFAULT 1"),
+        ]
+        for column, definition in problem_columns:
+            _ensure_column(conn, "problems", column, definition)
 
     def store_artifact(
         self,
@@ -114,6 +142,11 @@ class LimaCoreDB:
         *,
         domain: str = "",
         target_theorem: str = "",
+        original_prompt: str = "",
+        normalized_statement_md: str = "",
+        runtime_status: str = "booting",
+        status_reason_md: str = "",
+        autopilot_enabled: bool = True,
     ) -> tuple[str, bool]:
         now = utc_now()
         with self._connect() as conn:
@@ -126,10 +159,30 @@ class LimaCoreDB:
             problem_id = _new_id()
             conn.execute(
                 """
-                INSERT INTO problems(id, slug, title, statement_md, domain, status, target_theorem, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                INSERT INTO problems(
+                    id, slug, title, statement_md, domain, status, target_theorem,
+                    original_prompt, normalized_statement_md, runtime_status, status_reason_md,
+                    blocked_node_key, blocker_kind, stalled_since, last_gain_at, since_timestamp,
+                    autopilot_enabled, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, '', '', '', '', ?, ?, ?, ?)
                 """,
-                (problem_id, slug, title, statement_md, domain, target_theorem, now, now),
+                (
+                    problem_id,
+                    slug,
+                    title,
+                    statement_md,
+                    domain,
+                    target_theorem,
+                    original_prompt,
+                    normalized_statement_md or statement_md,
+                    runtime_status,
+                    status_reason_md,
+                    now,
+                    1 if autopilot_enabled else 0,
+                    now,
+                    now,
+                ),
             )
             conn.commit()
         self.ensure_program_state(problem_id)
@@ -156,6 +209,67 @@ class LimaCoreDB:
             )
             conn.commit()
         return self.get_problem(slug_or_id)
+
+    def update_problem_runtime(
+        self,
+        slug_or_id: str,
+        *,
+        runtime_status: str,
+        status_reason_md: str = "",
+        blocked_node_key: str | None = None,
+        blocker_kind: str | None = None,
+        stalled_since: str | None = None,
+        last_gain_at: str | None = None,
+        autopilot_enabled: bool | None = None,
+        since_timestamp: str | None = None,
+    ) -> dict[str, Any] | None:
+        current = self.get_problem(slug_or_id)
+        if current is None:
+            return None
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE problems SET
+                    runtime_status = ?,
+                    status_reason_md = ?,
+                    blocked_node_key = ?,
+                    blocker_kind = ?,
+                    stalled_since = ?,
+                    last_gain_at = ?,
+                    autopilot_enabled = ?,
+                    since_timestamp = ?,
+                    updated_at = ?
+                WHERE id = ? OR slug = ?
+                """,
+                (
+                    runtime_status,
+                    status_reason_md,
+                    blocked_node_key if blocked_node_key is not None else str(current.get("blocked_node_key") or ""),
+                    blocker_kind if blocker_kind is not None else str(current.get("blocker_kind") or ""),
+                    stalled_since if stalled_since is not None else str(current.get("stalled_since") or ""),
+                    last_gain_at if last_gain_at is not None else str(current.get("last_gain_at") or ""),
+                    int(current.get("autopilot_enabled") if autopilot_enabled is None else (1 if autopilot_enabled else 0)),
+                    since_timestamp if since_timestamp is not None else str(current.get("since_timestamp") or utc_now()),
+                    utc_now(),
+                    slug_or_id,
+                    slug_or_id,
+                ),
+            )
+            conn.commit()
+        return self.get_problem(slug_or_id)
+
+    def set_autopilot_enabled(self, slug_or_id: str, enabled: bool) -> dict[str, Any] | None:
+        current = self.get_problem(slug_or_id)
+        if current is None:
+            return None
+        next_status = "paused" if not enabled else ("running" if str(current.get("runtime_status")) != "solved" else "solved")
+        return self.update_problem_runtime(
+            slug_or_id,
+            runtime_status=next_status,
+            status_reason_md="Autopilot paused by operator." if not enabled else "Running: autopilot active.",
+            autopilot_enabled=enabled,
+            since_timestamp=utc_now(),
+        )
 
     def upsert_frontier_node(self, node: FrontierNode) -> None:
         with self._connect() as conn:

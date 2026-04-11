@@ -1,24 +1,39 @@
 <div id="workspace-shell" class="space-y-6">
-  <section class="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-white/10 bg-white/5 p-6">
-    <div>
-      <p class="text-xs uppercase tracking-[0.3em] text-slate-400">{{ problem.domain or "research" }}</p>
-      <h1 class="mt-2 font-display text-3xl font-bold">{{ problem.title }}</h1>
-      <p class="mt-2 max-w-4xl text-sm leading-6 text-slate-300">{{ problem.statement_md }}</p>
+  {% include "limacore/partials/workspace_header.html" %}
+
+  {% include "limacore/partials/alert_banner.html" %}
+
+  <section class="rounded-3xl border border-white/10 bg-white/5 p-5">
+    <div class="flex flex-wrap gap-3">
+      <form method="post" action="/api/limacore/autopilot/{{ problem.slug }}/start" hx-post="/api/limacore/autopilot/{{ problem.slug }}/start" hx-target="#workspace-shell" hx-swap="outerHTML">
+        <button class="rounded-2xl bg-algae px-4 py-3 text-sm font-semibold text-ink">Start autopilot</button>
+      </form>
+      <form method="post" action="/api/limacore/autopilot/{{ problem.slug }}/pause" hx-post="/api/limacore/autopilot/{{ problem.slug }}/pause" hx-target="#workspace-shell" hx-swap="outerHTML">
+        <button class="rounded-2xl bg-slate-500/80 px-4 py-3 text-sm font-semibold text-white">Pause autopilot</button>
+      </form>
+      <form method="post" action="/api/limacore/run/{{ problem.slug }}/once" hx-post="/api/limacore/run/{{ problem.slug }}/once" hx-target="#workspace-shell" hx-swap="outerHTML">
+        <button class="rounded-2xl bg-brass px-4 py-3 text-sm font-semibold text-ink">Run one iteration now</button>
+      </form>
+      <form method="post" action="/api/limacore/run/{{ problem.slug }}/batch" hx-post="/api/limacore/run/{{ problem.slug }}/batch" hx-target="#workspace-shell" hx-swap="outerHTML">
+        <input type="hidden" name="iterations" value="10" />
+        <button class="rounded-2xl border border-brass/40 px-4 py-3 text-sm font-semibold text-brass">Run 10 bounded iterations</button>
+      </form>
+      <form method="post" action="/api/limacore/cohort/{{ problem.slug }}/spawn" hx-post="/api/limacore/cohort/{{ problem.slug }}/spawn" hx-target="#workspace-shell" hx-swap="outerHTML">
+        <button class="rounded-2xl border border-algae/30 px-4 py-3 text-sm font-semibold text-algae">Spawn Aristotle fanout</button>
+      </form>
+      <a href="#world-panel" class="rounded-2xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-200">Promote world</a>
+      <a href="#frontier-panel" class="rounded-2xl border border-white/10 px-4 py-3 text-sm font-semibold text-slate-200">Inspect blocker</a>
     </div>
-    <form
-      action="/api/limacore/run"
-      method="post"
-      hx-post="/api/limacore/run"
-      hx-target="#workspace-shell"
-      hx-swap="outerHTML">
-      <input type="hidden" name="problem" value="{{ problem.slug }}" />
-      <button class="rounded-2xl bg-brass px-5 py-3 text-sm font-semibold text-ink">Run one bounded iteration</button>
-    </form>
   </section>
 
   {% if flash.run %}
   <section class="rounded-2xl border border-algae/20 bg-algae/10 px-4 py-3 text-sm text-algae">
-    Last run: gap {{ flash.run.gap }} · delta {{ flash.run.delta_type }} · accepted {{ flash.run.accepted }}
+    Last run: gap {{ flash.run.gap }} · delta {{ flash.run.delta_type }} · accepted {{ flash.run.accepted }} · status {{ flash.run.status }}
+  </section>
+  {% endif %}
+  {% if flash.batch_run %}
+  <section class="rounded-2xl border border-brass/20 bg-brass/10 px-4 py-3 text-sm text-brass">
+    Batch run completed: {{ flash.batch_run|length }} bounded iterations requested.
   </section>
   {% endif %}
 

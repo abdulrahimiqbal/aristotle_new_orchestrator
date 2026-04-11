@@ -1,0 +1,19 @@
+{% if alert_banner %}
+<section class="rounded-3xl border p-5 {{ alert_banner.class }}">
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <h2 class="font-display text-xl font-semibold">{{ alert_banner.title }}</h2>
+      <ul class="mt-3 space-y-2 text-sm">
+        {% for line in alert_banner.summary %}
+        <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {% for action in alert_banner.actions %}
+      <span class="rounded-full border border-current/25 px-3 py-2 text-xs font-semibold">{{ action }}</span>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}

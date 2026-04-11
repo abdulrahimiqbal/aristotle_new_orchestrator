@@ -15,6 +15,10 @@ def ensure_seed_data(db: LimaCoreDB) -> None:
         statement_md="For every positive integer n, repeated application of the Collatz map reaches 1.",
         domain="number theory",
         target_theorem="Every positive integer Collatz orbit reaches 1.",
+        original_prompt="Collatz conjecture benchmark.",
+        normalized_statement_md="Every positive integer Collatz orbit reaches 1.",
+        runtime_status="running",
+        status_reason_md="Running: autopilot active.",
     )
     inward_id, _ = db.create_problem(
         slug="inward-compression-conjecture",
@@ -26,6 +30,10 @@ def ensure_seed_data(db: LimaCoreDB) -> None:
         ),
         domain="discrete dynamics",
         target_theorem="For every fixed length and total sum, every legal inward-compression sequence terminates at a unique stable state.",
+        original_prompt="Inward Compression Conjecture benchmark.",
+        normalized_statement_md="For every fixed length and total sum, every legal inward-compression sequence terminates at a unique stable state.",
+        runtime_status="running",
+        status_reason_md="Running: autopilot active.",
     )
     ensure_target_frontier(db, collatz_id, target_statement="Every positive integer Collatz orbit reaches 1.")
     ensure_target_frontier(

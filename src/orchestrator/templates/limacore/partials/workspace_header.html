@@ -1,0 +1,21 @@
+<section class="rounded-3xl border border-white/10 bg-white/5 p-6">
+  <div class="flex flex-wrap items-start justify-between gap-6">
+    <div class="space-y-3">
+      <p class="text-xs uppercase tracking-[0.3em] text-slate-400">{{ problem.domain or "research" }}</p>
+      <div class="flex flex-wrap items-center gap-3">
+        <h1 class="font-display text-3xl font-bold">{{ problem.title }}</h1>
+        <span class="rounded-full px-3 py-1 text-xs font-semibold {{ status_view.badge_class }}">{{ status_view.status|upper }}</span>
+      </div>
+      <p class="max-w-4xl text-sm leading-6 text-slate-300">{{ problem.normalized_statement_md or problem.statement_md }}</p>
+      <p class="text-sm text-slate-300">{{ status_view.reason }}</p>
+    </div>
+    <div class="grid min-w-[280px] grid-cols-2 gap-3 text-sm">
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Autopilot</span><p class="mt-1 font-semibold">{{ autopilot_state.label }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Program</span><p class="mt-1 font-semibold">v{{ program.version }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Frontier debt</span><p class="mt-1 font-semibold">{{ stats.proof_debt }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Active Aristotle jobs</span><p class="mt-1 font-semibold">{{ stats.active_jobs }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Replayable gain rate</span><p class="mt-1 font-semibold">{{ stats.replayable_gain_rate }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Current state</span><p class="mt-1 font-semibold">{{ status_view.status }}</p></div>
+    </div>
+  </div>
+</section>

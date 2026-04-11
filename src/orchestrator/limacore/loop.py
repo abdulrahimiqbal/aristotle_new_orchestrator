@@ -11,9 +11,11 @@ from .db import LimaCoreDB
 from .events import apply_event_artifacts
 from .frontier import ensure_target_frontier, select_frontier_gap
 from .models import DeltaProposal, FrontierNode, ProblemSpec
+from .prompting import normalize_problem_prompt
 from .program import maybe_accept_program_delta, write_candidate_program_delta
 from .proposer import Proposer
 from .retriever import Retriever
+from .runtime import detect_runtime_status, persist_runtime_status
 from .scorer import score_results
 from .solved import solved_checker
 
@@ -32,14 +34,120 @@ class LimaCoreLoop:
         self.proposer = proposer or Proposer(db)
         self.retriever = retriever or Retriever(db)
 
+    def create_problem_from_prompt(self, prompt: str) -> dict:
+        parsed = normalize_problem_prompt(prompt)
+        problem_id, _created = self.db.create_problem(
+            slug=parsed.slug,
+            title=parsed.title,
+            statement_md=parsed.statement_md,
+            domain=parsed.domain,
+            target_theorem=parsed.normalized_statement_md,
+            original_prompt=prompt.strip(),
+            normalized_statement_md=parsed.normalized_statement_md,
+            runtime_status="booting",
+            status_reason_md="Booting: creating normalized theorem and initial world line.",
+            autopilot_enabled=True,
+        )
+        problem = self.db.get_problem(problem_id)
+        assert problem is not None
+        boot_event = self.db.append_event(
+            problem_id,
+            "problem_created_from_prompt",
+            "accepted",
+            summary_md=f"Created from prompt. Domain inferred as {parsed.domain}.",
+        )
+        ensure_target_frontier(self.db, problem_id, target_statement=parsed.normalized_statement_md)
+        gap = self.db.get_frontier_node(problem_id, "target_theorem")
+        assert gap is not None
+        spec = ProblemSpec(**problem)
+        initial_worlds = [self.proposer.worldsmith.propose_world(spec, gap)]
+        pref_text = " ".join(parsed.preferences)
+        if "hidden-state" in pref_text and initial_worlds[0].family_key != "hidden_state":
+            alt = DeltaProposal(
+                delta_type="world_delta",
+                title="Hidden state line",
+                summary_md="Preference-adjusted hidden-state boot line.",
+                family_key="hidden_state",
+                world_packet=self.proposer.worldsmith.propose_world(spec, gap).world_packet,
+                target_node_key="target_theorem",
+            )
+            if alt.world_packet is not None:
+                alt.world_packet.family_key = "hidden_state"
+                alt.world_packet.world_name = "Hidden state boot line"
+                alt.world_packet.novelty_note = "Boot candidate derived from prompt preference."
+                initial_worlds.append(alt)
+        for delta in initial_worlds[:2]:
+            if delta.world_packet is None:
+                continue
+            ref = self.db.store_artifact("world_packet", asdict(delta.world_packet))
+            self.db.append_event(
+                problem_id,
+                "delta_proposed",
+                "proposed",
+                parent_event_id=boot_event,
+                artifact_refs=[ref],
+                summary_md=f"Boot candidate: {delta.world_packet.world_name}",
+            )
+            self.db.replace_world_head(
+                problem_id,
+                {
+                    "family_key": delta.world_packet.family_key,
+                    "world_name": delta.world_packet.world_name,
+                    "status": "boot_candidate",
+                    "bridge_status": "unknown",
+                    "kill_status": "unknown",
+                    "theorem_status": "unknown",
+                    "yield_score": float(delta.world_packet.confidence_prior),
+                    "updated_at": utc_now(),
+                },
+            )
+        self.db.append_event(
+            problem_id,
+            "autopilot_started",
+            "accepted",
+            parent_event_id=boot_event,
+            summary_md="Autopilot started automatically after prompt creation.",
+        )
+        self.db.update_problem_runtime(
+            problem_id,
+            runtime_status="running",
+            status_reason_md="Running: autopilot active.",
+            autopilot_enabled=True,
+            since_timestamp=utc_now(),
+        )
+        first_result = self.run_iteration(problem_id)
+        problem = self.db.get_problem(problem_id)
+        assert problem is not None
+        return {
+            "problem_slug": str(problem["slug"]),
+            "title": str(problem["title"]),
+            "status": str(problem.get("runtime_status") or "running"),
+            "workspace_url": f"/limacore/{problem['slug']}",
+            "first_result": first_result,
+        }
+
     def run_iteration(self, problem_slug_or_id: str, *, forced_delta: DeltaProposal | None = None) -> dict:
         problem_row = self.db.get_problem(problem_slug_or_id)
         if problem_row is None:
             raise KeyError(problem_slug_or_id)
         problem = ProblemSpec(**problem_row)
+        if not int(problem.autopilot_enabled):
+            self.db.update_problem_runtime(
+                problem.id,
+                runtime_status="paused",
+                status_reason_md="Paused: autopilot disabled.",
+                autopilot_enabled=False,
+            )
+            return {"decision": "paused", "reason": "autopilot disabled"}
         ensure_target_frontier(self.db, problem.id, target_statement=problem.target_theorem or problem.statement_md)
         if solved_checker(self.db, problem.id).solved:
-            return {"decision": "noop", "reason": "already solved"}
+            self.db.update_problem_runtime(
+                problem.id,
+                runtime_status="solved",
+                status_reason_md="Solved: target theorem closed and replay check passed.",
+                autopilot_enabled=False,
+            )
+            return {"decision": "noop", "reason": "already solved", "status": "solved"}
         gap = select_frontier_gap(self.db, problem.id)
         select_event = self.db.append_event(
             problem.id,
@@ -70,6 +178,9 @@ class LimaCoreLoop:
                 score_delta=score,
                 summary_md="Program delta kept after verified yield improvement." if accepted else "Program delta rejected: verified yield did not improve.",
             )
+            if accepted:
+                self.db.update_problem_runtime(problem.id, runtime_status="running", last_gain_at=utc_now())
+            persist_runtime_status(self.db, problem.id)
             return {"accepted": accepted, "delta_type": "program_delta"}
         grounding = self.retriever.build_grounding_bundle(problem, delta)
         grounding_ref = self.db.store_artifact("grounding_bundle", asdict(grounding))
@@ -91,6 +202,7 @@ class LimaCoreLoop:
                 parent_event_id=grounding_event,
                 summary_md=f"Compile rejected early: {exc}",
             )
+            persist_runtime_status(self.db, problem.id)
             return {"accepted": False, "reason": str(exc)}
         reduction_ref = self.db.store_artifact("reduction_packet", asdict(reduction))
         compile_event = self.db.append_event(
@@ -144,6 +256,15 @@ class LimaCoreLoop:
             )
             structured = [{"artifact_kind": kind, "content": content} for kind, content in artifacts]
             apply_event_artifacts(self.db, problem.id, event_id, structured)
+            if score.replayable_gain > 0 or score.fracture_gain > 0:
+                self.db.update_problem_runtime(
+                    problem.id,
+                    runtime_status="running",
+                    status_reason_md="Running: autopilot active.",
+                    last_gain_at=utc_now(),
+                    blocked_node_key="",
+                    blocker_kind="",
+                )
         else:
             refs = []
             structured = []
@@ -176,18 +297,55 @@ class LimaCoreLoop:
         if report.solved:
             self.db.append_event(
                 problem.id,
-                "solved_confirmed",
+                "problem_solved",
                 "accepted",
                 summary_md="Solved checker passed from clean replayable state.",
             )
             self.db.update_problem_status(problem.id, "solved")
+            self.db.update_problem_runtime(
+                problem.id,
+                runtime_status="solved",
+                status_reason_md="Solved: target theorem closed and replay check passed.",
+                autopilot_enabled=False,
+                last_gain_at=utc_now(),
+            )
+        else:
+            before = self.db.get_problem(problem.id) or {}
+            updated = persist_runtime_status(self.db, problem.id)
+            after_status = str(updated.get("runtime_status") or "")
+            before_status = str(before.get("runtime_status") or "")
+            if after_status != before_status:
+                event_type = {
+                    "blocked": "problem_blocked",
+                    "stalled": "problem_stalled",
+                    "running": "autopilot_started",
+                    "paused": "autopilot_paused",
+                    "failed": "problem_failed",
+                }.get(after_status)
+                if event_type:
+                    self.db.append_event(
+                        problem.id,
+                        event_type,
+                        "accepted",
+                        summary_md=str(updated.get("status_reason_md") or after_status),
+                    )
         return {
             "accepted": score.accepted,
             "delta_type": delta.delta_type,
             "gap": gap["node_key"],
             "score": asdict(score),
             "solved": report.solved,
+            "status": str((self.db.get_problem(problem.id) or {}).get("runtime_status") or ""),
         }
+
+    def run_batch(self, problem_slug_or_id: str, *, iterations: int) -> list[dict]:
+        results = []
+        for _ in range(max(1, iterations)):
+            results.append(self.run_iteration(problem_slug_or_id))
+            status = str((self.db.get_problem(problem_slug_or_id) or {}).get("runtime_status") or "")
+            if status in {"solved", "failed", "paused"}:
+                break
+        return results
 
     def _commit_delta(self, problem: ProblemSpec, delta: DeltaProposal, reduction, jobs: list[dict], score) -> list[tuple[str, dict]]:
         artifacts: list[tuple[str, dict]] = []
@@ -322,5 +480,9 @@ async def limacore_loop(db: LimaCoreDB, *, interval_sec: int = 300) -> None:
         db.initialize()
         for problem in db.list_problems():
             if str(problem.get("status") or "active") != "active":
+                continue
+            if int(problem.get("autopilot_enabled", 1) or 0) != 1:
+                continue
+            if str(problem.get("runtime_status") or "") in {"paused", "solved", "failed"}:
                 continue
             loop.run_iteration(str(problem["id"]))

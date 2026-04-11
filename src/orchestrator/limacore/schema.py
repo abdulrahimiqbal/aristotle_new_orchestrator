@@ -10,6 +10,16 @@ CREATE TABLE IF NOT EXISTS problems (
     domain TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     target_theorem TEXT NOT NULL DEFAULT '',
+    original_prompt TEXT NOT NULL DEFAULT '',
+    normalized_statement_md TEXT NOT NULL DEFAULT '',
+    runtime_status TEXT NOT NULL DEFAULT 'booting',
+    status_reason_md TEXT NOT NULL DEFAULT '',
+    blocked_node_key TEXT NOT NULL DEFAULT '',
+    blocker_kind TEXT NOT NULL DEFAULT '',
+    stalled_since TEXT NOT NULL DEFAULT '',
+    last_gain_at TEXT NOT NULL DEFAULT '',
+    since_timestamp TEXT NOT NULL DEFAULT '',
+    autopilot_enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

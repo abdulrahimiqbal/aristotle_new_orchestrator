@@ -31,6 +31,16 @@ class ProblemSpec:
     domain: str = ""
     status: str = "active"
     target_theorem: str = ""
+    original_prompt: str = ""
+    normalized_statement_md: str = ""
+    runtime_status: str = "booting"
+    status_reason_md: str = ""
+    blocked_node_key: str = ""
+    blocker_kind: str = ""
+    stalled_since: str = ""
+    last_gain_at: str = ""
+    since_timestamp: str = ""
+    autopilot_enabled: int = 1
     created_at: str = ""
     updated_at: str = ""
 
