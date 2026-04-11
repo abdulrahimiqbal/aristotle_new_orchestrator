@@ -42,6 +42,8 @@ def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: 
         "blocked_node_key": runtime.blocked_node_key,
         "blocker_kind": runtime.blocker_kind,
         "blocker_summary": runtime.blocker_summary,
+        "exhausted_family_key": runtime.exhausted_family_key,
+        "suggested_family_key": runtime.suggested_family_key,
         "replayable_gain_rate": runtime.replayable_gain_rate,
         "last_meaningful_change_at": runtime.last_meaningful_change_at or str(problem.get("updated_at") or ""),
         "stalled_iteration_window": runtime.stalled_iteration_window,
@@ -64,7 +66,7 @@ def get_workspace_alert_banner(
             "title": "Solved: target theorem closed and replay check passed.",
             "summary": [
                 "Solved theorem node: target_theorem",
-                f"Replay status: {'passed' if solved_report.replay_passed else 'failed'}",
+                f"Replay check: {'passed' if solved_report.replay_passed else 'failed'}",
                 f"Closure: {'closed' if solved_report.dependency_closure_passed else 'open'}",
             ],
             "actions": ["Inspect solved proof graph"],
@@ -78,9 +80,11 @@ def get_workspace_alert_banner(
                 f"Blocking node: {status_view['blocked_node_key'] or 'unknown'}",
                 f"Blocker kind: {status_view['blocker_kind'] or 'unknown'}",
                 f"Blocker summary: {status_view['blocker_summary'] or status_view['reason']}",
+                f"Primary family exhausted: {status_view['exhausted_family_key'] or 'no'}",
+                f"Suggested next family: {status_view['suggested_family_key'] or 'unknown'}",
                 f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
             ],
-            "actions": ["Inspect blocker", "Promote alternative world", "Spawn kill cohort"],
+            "actions": ["Inspect blocker", "Rotate world", "Spawn alternative cohort"],
             "class": status_view["banner_class"],
         }
     if status == "stalled":
@@ -88,12 +92,13 @@ def get_workspace_alert_banner(
             "kind": "stalled",
             "title": f"Stalled: no replayable formal gain in the last {status_view['stalled_iteration_window']} iterations.",
             "summary": [
-                f"Stale iteration count: {status_view['stalled_iteration_window']}",
+                f"No replayable gain in last {status_view['stalled_iteration_window']} iterations.",
                 f"Stalled since: {status_view['stalled_since'] or 'recently'}",
+                f"Last meaningful gain: {status_view['last_gain_at'] or 'none recorded'}",
                 f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
-                f"Last useful frontier gain: {status_view['last_gain_at'] or 'none recorded'}",
+                f"Current family: {status_view['exhausted_family_key'] or 'unknown'}",
             ],
-            "actions": ["Force world rotation", "Inspect fractures", "Revise program"],
+            "actions": ["Inspect fractures", "Force rotation", "Revise program"],
             "class": status_view["banner_class"],
         }
     if status == "failed":
@@ -112,9 +117,10 @@ def get_problem_card_summary(card: dict[str, Any]) -> str:
     if status == "solved":
         return "Solved: target theorem closed and replay check passed."
     if status == "blocked":
-        return card["status_view"]["blocker_summary"] or card["status_view"]["reason"]
+        family = card["status_view"].get("exhausted_family_key") or "unknown"
+        return f"Blocked on {card['status_view']['blocked_node_key'] or 'unknown'}; family {family} exhausted."
     if status == "stalled":
-        return card["status_view"]["reason"]
+        return f"Stalled after {card['status_view']['stalled_iteration_window']} iterations with zero replayable gain."
     return card["status_view"]["reason"]
 
 

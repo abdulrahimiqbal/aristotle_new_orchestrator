@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .db import LimaCoreDB
+from .control import build_control_snapshot, is_actionable_fracture, is_duplicate_churn
 from .frontier import proof_debt
 from .models import DeltaProposal, ProblemSpec, ReductionPacket, ScoreDelta
 
@@ -20,17 +21,12 @@ def score_results(
     reduction: ReductionPacket,
     jobs: list[dict],
 ) -> ScoreDelta:
+    snapshot = build_control_snapshot(db, problem.id)
     frontier_before = db.get_frontier_nodes(problem.id)
     proved_before = {
         str(node.get("node_key") or "")
         for node in frontier_before
         if str(node.get("status") or "") == "proved"
-    }
-    narrative_claims = {
-        reduction.bridge_claim.strip().lower(),
-        reduction.local_law.strip().lower(),
-        reduction.kill_test.strip().lower(),
-        reduction.theorem_skeleton.strip().lower(),
     }
     replayable_gain = 0
     credited_nodes: set[str] = set()
@@ -46,7 +42,15 @@ def score_results(
         credited_nodes.add(node_key)
         replayable_gain += 1
     proof_debt_delta = -min(replayable_gain, max(0, proof_debt(frontier_before)))
-    fracture_gain = sum(1 for job in jobs if "counterexample" in str(job.get("result_summary_md") or "").lower() or "blocked" in str(job.get("result_summary_md") or "").lower())
+    fracture_gain = sum(
+        1
+        for job in jobs
+        if str(job.get("status") or "") == "failed"
+        and (
+            "counterexample" in str(job.get("result_summary_md") or "").lower()
+            or "blocked" in str(job.get("result_summary_md") or "").lower()
+        )
+    )
     worlds = db.list_world_heads(problem.id)
     duplication_penalty = 0.0
     stale_penalty = 0.0
@@ -55,21 +59,42 @@ def score_results(
     fractures = db.list_fracture_heads(problem.id)
     if any(str(row["family_key"]) == delta.family_key and int(row["repeat_count"]) >= 2 for row in fractures):
         stale_penalty += 0.5
-    narrative_only = (
-        (replayable_gain == 0 and proof_debt_delta == 0 and fracture_gain == 0)
-        or (len(narrative_claims) == 1 and "narrative" in next(iter(narrative_claims)))
+    required_delta_md = str(delta.edits.get("required_delta_md") or "")
+    theorem_skeleton_md = str(reduction.theorem_skeleton or "")
+    actionable_fracture = is_actionable_fracture(
+        snapshot,
+        family_key=delta.family_key,
+        blocked_node_key=snapshot.blocked_node_key,
+        blocker_kind=snapshot.blocker_kind,
+        required_delta_md=required_delta_md,
+        theorem_skeleton_md=theorem_skeleton_md,
+        next_cohort_plan=str(delta.edits.get("next_cohort_plan") or ""),
     )
-    fracture_only_motion = replayable_gain == 0 and proof_debt_delta == 0 and fracture_gain > 0
+    duplicate_churn = is_duplicate_churn(
+        snapshot,
+        family_key=delta.family_key,
+        blocked_node_key=snapshot.blocked_node_key,
+        blocker_kind=snapshot.blocker_kind,
+        required_delta_md=required_delta_md,
+        theorem_skeleton_md=theorem_skeleton_md,
+        replayable_gain=replayable_gain,
+        proof_debt_delta=proof_debt_delta,
+        yielded_lemmas=snapshot.yielded_lemmas,
+    )
+    narrative_only = (
+        replayable_gain == 0
+        and proof_debt_delta == 0
+        and fracture_gain == 0
+        and not required_delta_md.strip()
+        and not theorem_skeleton_md.strip()
+    )
     novelty = max(0.0, (delta.world_packet.confidence_prior if delta.world_packet else 0.4) - duplication_penalty)
-    accepted = (
-        not narrative_only
-        and (
-            replayable_gain > 0
-            or proof_debt_delta < 0
-            or (fracture_gain > 0 and not fracture_only_motion)
-            or (fracture_only_motion and (duplication_penalty + stale_penalty) < 0.6)
-        )
-        and (duplication_penalty + stale_penalty) < 1.2
+    world_rotation = delta.delta_type == "world_delta" and delta.world_packet is not None and not duplicate_churn
+    accepted = not narrative_only and not duplicate_churn and (
+        replayable_gain > 0
+        or proof_debt_delta < 0
+        or world_rotation
+        or (fracture_gain > 0 and actionable_fracture and (duplication_penalty + stale_penalty) < 1.2)
     )
     summary = (
         f"accepted={accepted}; replayable_gain={replayable_gain}; "

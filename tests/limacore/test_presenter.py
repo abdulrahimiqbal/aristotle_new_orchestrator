@@ -89,6 +89,19 @@ def test_workspace_banners_render_for_blocked_stalled_solved(tmp_path: Path) -> 
     assert blocked_ctx["alert_banner"] is not None
     assert blocked_ctx["alert_banner"]["kind"] == "blocked"
 
+    db.upsert_frontier_node(
+        FrontierNode(
+            id="blocked-frontier",
+            problem_id=str(problem["id"]),
+            node_key="terminal_form_uniqueness",
+            node_kind="theorem_skeleton",
+            title="Terminal form uniqueness",
+            status="proved",
+            replay_ref={"replay_certificate": "terminal"},
+            priority=12.0,
+            updated_at=utc_now(),
+        )
+    )
     db.update_problem_runtime(
         str(problem["id"]),
         runtime_status="stalled",

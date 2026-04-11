@@ -52,6 +52,8 @@ class LimaCoreDB:
             ("status_reason_md", "TEXT NOT NULL DEFAULT ''"),
             ("blocked_node_key", "TEXT NOT NULL DEFAULT ''"),
             ("blocker_kind", "TEXT NOT NULL DEFAULT ''"),
+            ("exhausted_family_key", "TEXT NOT NULL DEFAULT ''"),
+            ("exhausted_family_since", "TEXT NOT NULL DEFAULT ''"),
             ("stalled_since", "TEXT NOT NULL DEFAULT ''"),
             ("last_gain_at", "TEXT NOT NULL DEFAULT ''"),
             ("since_timestamp", "TEXT NOT NULL DEFAULT ''"),
@@ -162,10 +164,11 @@ class LimaCoreDB:
                 INSERT INTO problems(
                     id, slug, title, statement_md, domain, status, target_theorem,
                     original_prompt, normalized_statement_md, runtime_status, status_reason_md,
-                    blocked_node_key, blocker_kind, stalled_since, last_gain_at, since_timestamp,
+                    blocked_node_key, blocker_kind, exhausted_family_key, exhausted_family_since,
+                    stalled_since, last_gain_at, since_timestamp,
                     autopilot_enabled, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, '', '', '', '', ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, '', '', '', '', '', ?, ?, ?, ?, ?)
                 """,
                 (
                     problem_id,
@@ -178,6 +181,7 @@ class LimaCoreDB:
                     normalized_statement_md or statement_md,
                     runtime_status,
                     status_reason_md,
+                    now,
                     now,
                     1 if autopilot_enabled else 0,
                     now,
@@ -218,6 +222,8 @@ class LimaCoreDB:
         status_reason_md: str = "",
         blocked_node_key: str | None = None,
         blocker_kind: str | None = None,
+        exhausted_family_key: str | None = None,
+        exhausted_family_since: str | None = None,
         stalled_since: str | None = None,
         last_gain_at: str | None = None,
         autopilot_enabled: bool | None = None,
@@ -234,6 +240,8 @@ class LimaCoreDB:
                     status_reason_md = ?,
                     blocked_node_key = ?,
                     blocker_kind = ?,
+                    exhausted_family_key = ?,
+                    exhausted_family_since = ?,
                     stalled_since = ?,
                     last_gain_at = ?,
                     autopilot_enabled = ?,
@@ -246,6 +254,8 @@ class LimaCoreDB:
                     status_reason_md,
                     blocked_node_key if blocked_node_key is not None else str(current.get("blocked_node_key") or ""),
                     blocker_kind if blocker_kind is not None else str(current.get("blocker_kind") or ""),
+                    exhausted_family_key if exhausted_family_key is not None else str(current.get("exhausted_family_key") or ""),
+                    exhausted_family_since if exhausted_family_since is not None else str(current.get("exhausted_family_since") or ""),
                     stalled_since if stalled_since is not None else str(current.get("stalled_since") or ""),
                     last_gain_at if last_gain_at is not None else str(current.get("last_gain_at") or ""),
                     int(current.get("autopilot_enabled") if autopilot_enabled is None else (1 if autopilot_enabled else 0)),

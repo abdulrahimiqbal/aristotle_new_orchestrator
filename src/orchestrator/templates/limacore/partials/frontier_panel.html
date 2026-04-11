@@ -11,6 +11,13 @@
     <p class="text-sm font-semibold">Solved checker</p>
     <p class="mt-2 text-sm {% if solved_report.solved %}text-algae{% else %}text-rust{% endif %}">{{ solved_report.reason }}</p>
   </div>
+  {% if status_view.exhausted_family_key %}
+  <div class="mt-4 rounded-2xl border border-rust/30 bg-rust/10 p-4">
+    <p class="text-sm font-semibold text-rust">Primary family exhausted</p>
+    <p class="mt-2 text-sm text-slate-200">Family {{ status_view.exhausted_family_key }} is no longer productive on this frontier line.</p>
+    <p class="mt-2 text-xs uppercase tracking-[0.25em] text-slate-400">Rotate toward {{ status_view.suggested_family_key }}</p>
+  </div>
+  {% endif %}
   <div class="mt-5 grid gap-4">
     <div>
       <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Open nodes</p>

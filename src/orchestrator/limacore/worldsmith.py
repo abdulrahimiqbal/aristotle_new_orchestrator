@@ -18,10 +18,55 @@ WORLD_FAMILY_LIBRARY = {
 
 
 class Worldsmith:
-    def propose_world(self, problem: ProblemSpec, gap: dict) -> DeltaProposal:
+    def propose_world(
+        self,
+        problem: ProblemSpec,
+        gap: dict,
+        *,
+        preferred_family_key: str | None = None,
+        avoid_family_keys: set[str] | tuple[str, ...] = (),
+    ) -> DeltaProposal:
+        avoided = {str(key) for key in avoid_family_keys}
+        packet = self._choose_packet(problem, gap, preferred_family_key=preferred_family_key, avoided=avoided)
+        packet.validate()
+        return DeltaProposal(
+            delta_type="world_delta",
+            title=packet.world_name,
+            summary_md=packet.novelty_note,
+            family_key=packet.family_key,
+            world_packet=packet,
+            target_node_key=str(gap["node_key"]),
+        )
+
+    def _choose_packet(
+        self,
+        problem: ProblemSpec,
+        gap: dict,
+        *,
+        preferred_family_key: str | None,
+        avoided: set[str],
+    ) -> WorldPacket:
+        candidates: list[str]
+        if preferred_family_key:
+            candidates = [preferred_family_key]
+        elif problem.slug == "collatz":
+            candidates = ["quotient", "hidden_state", "cocycle", "operator_world", "coordinate_lift", "other"]
+        elif problem.slug == "inward-compression-conjecture":
+            candidates = ["balancing_world", "order_or_convexity", "coordinate_lift", "other"]
+        else:
+            candidates = ["coordinate_lift", "hidden_state", "operator_world", "other"]
+        for family_key in candidates:
+            if family_key in avoided:
+                continue
+            packet = self._packet_for_family(problem, gap, family_key)
+            if packet is not None:
+                return packet
+        return self._packet_for_family(problem, gap, "coordinate_lift") or self._packet_for_family(problem, gap, "other")  # type: ignore[return-value]
+
+    def _packet_for_family(self, problem: ProblemSpec, gap: dict, family_key: str) -> WorldPacket | None:
         slug = problem.slug
-        if slug == "inward-compression-conjecture":
-            packet = WorldPacket(
+        if slug == "inward-compression-conjecture" and family_key == "balancing_world":
+            return WorldPacket(
                 world_name="Balanced compression coordinates",
                 family_key="balancing_world",
                 new_objects=[
@@ -50,8 +95,8 @@ class Worldsmith:
                 confidence_prior=0.87,
                 novelty_note="This world makes the balancing ontology first-class instead of residue heuristics.",
             )
-        elif slug == "collatz":
-            packet = WorldPacket(
+        if slug == "collatz" and family_key == "quotient":
+            return WorldPacket(
                 world_name="Odd-step quotient probe",
                 family_key="quotient",
                 new_objects=["odd-step quotient", "compressed parity macro-step"],
@@ -66,8 +111,50 @@ class Worldsmith:
                 confidence_prior=0.32,
                 novelty_note="Useful as a falsification target rather than a survivor by default.",
             )
-        else:
-            packet = WorldPacket(
+        if slug == "collatz" and family_key == "hidden_state":
+            return WorldPacket(
+                world_name="Parity carry ledger",
+                family_key="hidden_state",
+                new_objects=["carry ledger", "odd-step debt", "parity block signature"],
+                bridge_to_problem="Refine the accelerated odd-step map by attaching a hidden carry ledger that records where parity compression loses information.",
+                why_easier_here="The hidden ledger separates true growth from bookkeeping noise, so local drift bounds can be stated without pretending the raw quotient is already closed.",
+                local_law="Carry-adjusted odd-step debt does not increase across admissible parity blocks and strictly decreases on calibrated return patterns.",
+                kill_test="Search for a short parity block whose carry-adjusted debt increases after ledger normalization.",
+                theorem_skeleton="If the ledger closes the information leak and debt decreases on every calibrated return, Collatz descent can be reduced to a finite family of parity block lemmas.",
+                formal_agenda=[
+                    "define the carry ledger and show it reconstructs odd-step drift",
+                    "prove non-increase of carry-adjusted debt on admissible parity blocks",
+                    "classify calibrated return patterns needed for descent",
+                ],
+                literature_queries=[
+                    "collatz parity vector accelerated map drift",
+                    "collatz hidden state parity block invariants",
+                ],
+                formal_queries=[
+                    "accelerated collatz parity blocks",
+                    "collatz return map drift bound",
+                ],
+                confidence_prior=0.66,
+                novelty_note="Rotate away from the stale quotient kill loop by tracking the hidden carry ledger explicitly.",
+            )
+        if family_key == "operator_world":
+            return WorldPacket(
+                world_name="Operator descent layer",
+                family_key="operator_world",
+                new_objects=["descent operator", "operator norm budget"],
+                bridge_to_problem=f"Treat {problem.title} as an operator with a bounded descent budget at {gap['node_key']}.",
+                why_easier_here="Operator norms compress many local moves into a single monotonicity statement.",
+                local_law="A calibrated operator norm weakly decreases under admissible moves.",
+                kill_test="Find an admissible move that increases the calibrated operator norm.",
+                theorem_skeleton="If the operator norm descends and the operator family is finite on the frontier, descent follows.",
+                formal_agenda=["define the operator norm", "prove monotonicity", "enumerate finite operator families"],
+                literature_queries=[problem.title],
+                formal_queries=[gap["title"]],
+                confidence_prior=0.5,
+                novelty_note="Operator layer fallback.",
+            )
+        if family_key == "coordinate_lift":
+            return WorldPacket(
                 world_name="Coordinate lift search",
                 family_key="coordinate_lift",
                 new_objects=["lifted coordinates"],
@@ -82,12 +169,36 @@ class Worldsmith:
                 confidence_prior=0.55,
                 novelty_note="Generic coordinate lift fallback.",
             )
-        packet.validate()
-        return DeltaProposal(
-            delta_type="world_delta",
-            title=packet.world_name,
-            summary_md=packet.novelty_note,
-            family_key=packet.family_key,
-            world_packet=packet,
-            target_node_key=str(gap["node_key"]),
-        )
+        if family_key == "balancing_world":
+            return WorldPacket(
+                world_name="Balanced compression coordinates",
+                family_key="balancing_world",
+                new_objects=["offset coordinates", "balanced profile"],
+                bridge_to_problem=f"Expose a balancing ontology for {problem.title}.",
+                why_easier_here="Balanced coordinates make terminal behavior canonical.",
+                local_law="A convex balance functional descends on every move.",
+                kill_test="Find a move that preserves the balance functional.",
+                theorem_skeleton="Unique balanced terminal states force confluence.",
+                formal_agenda=["define the balance functional", "prove descent"],
+                literature_queries=[problem.title],
+                formal_queries=[gap["title"]],
+                confidence_prior=0.76,
+                novelty_note="Balanced fallback world.",
+            )
+        if family_key == "other":
+            return WorldPacket(
+                world_name="Generic frontier search",
+                family_key="other",
+                new_objects=["frontier invariant"],
+                bridge_to_problem=f"Search for a compact invariant aligned with {gap['node_key']}.",
+                why_easier_here="A small invariant can expose the next surviving line.",
+                local_law="Candidate invariant should not increase across admissible moves.",
+                kill_test="Find a counterexample to the candidate invariant.",
+                theorem_skeleton="If the invariant survives bounded probes, it becomes the next bridge.",
+                formal_agenda=["define the invariant", "probe bounded motion"],
+                literature_queries=[problem.title],
+                formal_queries=[gap["title"]],
+                confidence_prior=0.42,
+                novelty_note="Fallback world when nothing sharper is available.",
+            )
+        return None

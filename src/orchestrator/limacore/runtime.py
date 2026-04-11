@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .artifacts import utc_now
+from .control import build_control_snapshot
 from .db import LimaCoreDB
 from .frontier import proof_debt
 from .solved import solved_checker
@@ -27,6 +28,8 @@ class RuntimeStatusView:
     blocked_node_key: str = ""
     blocker_kind: str = ""
     blocker_summary: str = ""
+    exhausted_family_key: str = ""
+    suggested_family_key: str = ""
     stalled_iteration_window: int = 10
     stalled_since: str = ""
     last_gain_at: str = ""
@@ -39,10 +42,9 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
     if problem is None:
         raise KeyError(problem_id)
     stored_status = str(problem.get("runtime_status") or "")
+    snapshot = build_control_snapshot(db, problem_id, window=stall_window)
     events = db.list_events(problem_id, limit=max(stall_window, 20))
     frontier = db.get_frontier_nodes(problem_id)
-    worlds = db.list_world_heads(problem_id)
-    fractures = db.list_fracture_heads(problem_id)
     solved = solved_checker(db, problem_id)
     last_meaningful_change = str(problem.get("last_gain_at") or problem.get("updated_at") or problem.get("created_at") or "")
     replayable_gain_rate = sum(int((event.get("score_delta") or {}).get("replayable_gain", 0)) for event in events[-stall_window:])
@@ -53,6 +55,8 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
             last_gain_at=last_meaningful_change,
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
         )
     if str(problem.get("runtime_status") or "") == "failed":
         return RuntimeStatusView(
@@ -60,6 +64,8 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             reason=str(problem.get("status_reason_md") or "Failed: unexpected internal error."),
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
         )
     if int(problem.get("autopilot_enabled", 1) or 0) == 0:
         return RuntimeStatusView(
@@ -67,14 +73,63 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             reason=str(problem.get("status_reason_md") or "Paused: autopilot disabled."),
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
         )
-    if stored_status == "blocked" and any(str(node.get("status") or "") == "blocked" for node in frontier):
+    blocked_node = next((node for node in frontier if str(node.get("status") or "") == "blocked"), None)
+    if stored_status == "running" and not events and blocked_node is None:
+        return RuntimeStatusView(
+            status="running",
+            reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
+            replayable_gain_rate=replayable_gain_rate,
+            last_meaningful_change_at=last_meaningful_change,
+            last_gain_at=str(problem.get("last_gain_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
+        )
+    blocked_now = bool(
+        blocked_node
+        and (
+            snapshot.current_family_exhausted
+            or snapshot.same_blocker_persists
+            or snapshot.current_family_failed_jobs >= 4
+            or snapshot.current_family_failed_cohorts >= 2
+            or (
+                snapshot.recent_replayable_gain <= 0
+                and snapshot.recent_proof_debt_delta >= 0
+                and snapshot.recent_fracture_gain <= 0
+            )
+        )
+    )
+    if blocked_now or (stored_status == "blocked" and blocked_node is not None):
         return RuntimeStatusView(
             status="blocked",
             reason=str(problem.get("status_reason_md") or "Blocked: current frontier cannot advance."),
-            blocked_node_key=str(problem.get("blocked_node_key") or ""),
-            blocker_kind=str(problem.get("blocker_kind") or ""),
-            blocker_summary=str(problem.get("status_reason_md") or ""),
+            blocked_node_key=str(problem.get("blocked_node_key") or snapshot.blocked_node_key or ""),
+            blocker_kind=str(problem.get("blocker_kind") or snapshot.blocker_kind or ""),
+            blocker_summary=str(problem.get("status_reason_md") or snapshot.blocker_summary or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
+            replayable_gain_rate=replayable_gain_rate,
+            last_meaningful_change_at=last_meaningful_change,
+        )
+    stalled_now = bool(
+        snapshot.recent_replayable_gain <= 0
+        and snapshot.recent_proof_debt_delta >= 0
+        and snapshot.recent_fracture_gain <= 0
+        and snapshot.yielded_lemmas == 0
+        and snapshot.current_family_failed_jobs >= 2
+        and not blocked_now
+    )
+    if stalled_now:
+        return RuntimeStatusView(
+            status="stalled",
+            reason=f"Stalled: no replayable formal gain in the last {stall_window} iterations.",
+            stalled_iteration_window=stall_window,
+            stalled_since=str(problem.get("stalled_since") or events[-1]["created_at"] if events else problem.get("created_at") or ""),
+            last_gain_at=str(problem.get("last_gain_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
         )
@@ -85,65 +140,70 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             stalled_iteration_window=stall_window,
             stalled_since=str(problem.get("stalled_since") or ""),
             last_gain_at=str(problem.get("last_gain_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
         )
-    if stored_status == "running" and not events and not any(str(node.get("status") or "") == "blocked" for node in frontier):
+    if stored_status == "running" and snapshot.recent_replayable_gain > 0:
         return RuntimeStatusView(
             status="running",
             reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
             last_gain_at=str(problem.get("last_gain_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
         )
-    if not events and not any(str(node.get("status") or "") == "blocked" for node in frontier):
+    if not events and not blocked_node:
         return RuntimeStatusView(
             status="booting",
             reason="Booting: creating normalized theorem and initial world line.",
             replayable_gain_rate=0,
             last_meaningful_change_at=str(problem.get("created_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
         )
-    blocked_node = next((node for node in frontier if str(node.get("status") or "") == "blocked"), None)
-    if blocked_node:
-        strongest_world = worlds[0] if worlds else None
-        blocker_summary = str(blocked_node.get("blocker_note_md") or "")
-        if strongest_world is not None or blocker_summary:
-            return RuntimeStatusView(
-                status="blocked",
-                reason=f"Blocked: no frontier movement because {blocked_node['title'].lower()} is failing.",
-                blocked_node_key=str(blocked_node["node_key"]),
-                blocker_kind=str(blocked_node.get("blocker_kind") or problem.get("blocker_kind") or "missing_dependency"),
-                blocker_summary=blocker_summary or str(problem.get("status_reason_md") or ""),
-                replayable_gain_rate=replayable_gain_rate,
-                last_meaningful_change_at=last_meaningful_change,
-            )
-    recent = events[-stall_window:]
-    no_verified_progress = all(
-        int((event.get("score_delta") or {}).get("replayable_gain", 0)) <= 0
-        and int((event.get("score_delta") or {}).get("proof_debt_delta", 0)) >= 0
-        for event in recent
-        if event.get("event_type") in {"frontier_improved", "delta_reverted", "program_updated"}
-    )
-    decision_events = [
-        event for event in recent if event.get("event_type") in {"frontier_improved", "delta_reverted", "program_updated"}
-    ]
-    if len(decision_events) >= stall_window and no_verified_progress:
+    if snapshot.live_family_count >= 2 and snapshot.recent_replayable_gain > 0:
         return RuntimeStatusView(
-            status="stalled",
-            reason=f"Stalled: no replayable formal gain in the last {stall_window} iterations.",
-            stalled_iteration_window=stall_window,
-            stalled_since=str(problem.get("stalled_since") or decision_events[0]["created_at"]),
+            status="running",
+            reason="Running: autopilot active.",
+            replayable_gain_rate=replayable_gain_rate,
+            last_meaningful_change_at=last_meaningful_change,
             last_gain_at=str(problem.get("last_gain_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
+        )
+    if snapshot.live_family_count >= 2 and not snapshot.current_family_exhausted:
+        return RuntimeStatusView(
+            status="running",
+            reason="Running: multiple non-stale world lines are active.",
+            replayable_gain_rate=replayable_gain_rate,
+            last_meaningful_change_at=last_meaningful_change,
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
+        )
+    if snapshot.current_family_exhausted and blocked_node is not None:
+        return RuntimeStatusView(
+            status="blocked",
+            reason=str(problem.get("status_reason_md") or f"Blocked: family {snapshot.current_family_key} is exhausted."),
+            blocked_node_key=snapshot.blocked_node_key,
+            blocker_kind=snapshot.blocker_kind,
+            blocker_summary=snapshot.blocker_summary,
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
         )
-    if stored_status == "running" and (events or frontier):
+    if stored_status == "running" and (events or frontier) and snapshot.recent_replayable_gain > 0:
         return RuntimeStatusView(
             status="running",
             reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
+            last_gain_at=str(problem.get("last_gain_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
-            last_gain_at=str(problem.get("last_gain_at") or ""),
         )
     runtime_status = str(problem.get("runtime_status") or "")
     if runtime_status == "booting":
@@ -152,13 +212,17 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             reason="Booting: creating normalized theorem and initial world line.",
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=str(problem.get("created_at") or ""),
+            exhausted_family_key=snapshot.exhausted_family_key,
+            suggested_family_key=snapshot.suggested_family_key,
         )
     return RuntimeStatusView(
-        status="running",
-        reason="Running: autopilot active.",
+        status="stalled" if snapshot.recent_replayable_gain <= 0 else "running",
+        reason="Stalled: no replayable formal gain in the last window." if snapshot.recent_replayable_gain <= 0 else "Running: autopilot active.",
         replayable_gain_rate=replayable_gain_rate,
         last_meaningful_change_at=last_meaningful_change,
         last_gain_at=str(problem.get("last_gain_at") or ""),
+        exhausted_family_key=snapshot.exhausted_family_key,
+        suggested_family_key=snapshot.suggested_family_key,
     )
 
 
@@ -174,6 +238,8 @@ def persist_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int
         status_reason_md=view.reason if view.status != "blocked" else view.blocker_summary or view.reason,
         blocked_node_key=view.blocked_node_key,
         blocker_kind=view.blocker_kind,
+        exhausted_family_key=view.exhausted_family_key,
+        exhausted_family_since=utc_now() if view.exhausted_family_key else "",
         stalled_since=view.stalled_since if view.status == "stalled" else "",
         last_gain_at=view.last_gain_at if view.last_gain_at else str(current.get("last_gain_at") or ""),
         since_timestamp=since_timestamp,

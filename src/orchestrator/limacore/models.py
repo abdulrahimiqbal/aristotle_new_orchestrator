@@ -37,6 +37,8 @@ class ProblemSpec:
     status_reason_md: str = ""
     blocked_node_key: str = ""
     blocker_kind: str = ""
+    exhausted_family_key: str = ""
+    exhausted_family_since: str = ""
     stalled_since: str = ""
     last_gain_at: str = ""
     since_timestamp: str = ""

@@ -264,6 +264,9 @@ class LimaCoreLoop:
                     last_gain_at=utc_now(),
                     blocked_node_key="",
                     blocker_kind="",
+                    exhausted_family_key="",
+                    exhausted_family_since="",
+                    stalled_since="",
                 )
         else:
             refs = []
@@ -275,7 +278,7 @@ class LimaCoreLoop:
                     "failure_type": "stale_or_refuted",
                     "smallest_counterexample_ref": {},
                     "blocker_note_md": score.summary_md,
-                    "required_delta_md": "Change ontology or supply a new bridge before retrying this family.",
+                    "required_delta_md": str(delta.edits.get("required_delta_md") or "Change ontology or supply a materially different bridge before retrying this family."),
                     "ban_level": "soft" if delta.delta_type != "kill_delta" else "hard",
                     "repeat_count": 1 + sum(1 for row in self.db.list_fracture_heads(problem.id) if row["family_key"] == delta.family_key),
                     "updated_at": utc_now(),

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from .control import build_control_snapshot, family_exhausted
 from .db import LimaCoreDB
-from .models import DeltaProposal, ProblemSpec, WorldPacket
+from .models import DeltaProposal, ProblemSpec
 from .program import get_program_state
 from .worldsmith import Worldsmith
 
@@ -18,49 +19,26 @@ class Proposer:
         if not worlds:
             return self.worldsmith.propose_world(problem, gap)
         strongest = worlds[0]
-        if problem.slug == "collatz":
-            stale_quotient_runs = sum(
-                1
-                for cohort in self.db.list_cohorts(problem.id)
-                if str(cohort.get("title") or "") == "Kill stale quotient world"
-                and str(cohort.get("status") or "") == "finished"
-                and int(cohort.get("yielded_lemmas") or 0) == 0
-            )
-            if str(strongest["family_key"]) == "quotient" and stale_quotient_runs >= 2:
-                packet = WorldPacket(
-                    world_name="Parity carry ledger",
-                    family_key="hidden_state",
-                    new_objects=["carry ledger", "odd-step debt", "parity block signature"],
-                    bridge_to_problem="Refine the accelerated odd-step map by attaching a hidden carry ledger that records where parity compression loses information.",
-                    why_easier_here="The hidden ledger separates true growth from bookkeeping noise, so local drift bounds can be stated without pretending the raw quotient is already closed.",
-                    local_law="Carry-adjusted odd-step debt does not increase across admissible parity blocks and strictly decreases on calibrated return patterns.",
-                    kill_test="Search for a short parity block whose carry-adjusted debt increases after ledger normalization.",
-                    theorem_skeleton="If the ledger closes the information leak and debt decreases on every calibrated return, Collatz descent can be reduced to a finite family of parity block lemmas.",
-                    formal_agenda=[
-                        "define the carry ledger and show it reconstructs odd-step drift",
-                        "prove non-increase of carry-adjusted debt on admissible parity blocks",
-                        "classify calibrated return patterns needed for descent",
-                    ],
-                    literature_queries=[
-                        "collatz parity vector accelerated map drift",
-                        "collatz hidden state parity block invariants",
-                    ],
-                    formal_queries=[
-                        "accelerated collatz parity blocks",
-                        "collatz return map drift bound",
-                    ],
-                    confidence_prior=0.66,
-                    novelty_note="Rotate away from the stale quotient kill loop by tracking the hidden carry ledger explicitly.",
-                )
-                return DeltaProposal(
-                    delta_type="world_delta",
-                    title=packet.world_name,
-                    summary_md=packet.novelty_note,
-                    family_key=packet.family_key,
-                    world_packet=packet,
-                    target_node_key=str(gap["node_key"]),
-                )
-            if str(strongest["family_key"]) == "hidden_state":
+        snapshot = build_control_snapshot(self.db, problem.id)
+        exhausted = family_exhausted(snapshot)
+        if exhausted:
+            if problem.slug == "collatz" and snapshot.current_family_key == "quotient":
+                packet = self.worldsmith.propose_world(
+                    problem,
+                    gap,
+                    preferred_family_key="hidden_state",
+                    avoid_family_keys={snapshot.current_family_key},
+                ).world_packet
+                if packet is not None:
+                    return DeltaProposal(
+                        delta_type="world_delta",
+                        title=packet.world_name,
+                        summary_md=packet.novelty_note,
+                        family_key=packet.family_key,
+                        world_packet=packet,
+                        target_node_key=str(gap["node_key"]),
+                    )
+            if snapshot.current_family_key == "hidden_state":
                 return DeltaProposal(
                     delta_type="lemma_delta",
                     title="Carry-adjusted drift lemma",
@@ -72,6 +50,7 @@ class Proposer:
                         "local_law": "Carry-adjusted debt is monotone on admissible parity return blocks.",
                         "kill_test": "Look for a calibrated parity block whose ledger debt increases after normalization.",
                         "theorem_skeleton": "A ledger-stable drift bound reduces global descent to finitely many calibrated return patterns.",
+                        "required_delta_md": "Switch from quotient heuristics to carry-ledger obligations before retrying the same frontier line.",
                         "obligations": [
                             "prove the ledger reconstructs odd-step drift",
                             "prove monotonicity on admissible parity blocks",
@@ -97,6 +76,7 @@ class Proposer:
                 },
             )
         if problem.slug == "collatz":
+            required_delta = snapshot.current_required_delta_md or "Rotate away from the stale quotient family before retrying the same frontier line."
             return DeltaProposal(
                 delta_type="kill_delta",
                 title="Kill stale quotient world",
@@ -108,10 +88,12 @@ class Proposer:
                     "local_law": "Bounded odd-step expansion would force eventual descent.",
                     "kill_test": "Find a small odd orbit with quotient drift inconsistent with the bounded expansion law.",
                     "theorem_skeleton": "A failed bounded expansion law collapses the quotient proof program.",
+                    "required_delta_md": required_delta,
                     "obligations": ["bounded odd-step expansion fails on a small witness"],
                 },
             )
         if fractures:
+            fracture = fractures[0]
             return DeltaProposal(
                 delta_type="reduction_delta",
                 title="Required delta against recent fracture",
@@ -119,11 +101,12 @@ class Proposer:
                 family_key=str(strongest["family_key"]),
                 target_node_key=str(gap["node_key"]),
                 edits={
-                    "bridge_claim": f"Repair the bridge by addressing {fractures[0]['failure_type']}.",
+                    "bridge_claim": f"Repair the bridge by addressing {fracture['failure_type']}.",
                     "local_law": "Introduce a corrected local invariant.",
                     "kill_test": "Search for another witness violating the corrected invariant.",
                     "theorem_skeleton": "If the corrected invariant survives, resume the theorem skeleton.",
+                    "required_delta_md": str(fracture.get("required_delta_md") or "Change ontology or supply a materially different bridge before retrying this family."),
                     "obligations": ["repair recent fracture"],
                 },
             )
-        return self.worldsmith.propose_world(problem, gap)
+        return self.worldsmith.propose_world(problem, gap, avoid_family_keys={snapshot.current_family_key} if snapshot.current_family_key else set())

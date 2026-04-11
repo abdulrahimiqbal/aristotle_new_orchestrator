@@ -35,6 +35,19 @@ def test_status_transitions_running_blocked_stalled_paused_solved(tmp_path: Path
     blocked = persist_runtime_status(db, problem_id)
     assert blocked["runtime_status"] == "blocked"
 
+    db.upsert_frontier_node(
+        FrontierNode(
+            id="blocked-node",
+            problem_id=problem_id,
+            node_key="bridge_claim",
+            node_kind="bridge_lemma",
+            title="Bridge claim",
+            status="proved",
+            replay_ref={"replay_certificate": "bridge"},
+            priority=11.0,
+            updated_at=utc_now(),
+        )
+    )
     for idx in range(10):
         db.append_event(
             problem_id,

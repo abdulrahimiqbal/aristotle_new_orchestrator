@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS problems (
     status_reason_md TEXT NOT NULL DEFAULT '',
     blocked_node_key TEXT NOT NULL DEFAULT '',
     blocker_kind TEXT NOT NULL DEFAULT '',
+    exhausted_family_key TEXT NOT NULL DEFAULT '',
+    exhausted_family_since TEXT NOT NULL DEFAULT '',
     stalled_since TEXT NOT NULL DEFAULT '',
     last_gain_at TEXT NOT NULL DEFAULT '',
     since_timestamp TEXT NOT NULL DEFAULT '',

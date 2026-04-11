@@ -63,9 +63,10 @@ def test_collatz_rotates_off_stale_quotient_loop_and_earns_new_replayable_gain(t
     fourth = loop.run_iteration("collatz")
 
     assert first["accepted"] is True
-    assert second["accepted"] is False
+    assert second["accepted"] is True
+    assert second["score"]["replayable_gain"] > 0
     assert third["accepted"] is False
-    assert fourth["accepted"] is True
+    assert fourth["accepted"] is False
 
     worlds = db.list_world_heads(str(db.get_problem("collatz")["id"]))
     families = {str(world["family_key"]) for world in worlds}
@@ -74,7 +75,3 @@ def test_collatz_rotates_off_stale_quotient_loop_and_earns_new_replayable_gain(t
     frontier = db.get_frontier_nodes(str(db.get_problem("collatz")["id"]))
     proved = {str(node["node_key"]) for node in frontier if str(node["status"]) == "proved"}
     assert {"bridge_claim", "local_energy_law"}.issubset(proved)
-
-    fifth = loop.run_iteration("collatz")
-    assert fifth["score"]["replayable_gain"] == 0
-    assert fifth["accepted"] is False
