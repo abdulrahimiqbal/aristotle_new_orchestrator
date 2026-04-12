@@ -770,6 +770,16 @@ def select_manager_mode(
     status = str(runtime_status or "").lower().strip()
     if status == "booting":
         return "bootstrap"
+    if status in {"blocked", "stalled"}:
+        if (
+            snapshot.current_family_key
+            and not snapshot.current_line_exhausted
+            and bool(snapshot.current_required_delta_md.strip())
+        ):
+            return "repair"
+        return "unblock"
+    if snapshot.current_line_exhausted or snapshot.current_family_exhausted:
+        return "unblock"
     if (
         event_count <= 2
         and status in {"running", ""}
@@ -783,14 +793,4 @@ def select_manager_mode(
         and event_count % improve_program_every == 0
     ):
         return "improve_program"
-    if status in {"blocked", "stalled"}:
-        if (
-            snapshot.current_family_key
-            and not snapshot.current_line_exhausted
-            and bool(snapshot.current_required_delta_md.strip())
-        ):
-            return "repair"
-        return "unblock"
-    if snapshot.current_line_exhausted or snapshot.current_family_exhausted:
-        return "unblock"
     return "explore"

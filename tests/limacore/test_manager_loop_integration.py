@@ -103,6 +103,30 @@ def test_iteration_mode_selection_invokes_unblock_and_improve_program(tmp_path: 
     assert "improve_program" in manager.calls
 
 
+def test_blocked_state_prioritizes_unblock_over_improve_program_tick(tmp_path: Path) -> None:
+    db = LimaCoreDB(str(tmp_path / "limacore.db"))
+    db.initialize()
+    manager = _ModeManager()
+    loop = LimaCoreLoop(db, backend=LocalAristotleBackend(), manager_core=manager)  # type: ignore[arg-type]
+    problem = db.get_problem("collatz")
+    assert problem is not None
+    pid = str(problem["id"])
+
+    for _ in range(8):
+        db.append_event(pid, "frontier_improved", "accepted", summary_md="synthetic", score_delta={"replayable_gain": 0})
+    db.update_problem_runtime(
+        pid,
+        runtime_status="blocked",
+        status_reason_md="Blocked should prioritize unblock",
+        blocked_node_key="target_theorem",
+        blocker_kind="missing_bridge_lemma",
+    )
+
+    loop.run_iteration(pid)
+    assert manager.calls
+    assert manager.calls[0] in {"unblock", "repair"}
+
+
 def test_manager_failure_emits_failed_tick_and_falls_back_to_proposer(tmp_path: Path, monkeypatch) -> None:
     db = LimaCoreDB(str(tmp_path / "limacore.db"))
     db.initialize()
