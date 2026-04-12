@@ -102,3 +102,7 @@ def test_routes_render_and_controls_work(tmp_path: Path, monkeypatch) -> None:
         program = client.get("/api/limacore/program/inward-compression-conjecture")
         assert program.status_code == 200
         assert "program" in program.json()
+
+        ops = client.get("/api/limacore/problem/inward-compression-conjecture/ops")
+        assert ops.status_code == 200
+        assert "manager" in ops.json()

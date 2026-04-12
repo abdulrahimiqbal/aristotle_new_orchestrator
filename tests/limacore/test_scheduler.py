@@ -166,6 +166,9 @@ def test_limacore_ops_endpoint_exposes_scheduler_state(tmp_path: Path, monkeypat
     limacore_db.record_scheduler_pass_start()
     limacore_db.record_scheduler_pass_complete(last_successful_problem_id="collatz")
     limacore_db.record_scheduler_error("scheduler wobble")
+    collatz = limacore_db.get_problem("collatz")
+    assert collatz is not None
+    limacore_db.append_event(str(collatz["id"]), "manager_tick", "planned", summary_md="manager summary")
 
     with TestClient(app_mod.app) as client:
         resp = client.get("/api/limacore/ops")
@@ -175,3 +178,4 @@ def test_limacore_ops_endpoint_exposes_scheduler_state(tmp_path: Path, monkeypat
         assert payload["scheduler_state"]["pass_count"] >= 1
         assert payload["scheduler_state"]["last_error_md"] == "scheduler wobble"
         assert "scheduler_headline" in payload
+        assert "manager_latest_events" in payload

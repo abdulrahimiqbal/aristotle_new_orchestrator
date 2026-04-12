@@ -12,12 +12,15 @@
       {% if status_view.exhausted_family_key %}
       <p class="text-sm text-rust">Primary family exhausted: {{ status_view.exhausted_family_key }} · rotate toward {{ status_view.suggested_family_key }}</p>
       {% endif %}
-      {% if status_view.unblock_available %}
+      {% if status_view.manager_candidate_count > 0 %}
       <p class="text-sm text-brass">
-        Unblock plan ready · {{ status_view.unblock_strategy_kind }} ·
-        {{ status_view.unblock_current_family or status_view.current_family_key }} → {{ status_view.unblock_suggested_family }}
-        ({{ status_view.unblock_candidate_count }} candidate{{ "" if status_view.unblock_candidate_count == 1 else "s" }})
+        Manager plan ready · mode {{ status_view.manager_latest_mode or "explore" }} · {{ status_view.manager_strategy_kind or "frontier_shift" }} ·
+        {{ status_view.manager_current_family or status_view.current_family_key }} → {{ status_view.manager_suggested_family or status_view.suggested_family_key }}
+        ({{ status_view.manager_candidate_count }} candidate{{ "" if status_view.manager_candidate_count == 1 else "s" }})
       </p>
+      {% endif %}
+      {% if status_view.manager_latest_reason %}
+      <p class="text-sm text-slate-300">Manager reason: {{ status_view.manager_latest_reason }}</p>
       {% endif %}
       {% if scheduler_last_error_md %}
       <p class="text-sm text-brass">Last scheduler error: {{ scheduler_last_error_md }}</p>
@@ -33,9 +36,17 @@
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Exhausted family</span><p class="mt-1 font-semibold">{{ status_view.exhausted_family_key or "none" }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Scheduler passes</span><p class="mt-1 font-semibold">{{ scheduler_pass_count }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Scheduler failures</span><p class="mt-1 font-semibold">{{ scheduler_failure_count }}</p></div>
-      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Unblock</span><p class="mt-1 font-semibold">{{ status_view.unblock_strategy_kind if status_view.unblock_available else "not needed" }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Manager</span><p class="mt-1 font-semibold">{{ status_view.manager_strategy_kind or "idle" }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3"><span class="text-slate-400">Current state</span><p class="mt-1 font-semibold">{{ status_view.status }}</p></div>
       <div class="rounded-2xl bg-black/20 p-3 col-span-2"><span class="text-slate-400">Escalation</span><p class="mt-1 font-semibold">{{ status_view.cta_text }}</p></div>
+      <div class="rounded-2xl bg-black/20 p-3 col-span-2">
+        <span class="text-slate-400">Manager latest tick</span>
+        <p class="mt-1 font-semibold">
+          {{ status_view.manager_latest_mode or "none" }} · {{ status_view.manager_strategy_kind or "none" }} ·
+          {{ status_view.manager_current_family or "?" }} → {{ status_view.manager_suggested_family or "?" }}
+          {% if status_view.manager_chosen_delta_title %}· {{ status_view.manager_chosen_delta_title }}{% endif %}
+        </p>
+      </div>
     </div>
   </div>
 </section>

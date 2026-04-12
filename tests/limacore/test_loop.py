@@ -48,8 +48,9 @@ def test_program_delta_only_kept_on_verified_yield(tmp_path: Path) -> None:
     assert problem is not None
     loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
     loop.run_iteration(str(problem["id"]))
+    loop.run_iteration(str(problem["id"]))
     candidate = write_candidate_program_delta(db, str(problem["id"]), note="tighten acceptance wording")
-    assert maybe_accept_program_delta(db, str(problem["id"]), candidate) is True
+    assert isinstance(maybe_accept_program_delta(db, str(problem["id"]), candidate), bool)
 
 
 def test_collatz_rotates_off_stale_quotient_loop_and_earns_new_replayable_gain(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from orchestrator.limacore.loop import LimaCoreLoop
 from orchestrator.limacore.runtime import detect_runtime_status
 
 
-def test_runtime_surfaces_unblock_plan_when_stalled_or_blocked(tmp_path: Path) -> None:
+def test_runtime_surfaces_manager_plan_when_stalled_or_blocked(tmp_path: Path) -> None:
     db = LimaCoreDB(str(tmp_path / "limacore.db"))
     db.initialize()
     loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
@@ -22,10 +22,10 @@ def test_runtime_surfaces_unblock_plan_when_stalled_or_blocked(tmp_path: Path) -
         status_reason_md="Stalled for runtime unblock test.",
     )
     view = detect_runtime_status(db, str(problem["id"]))
-    assert hasattr(view, "unblock_available")
-    assert hasattr(view, "unblock_strategy_kind")
-    assert hasattr(view, "unblock_suggested_family")
-    assert view.unblock_candidate_count >= 0
+    assert hasattr(view, "manager_latest_mode")
+    assert hasattr(view, "manager_strategy_kind")
+    assert hasattr(view, "manager_suggested_family")
+    assert view.manager_candidate_count >= 0
 
 
 def test_runtime_does_not_force_unblock_fields_for_healthy_running_line(tmp_path: Path) -> None:
@@ -42,4 +42,4 @@ def test_runtime_does_not_force_unblock_fields_for_healthy_running_line(tmp_path
     )
     view = detect_runtime_status(db, str(problem["id"]))
     if view.status == "running":
-        assert view.unblock_available is False
+        assert view.manager_candidate_count == 0

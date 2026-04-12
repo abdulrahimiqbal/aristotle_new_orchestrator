@@ -5,8 +5,8 @@ from pathlib import Path
 from orchestrator.limacore.aristotle import LocalAristotleBackend
 from orchestrator.limacore.db import LimaCoreDB
 from orchestrator.limacore.loop import LimaCoreLoop
+from orchestrator.limacore.manager_core import ManagerCandidate, ManagerPlan
 from orchestrator.limacore.models import DeltaProposal
-from orchestrator.limacore.unblock_manager import UnblockCandidate, UnblockSuggestion
 
 
 def _delta(*, family_key: str, title: str) -> DeltaProposal:
@@ -31,7 +31,36 @@ def _delta(*, family_key: str, title: str) -> DeltaProposal:
     )
 
 
-def test_loop_uses_unblock_manager_when_blocked(tmp_path: Path, monkeypatch) -> None:
+class _StubManager:
+    def __init__(self, plan: ManagerPlan | None) -> None:
+        self.plan_to_return = plan
+        self.calls: list[str] = []
+
+    def plan(self, manager_input):  # type: ignore[no-untyped-def]
+        self.calls.append(str(manager_input.mode))
+        return self.plan_to_return
+
+
+def _plan_with_delta(delta: DeltaProposal, *, mode: str = "unblock") -> ManagerPlan:
+    return ManagerPlan(
+        mode=mode,
+        reason_md="manager selected bounded unblock step",
+        strategy_kind="neighbor_family",
+        current_line={
+            "family_key": "quotient",
+            "frontier_node_key": "target_theorem",
+            "blocker_kind": "missing_bridge_lemma",
+            "blocker_summary": "need bridge",
+        },
+        candidates=(ManagerCandidate("neighbor_family", "materially different", delta),),
+        chosen_index=0,
+        confidence=0.71,
+        expected_frontier_change="switch family and advance frontier",
+        provider="deterministic",
+    )
+
+
+def test_loop_uses_manager_plan_when_blocked(tmp_path: Path, monkeypatch) -> None:
     db = LimaCoreDB(str(tmp_path / "limacore.db"))
     db.initialize()
     loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
@@ -45,20 +74,9 @@ def test_loop_uses_unblock_manager_when_blocked(tmp_path: Path, monkeypatch) -> 
         blocker_kind="missing_bridge_lemma",
     )
 
-    chosen = _delta(family_key="hidden_state", title="unblock-chosen")
-    suggestion = UnblockSuggestion(
-        reason_md="Use hidden_state to unblock",
-        strategy_kind="neighbor_family",
-        current_family="quotient",
-        current_frontier_node="target_theorem",
-        suggested_family="hidden_state",
-        blocked_node_key="target_theorem",
-        candidates=(UnblockCandidate("neighbor_family", "family changed", chosen, 1.0),),
-        chosen_index=0,
-    )
-
-    monkeypatch.setattr(loop.unblock_manager, "should_activate", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(loop.unblock_manager, "suggest", lambda **_kwargs: suggestion)
+    chosen = _delta(family_key="hidden_state", title="manager-chosen")
+    stub = _StubManager(_plan_with_delta(chosen))
+    loop.manager_core = stub  # type: ignore[assignment]
     monkeypatch.setattr(
         loop.proposer,
         "propose_delta",
@@ -67,11 +85,13 @@ def test_loop_uses_unblock_manager_when_blocked(tmp_path: Path, monkeypatch) -> 
 
     loop.run_iteration("collatz")
     events = db.list_events(str(problem["id"]), limit=30)
-    assert any(event["event_type"] == "unblock_plan_selected" for event in events)
-    assert any(event["event_type"] == "delta_proposed" and "unblock-chosen" in event["summary_md"] for event in events)
+    assert any(event["event_type"] == "manager_tick" for event in events)
+    assert any(event["event_type"] == "manager_plan_selected" for event in events)
+    assert any(event["event_type"] == "delta_proposed" and "manager-chosen" in event["summary_md"] for event in events)
+    assert "unblock" in stub.calls
 
 
-def test_loop_falls_back_when_unblock_has_no_valid_choice(tmp_path: Path, monkeypatch) -> None:
+def test_loop_falls_back_when_manager_has_no_choice(tmp_path: Path, monkeypatch) -> None:
     db = LimaCoreDB(str(tmp_path / "limacore.db"))
     db.initialize()
     loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
@@ -85,22 +105,28 @@ def test_loop_falls_back_when_unblock_has_no_valid_choice(tmp_path: Path, monkey
         blocker_kind="missing_bridge_lemma",
     )
 
-    empty = UnblockSuggestion(
-        reason_md="No valid unblock candidate",
-        strategy_kind="none",
-        current_family="quotient",
-        current_frontier_node="target_theorem",
-        suggested_family="",
-        blocked_node_key="target_theorem",
+    empty = ManagerPlan(
+        mode="unblock",
+        reason_md="manager had no valid candidates",
+        strategy_kind="frontier_shift",
+        current_line={
+            "family_key": "quotient",
+            "frontier_node_key": "target_theorem",
+            "blocker_kind": "missing_bridge_lemma",
+            "blocker_summary": "missing bridge",
+        },
         candidates=(),
         chosen_index=-1,
+        confidence=0.2,
+        expected_frontier_change="none",
+        provider="deterministic",
     )
     fallback = _delta(family_key="operator_world", title="fallback-proposer")
 
-    monkeypatch.setattr(loop.unblock_manager, "should_activate", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(loop.unblock_manager, "suggest", lambda **_kwargs: empty)
+    loop.manager_core = _StubManager(empty)  # type: ignore[assignment]
     monkeypatch.setattr(loop.proposer, "propose_delta", lambda *_args, **_kwargs: fallback)
 
     loop.run_iteration("collatz")
     events = db.list_events(str(problem["id"]), limit=30)
+    assert any(event["event_type"] == "manager_tick" for event in events)
     assert any(event["event_type"] == "delta_proposed" and "fallback-proposer" in event["summary_md"] for event in events)

@@ -9,10 +9,8 @@ from orchestrator import config as app_config
 from .artifacts import utc_now
 from .control import build_control_snapshot
 from .db import LimaCoreDB
-from .frontier import proof_debt, select_frontier_gap
-from .models import ProblemSpec
+from .frontier import proof_debt
 from .solved import solved_checker
-from .unblock_manager import UnblockManager
 
 
 STATUS_PRIORITY = {
@@ -65,6 +63,19 @@ class RuntimeStatusView:
     scheduler_expected_next_pass_at: str = ""
     scheduler_status_reason: str = ""
     scheduler_name: str = "limacore_autopilot"
+    manager_latest_mode: str = ""
+    manager_latest_reason: str = ""
+    manager_strategy_kind: str = ""
+    manager_current_family: str = ""
+    manager_current_frontier_node: str = ""
+    manager_suggested_family: str = ""
+    manager_candidate_count: int = 0
+    manager_confidence: float = 0.0
+    manager_chosen_delta_title: str = ""
+    manager_last_tick_at: str = ""
+    manager_plan_used: bool = False
+    manager_fallback_used: bool = False
+    manager_provider: str = ""
     unblock_available: bool = False
     unblock_reason: str = ""
     unblock_strategy_kind: str = ""
@@ -94,6 +105,84 @@ def _scheduler_health_reason(state: dict[str, Any], *, stale: bool, initialized:
             return f"Autopilot healthy. Last scheduler error: {state['last_error_md']}"
         return "Autopilot healthy: scheduler heartbeat fresh."
     return "Autopilot awaiting first scheduler pass."
+
+
+def _latest_manager_view(db: LimaCoreDB, problem_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+    defaults = {
+        "manager_latest_mode": "",
+        "manager_latest_reason": "",
+        "manager_strategy_kind": "",
+        "manager_current_family": "",
+        "manager_current_frontier_node": "",
+        "manager_suggested_family": "",
+        "manager_candidate_count": 0,
+        "manager_confidence": 0.0,
+        "manager_chosen_delta_title": "",
+        "manager_last_tick_at": "",
+        "manager_plan_used": False,
+        "manager_fallback_used": False,
+        "manager_provider": "",
+    }
+    selected = next((event for event in reversed(events) if str(event.get("event_type") or "") == "manager_plan_selected"), None)
+    if selected is not None:
+        defaults["manager_plan_used"] = True
+    if any(str(event.get("event_type") or "") == "manager_tick_failed" for event in reversed(events)):
+        defaults["manager_fallback_used"] = True
+    tick = next(
+        (
+            event
+            for event in reversed(events)
+            if str(event.get("event_type") or "") in {"manager_tick", "manager_tick_failed"}
+        ),
+        None,
+    )
+    if tick is None:
+        return defaults
+    defaults["manager_last_tick_at"] = str(tick.get("created_at") or "")
+    tick_type = str(tick.get("event_type") or "")
+    if tick_type == "manager_tick_failed":
+        defaults["manager_latest_mode"] = "failed"
+        defaults["manager_latest_reason"] = str(tick.get("summary_md") or "")
+        defaults["manager_strategy_kind"] = "fallback"
+        defaults["manager_fallback_used"] = True
+        return defaults
+
+    defaults["manager_latest_reason"] = str(tick.get("summary_md") or "")
+    artifact_refs = tick.get("artifact_refs") or []
+    if isinstance(artifact_refs, list):
+        for ref in artifact_refs:
+            artifact = db.get_artifact(ref)
+            if artifact is None:
+                continue
+            if str(artifact.get("artifact_kind") or "") != "manager_plan":
+                continue
+            content = artifact.get("content") or {}
+            if not isinstance(content, dict):
+                continue
+            defaults["manager_latest_mode"] = str(content.get("mode") or "")
+            defaults["manager_latest_reason"] = str(content.get("reason_md") or defaults["manager_latest_reason"])
+            defaults["manager_strategy_kind"] = str(content.get("strategy_kind") or "")
+            defaults["manager_confidence"] = float(content.get("confidence") or 0.0)
+            defaults["manager_provider"] = str(content.get("provider") or "")
+            current_line = content.get("current_line") or {}
+            if isinstance(current_line, dict):
+                defaults["manager_current_family"] = str(current_line.get("family_key") or "")
+                defaults["manager_current_frontier_node"] = str(current_line.get("frontier_node_key") or "")
+            candidates = content.get("candidates") or []
+            if isinstance(candidates, list):
+                defaults["manager_candidate_count"] = len(candidates)
+                chosen_index = int(content.get("chosen_index", -1) or -1)
+                if 0 <= chosen_index < len(candidates):
+                    chosen = candidates[chosen_index] or {}
+                    if isinstance(chosen, dict):
+                        delta = chosen.get("delta") or {}
+                        if isinstance(delta, dict):
+                            defaults["manager_chosen_delta_title"] = str(delta.get("title") or "")
+                            defaults["manager_suggested_family"] = str(delta.get("family_key") or "")
+            break
+    if not defaults["manager_suggested_family"]:
+        defaults["manager_suggested_family"] = defaults["manager_current_family"]
+    return defaults
 
 
 def get_scheduler_health_view(
@@ -159,49 +248,24 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
     events = db.list_events(problem_id, limit=max(stall_window, 20))
     frontier = db.get_frontier_nodes(problem_id)
     solved = solved_checker(db, problem_id)
-    last_meaningful_change = str(
+    last_meaningful_change_base = str(
         problem.get("last_gain_at") or problem.get("updated_at") or problem.get("created_at") or ""
     )
     replayable_gain_rate = sum(int((event.get("score_delta") or {}).get("replayable_gain", 0)) for event in events[-stall_window:])
     scheduler_view = get_scheduler_health_view(db, interval_sec=app_config.LIMACORE_LOOP_INTERVAL_SEC)
+    manager_view = _latest_manager_view(db, problem_id, events)
+    unblock_available = bool(
+        manager_view["manager_candidate_count"] > 0
+        and manager_view["manager_latest_mode"] in {"unblock", "repair", "explore", "bootstrap"}
+    )
     unblock_view: dict[str, Any] = {
-        "unblock_available": False,
-        "unblock_reason": "",
-        "unblock_strategy_kind": "",
-        "unblock_current_family": snapshot.current_family_key,
-        "unblock_suggested_family": snapshot.suggested_family_key,
-        "unblock_candidate_count": 0,
+        "unblock_available": unblock_available,
+        "unblock_reason": str(manager_view["manager_latest_reason"] or ""),
+        "unblock_strategy_kind": str(manager_view["manager_strategy_kind"] or ""),
+        "unblock_current_family": str(manager_view["manager_current_family"] or snapshot.current_family_key),
+        "unblock_suggested_family": str(manager_view["manager_suggested_family"] or snapshot.suggested_family_key),
+        "unblock_candidate_count": int(manager_view["manager_candidate_count"] or 0),
     }
-    if (
-        str(problem.get("runtime_status") or "") in {"blocked", "stalled"}
-        or snapshot.current_line_exhausted
-        or snapshot.current_family_exhausted
-    ):
-        try:
-            gap = select_frontier_gap(db, problem_id)
-        except Exception:
-            gap = {
-                "node_key": snapshot.blocked_node_key or snapshot.current_line_node_key or "target_theorem",
-                "title": snapshot.blocker_kind or "frontier gap",
-            }
-        manager = UnblockManager()
-        suggestion = manager.suggest(
-            problem=ProblemSpec(**problem),
-            gap=gap,
-            control_snapshot=snapshot,
-            strongest_worlds=db.list_world_heads(problem_id),
-            recent_fractures=db.list_fracture_heads(problem_id),
-            recent_events=events,
-        )
-        chosen = suggestion.chosen_delta
-        unblock_view = {
-            "unblock_available": chosen is not None,
-            "unblock_reason": suggestion.reason_md,
-            "unblock_strategy_kind": suggestion.strategy_kind,
-            "unblock_current_family": suggestion.current_family,
-            "unblock_suggested_family": suggestion.suggested_family,
-            "unblock_candidate_count": len(suggestion.candidates),
-        }
     current_line_kpis = {
         "current_family_key": snapshot.current_family_key,
         "current_family_exhausted": snapshot.current_family_exhausted,
@@ -214,11 +278,13 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
     }
 
     def _view(**kwargs: Any) -> RuntimeStatusView:
+        last_meaningful_change = kwargs.pop("last_meaningful_change_at", last_meaningful_change_base)
         return RuntimeStatusView(
             replayable_gain_rate=replayable_gain_rate,
             last_meaningful_change_at=last_meaningful_change,
             exhausted_family_key=snapshot.exhausted_family_key,
             suggested_family_key=snapshot.suggested_family_key,
+            **manager_view,
             **scheduler_view,
             **current_line_kpis,
             **unblock_view,

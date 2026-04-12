@@ -757,3 +757,40 @@ def current_line_stagnant(snapshot: ControlSnapshot, threshold: int = 3) -> bool
     repeated = snapshot.recent_current_line_repeated_signature_count >= threshold
 
     return no_gain and no_lemmas and (failing or repeated or snapshot.recent_current_line_accepts == 0)
+
+
+def select_manager_mode(
+    runtime_status: str,
+    snapshot: ControlSnapshot,
+    *,
+    event_count: int = 0,
+    improve_program_every: int = 8,
+) -> str:
+    """Choose Lima-core manager mode from control/runtime state."""
+    status = str(runtime_status or "").lower().strip()
+    if status == "booting":
+        return "bootstrap"
+    if (
+        event_count <= 2
+        and status in {"running", ""}
+        and not snapshot.blocked_node_key
+        and not snapshot.current_line_exhausted
+    ):
+        return "bootstrap"
+    if (
+        improve_program_every > 0
+        and event_count > 0
+        and event_count % improve_program_every == 0
+    ):
+        return "improve_program"
+    if status in {"blocked", "stalled"}:
+        if (
+            snapshot.current_family_key
+            and not snapshot.current_line_exhausted
+            and bool(snapshot.current_required_delta_md.strip())
+        ):
+            return "repair"
+        return "unblock"
+    if snapshot.current_line_exhausted or snapshot.current_family_exhausted:
+        return "unblock"
+    return "explore"

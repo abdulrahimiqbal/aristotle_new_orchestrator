@@ -202,6 +202,29 @@ def build_router(db_or_getter: LimaCoreDB | Callable[[], LimaCoreDB], templates:
         db = current_db()
         scheduler = build_scheduler_ui_view(db)
         scheduler_state = db.get_scheduler_state()
+        problems = db.list_problems()
+        manager_latest: list[dict[str, str]] = []
+        for problem in problems[:10]:
+            pid = str(problem["id"])
+            events = db.list_events(pid, limit=40)
+            tick = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if str(event.get("event_type") or "") in {"manager_tick", "manager_tick_failed", "manager_plan_selected"}
+                ),
+                None,
+            )
+            if tick is None:
+                continue
+            manager_latest.append(
+                {
+                    "problem_slug": str(problem.get("slug") or ""),
+                    "event_type": str(tick.get("event_type") or ""),
+                    "summary_md": str(tick.get("summary_md") or ""),
+                    "created_at": str(tick.get("created_at") or ""),
+                }
+            )
         return JSONResponse(
             {
                 "scheduler_state": scheduler_state,
@@ -214,6 +237,7 @@ def build_router(db_or_getter: LimaCoreDB | Callable[[], LimaCoreDB], templates:
                 "scheduler_last_error_md": scheduler["scheduler_last_error_md"],
                 "scheduler_pass_count": scheduler["scheduler_pass_count"],
                 "scheduler_failure_count": scheduler["scheduler_failure_count"],
+                "manager_latest_events": manager_latest,
             }
         )
 
@@ -228,6 +252,7 @@ def build_router(db_or_getter: LimaCoreDB | Callable[[], LimaCoreDB], templates:
             {
                 "problem": ctx["problem"],
                 "status_view": ctx["status_view"],
+                "manager": ctx.get("manager", {}),
                 "autopilot_state": ctx["autopilot_state"],
                 "scheduler_state": db.get_scheduler_state(),
                 "scheduler_health": ctx["scheduler"],

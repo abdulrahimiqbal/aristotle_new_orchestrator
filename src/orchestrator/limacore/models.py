@@ -22,6 +22,15 @@ JobKind = Literal[
     "replay_check",
 ]
 JobVerdict = Literal["proved", "refuted", "blocked", "inconclusive"]
+ManagerMode = Literal["bootstrap", "explore", "unblock", "repair", "improve_program"]
+ManagerStrategyKind = Literal[
+    "bootstrap",
+    "repair",
+    "neighbor_family",
+    "orthogonal_family",
+    "frontier_shift",
+    "program_patch",
+]
 
 
 @dataclass(slots=True)

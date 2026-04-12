@@ -118,7 +118,7 @@ def test_workspace_banners_render_for_blocked_stalled_solved(tmp_path: Path) -> 
     assert solved_view["status"] in {"running", "blocked", "stalled", "solved"}
 
 
-def test_workspace_exposes_unblock_plan_fields_when_blocked_or_stalled(tmp_path: Path) -> None:
+def test_workspace_exposes_manager_plan_fields_when_blocked_or_stalled(tmp_path: Path) -> None:
     db = LimaCoreDB(str(tmp_path / "limacore.db"))
     db.initialize()
     loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
@@ -135,10 +135,11 @@ def test_workspace_exposes_unblock_plan_fields_when_blocked_or_stalled(tmp_path:
 
     ctx = build_workspace_context(db, "collatz")
     status_view = ctx["status_view"]
-    assert "unblock_available" in status_view
-    assert "unblock_strategy_kind" in status_view
-    assert "unblock_suggested_family" in status_view
-    assert "unblock_candidate_count" in status_view
-    if status_view["unblock_available"]:
+    assert "manager_latest_mode" in status_view
+    assert "manager_strategy_kind" in status_view
+    assert "manager_suggested_family" in status_view
+    assert "manager_candidate_count" in status_view
+    assert "manager" in ctx
+    if status_view["manager_candidate_count"] > 0:
         summary = " ".join(ctx["alert_banner"]["summary"]) if ctx.get("alert_banner") else ""
-        assert "Unblock plan ready" in summary
+        assert "plan" in summary.lower()

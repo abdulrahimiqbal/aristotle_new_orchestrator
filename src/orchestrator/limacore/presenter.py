@@ -145,6 +145,19 @@ def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: 
         "scheduler_pass_count": scheduler_ui["scheduler_pass_count"],
         "scheduler_failure_count": scheduler_ui["scheduler_failure_count"],
         "scheduler_age_text": scheduler_ui["scheduler_age_text"],
+        "manager_latest_mode": runtime.manager_latest_mode,
+        "manager_latest_reason": runtime.manager_latest_reason,
+        "manager_strategy_kind": runtime.manager_strategy_kind,
+        "manager_current_family": runtime.manager_current_family,
+        "manager_current_frontier_node": runtime.manager_current_frontier_node,
+        "manager_suggested_family": runtime.manager_suggested_family,
+        "manager_candidate_count": runtime.manager_candidate_count,
+        "manager_confidence": runtime.manager_confidence,
+        "manager_chosen_delta_title": runtime.manager_chosen_delta_title,
+        "manager_last_tick_at": runtime.manager_last_tick_at,
+        "manager_plan_used": runtime.manager_plan_used,
+        "manager_fallback_used": runtime.manager_fallback_used,
+        "manager_provider": runtime.manager_provider,
         "unblock_available": runtime.unblock_available,
         "unblock_reason": runtime.unblock_reason,
         "unblock_strategy_kind": runtime.unblock_strategy_kind,
@@ -266,19 +279,19 @@ def get_problem_card_summary(card: dict[str, Any]) -> str:
         return card["status_view"].get("scheduler_headline") or "Autopilot unhealthy."
     if status == "blocked":
         family = card["status_view"].get("exhausted_family_key") or "unknown"
-        if card["status_view"].get("unblock_available"):
-            strategy = card["status_view"].get("unblock_strategy_kind") or "unblock"
-            suggested = card["status_view"].get("unblock_suggested_family") or "unknown"
+        if card["status_view"].get("manager_candidate_count", 0) > 0:
+            strategy = card["status_view"].get("manager_strategy_kind") or "manager"
+            suggested = card["status_view"].get("manager_suggested_family") or "unknown"
             return (
                 f"Blocked on {card['status_view']['blocked_node_key'] or 'unknown'}; "
-                f"unblock plan ready ({strategy} -> {suggested})."
+                f"manager plan ready ({strategy} -> {suggested})."
             )
         return f"Blocked on {card['status_view']['blocked_node_key'] or 'unknown'}; family {family} exhausted."
     if status == "stalled":
-        if card["status_view"].get("unblock_available"):
-            strategy = card["status_view"].get("unblock_strategy_kind") or "unblock"
-            suggested = card["status_view"].get("unblock_suggested_family") or "unknown"
-            return f"Stalled current line; unblock plan ready ({strategy} -> {suggested})."
+        if card["status_view"].get("manager_candidate_count", 0) > 0:
+            strategy = card["status_view"].get("manager_strategy_kind") or "manager"
+            suggested = card["status_view"].get("manager_suggested_family") or "unknown"
+            return f"Stalled current line; manager plan ready ({strategy} -> {suggested})."
         return f"Stalled after {card['status_view']['stalled_iteration_window']} iterations with zero replayable gain."
     return card["status_view"]["reason"]
 
@@ -514,6 +527,21 @@ def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: d
             "current_family": str(status_view.get("unblock_current_family") or ""),
             "suggested_family": str(status_view.get("unblock_suggested_family") or ""),
             "candidate_count": int(status_view.get("unblock_candidate_count") or 0),
+        },
+        "manager": {
+            "mode": str(status_view.get("manager_latest_mode") or ""),
+            "reason": str(status_view.get("manager_latest_reason") or ""),
+            "strategy_kind": str(status_view.get("manager_strategy_kind") or ""),
+            "current_family": str(status_view.get("manager_current_family") or ""),
+            "current_frontier_node": str(status_view.get("manager_current_frontier_node") or ""),
+            "suggested_family": str(status_view.get("manager_suggested_family") or ""),
+            "candidate_count": int(status_view.get("manager_candidate_count") or 0),
+            "confidence": float(status_view.get("manager_confidence") or 0.0),
+            "chosen_delta_title": str(status_view.get("manager_chosen_delta_title") or ""),
+            "last_tick_at": str(status_view.get("manager_last_tick_at") or ""),
+            "plan_used": bool(status_view.get("manager_plan_used")),
+            "fallback_used": bool(status_view.get("manager_fallback_used")),
+            "provider": str(status_view.get("manager_provider") or ""),
         },
         # NEW: Current-line KPIs for UI
         "current_line": current_line_kpis,

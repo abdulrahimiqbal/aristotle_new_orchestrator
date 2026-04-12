@@ -8,7 +8,7 @@ from typing import Any
 from .aristotle import AristotleBackend, LocalAristotleBackend, poll_results, submit_aristotle_jobs
 from .artifacts import utc_now
 from .compiler import CompileError, compile_delta_to_reduction
-from .control import build_control_snapshot
+from .control import build_control_snapshot, select_manager_mode
 from .cohorts import build_aristotle_cohorts
 from .db import LimaCoreDB
 from .events import apply_event_artifacts
@@ -20,6 +20,12 @@ from .frontier_derivation import (
     make_replay_node,
 )
 from .models import DeltaProposal, FrontierNode, ProblemSpec
+from .manager_core import (
+    ManagerCore,
+    ManagerPlan,
+    build_manager_input,
+    default_program_payload,
+)
 from .prompting import normalize_problem_prompt
 from .program import maybe_accept_program_delta, write_candidate_program_delta
 from .proposer import Proposer
@@ -27,7 +33,6 @@ from .retriever import Retriever
 from .runtime import detect_runtime_status, persist_runtime_status
 from .scorer import score_results
 from .solved import solved_checker
-from .unblock_manager import UnblockManager
 
 
 logger = logging.getLogger(__name__)
@@ -41,13 +46,86 @@ class LimaCoreLoop:
         backend: AristotleBackend | None = None,
         proposer: Proposer | None = None,
         retriever: Retriever | None = None,
-        unblock_manager: UnblockManager | None = None,
+        manager_core: ManagerCore | None = None,
     ) -> None:
         self.db = db
         self.backend = backend or LocalAristotleBackend()
         self.proposer = proposer or Proposer(db)
         self.retriever = retriever or Retriever(db)
-        self.unblock_manager = unblock_manager or UnblockManager(worldsmith=self.proposer.worldsmith)
+        self.manager_core = manager_core or ManagerCore(worldsmith=self.proposer.worldsmith)
+
+    def _run_manager(
+        self,
+        problem: ProblemSpec,
+        gap: dict[str, Any],
+        *,
+        mode: str,
+        parent_event_id: str | None,
+    ) -> ManagerPlan | None:
+        try:
+            snapshot = build_control_snapshot(self.db, problem.id)
+            runtime = detect_runtime_status(self.db, problem.id)
+            events = self.db.list_events(problem.id, limit=120)
+            cohorts = self.db.list_cohorts(problem.id)
+            manager_input = build_manager_input(
+                problem=problem,
+                current_gap=gap,
+                control_snapshot=snapshot,
+                strongest_worlds=self.db.list_world_heads(problem.id),
+                recent_fractures=self.db.list_fracture_heads(problem.id),
+                recent_events=events,
+                recent_cohorts=cohorts,
+                mode=mode,  # type: ignore[arg-type]
+                runtime_status=runtime.status,
+                current_program=default_program_payload(problem.id, db=self.db),
+            )
+            plan = self.manager_core.plan(manager_input)
+            if plan is None:
+                self.db.append_event(
+                    problem.id,
+                    "manager_tick_failed",
+                    "failed",
+                    parent_event_id=parent_event_id,
+                    summary_md=f"Manager returned no plan in mode `{mode}`; falling back to deterministic proposer.",
+                )
+                return None
+            plan_ref = self.db.store_artifact("manager_plan", plan.to_dict())
+            chosen = plan.chosen_delta
+            chosen_title = chosen.title if chosen is not None else ""
+            suggested_family = chosen.family_key if chosen is not None else plan.current_line.get("family_key", "")
+            summary_md = (
+                f"Manager tick mode=`{plan.mode}` strategy=`{plan.strategy_kind}` provider=`{plan.provider}` "
+                f"line={plan.current_line.get('family_key', '')}->{plan.current_line.get('frontier_node_key', '')} "
+                f"suggested_family=`{suggested_family or 'none'}` "
+                f"chosen_delta={'yes' if chosen is not None else 'no'}"
+            )
+            if chosen_title:
+                summary_md += f" title=`{chosen_title}`"
+            self.db.append_event(
+                problem.id,
+                "manager_tick",
+                "planned",
+                parent_event_id=parent_event_id,
+                artifact_refs=[plan_ref],
+                summary_md=summary_md,
+                family_key=plan.current_line.get("family_key", ""),
+            )
+            return plan
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.db.append_event(
+                problem.id,
+                "manager_tick_failed",
+                "failed",
+                parent_event_id=parent_event_id,
+                summary_md=(
+                    f"Manager failed in mode `{mode}`: {exc.__class__.__name__}: {exc}. "
+                    "Falling back to deterministic proposer."
+                ),
+            )
+            logger.exception("Lima-core manager tick failed for problem %s", problem.id)
+            return None
 
     def create_problem_from_prompt(self, prompt: str) -> dict:
         parsed = normalize_problem_prompt(prompt)
@@ -75,6 +153,27 @@ class LimaCoreLoop:
         gap = self.db.get_frontier_node(problem_id, "target_theorem")
         assert gap is not None
         spec = ProblemSpec(**problem)
+        manager_bootstrap_delta: DeltaProposal | None = None
+        manager_plan = self._run_manager(
+            spec,
+            gap,
+            mode="bootstrap",
+            parent_event_id=boot_event,
+        )
+        if manager_plan is not None:
+            manager_bootstrap_delta = manager_plan.chosen_delta
+            if manager_bootstrap_delta is not None:
+                self.db.append_event(
+                    problem_id,
+                    "manager_plan_selected",
+                    "selected",
+                    parent_event_id=boot_event,
+                    summary_md=(
+                        f"Manager selected bootstrap delta: `{manager_bootstrap_delta.title}` "
+                        f"({manager_plan.strategy_kind})."
+                    ),
+                    family_key=manager_bootstrap_delta.family_key,
+                )
         initial_worlds = [self.proposer.worldsmith.propose_world(spec, gap)]
         pref_text = " ".join(parsed.preferences)
         if "hidden-state" in pref_text and initial_worlds[0].family_key != "hidden_state":
@@ -130,7 +229,7 @@ class LimaCoreLoop:
             autopilot_enabled=True,
             since_timestamp=utc_now(),
         )
-        first_result = self.run_iteration(problem_id)
+        first_result = self.run_iteration(problem_id, forced_delta=manager_bootstrap_delta)
         problem = self.db.get_problem(problem_id)
         assert problem is not None
         return {
@@ -171,30 +270,56 @@ class LimaCoreLoop:
             summary_md=f"Selected gap `{gap['node_key']}`.",
         )
         delta = forced_delta
+        manager_plan: ManagerPlan | None = None
+        manager_selected = False
+        manager_mode = ""
         if delta is None:
+            runtime_view = detect_runtime_status(self.db, problem.id)
             snapshot = build_control_snapshot(self.db, problem.id)
-            if self.unblock_manager.should_activate(problem, snapshot):
-                suggestion = self.unblock_manager.suggest(
-                    problem=problem,
-                    gap=gap,
-                    control_snapshot=snapshot,
-                    strongest_worlds=self.db.list_world_heads(problem.id),
-                    recent_fractures=self.db.list_fracture_heads(problem.id),
-                    recent_events=self.db.list_events(problem.id, limit=max(snapshot.window_size, 20)),
-                )
-                chosen = suggestion.chosen_delta
+            runtime_mode_status = str(problem_row.get("runtime_status") or runtime_view.status or "")
+            mode = select_manager_mode(
+                runtime_mode_status,
+                snapshot,
+                event_count=len(self.db.list_events(problem.id, limit=120)),
+            )
+            manager_plan = self._run_manager(problem, gap, mode=mode, parent_event_id=select_event)
+            manager_mode = mode
+            if manager_plan is not None:
+                manager_mode = manager_plan.mode
+                chosen = manager_plan.chosen_delta
                 if chosen is not None:
                     delta = chosen
-                    plan_ref = self.db.store_artifact("unblock_plan", suggestion.to_dict())
+                    manager_selected = True
                     self.db.append_event(
                         problem.id,
-                        "unblock_plan_selected",
-                        "planned",
+                        "manager_plan_selected",
+                        "selected",
                         parent_event_id=select_event,
-                        artifact_refs=[plan_ref],
-                        summary_md=suggestion.reason_md,
-                        family_key=suggestion.suggested_family,
+                        summary_md=(
+                            f"Manager selected `{chosen.title}` in mode `{manager_plan.mode}` "
+                            f"({manager_plan.strategy_kind})."
+                        ),
+                        family_key=chosen.family_key,
                     )
+                elif manager_plan.mode == "improve_program" and manager_plan.program_patch is not None:
+                    patch_note = manager_plan.program_patch.reason_md or manager_plan.reason_md
+                    self.db.append_event(
+                        problem.id,
+                        "manager_program_patch_proposed",
+                        "proposed",
+                        parent_event_id=select_event,
+                        summary_md=patch_note,
+                        family_key=snapshot.current_family_key,
+                    )
+                    delta = DeltaProposal(
+                        delta_type="program_delta",
+                        title="Manager program patch",
+                        summary_md=patch_note,
+                        family_key=snapshot.current_family_key,
+                        target_node_key=snapshot.current_line_node_key or str(gap["node_key"]),
+                        edits={"program_patch": manager_plan.program_patch.patch},
+                    )
+                    manager_selected = True
         if delta is None:
             delta = self.proposer.propose_delta(problem, gap)
         delta_ref = self.db.store_artifact("delta_proposal", asdict(delta))
@@ -220,6 +345,19 @@ class LimaCoreLoop:
                 score_delta=score,
                 summary_md="Program delta kept after verified yield improvement." if accepted else "Program delta rejected: verified yield did not improve.",
             )
+            if manager_selected and manager_mode == "improve_program":
+                self.db.append_event(
+                    problem.id,
+                    "manager_program_patch_kept" if accepted else "manager_program_patch_reverted",
+                    "accepted" if accepted else "reverted",
+                    parent_event_id=proposed_event,
+                    score_delta=score,
+                    summary_md=(
+                        "Manager program patch kept: verified yield improved."
+                        if accepted
+                        else "Manager program patch reverted: verified yield did not improve."
+                    ),
+                )
             if accepted:
                 self.db.update_problem_runtime(problem.id, runtime_status="running", last_gain_at=utc_now())
             persist_runtime_status(self.db, problem.id)
