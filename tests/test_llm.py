@@ -115,6 +115,27 @@ def test_summarize_result_sets_provider_token_budget(monkeypatch) -> None:
     assert calls[0]["payload"]["max_tokens"] == 180
 
 
+def test_summarize_result_uses_fallback_when_llm_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(llm.app_config, "LLM_API_KEY", "test-key")
+    monkeypatch.setattr(llm.app_config, "LLM_DISABLED", True)
+
+    result = asyncio.run(llm.summarize_result("x" * 600, use_llm=True))
+
+    assert len(result) == 501
+    assert result.endswith("…")
+
+
+def test_reason_returns_skip_when_llm_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(llm.app_config, "LLM_API_KEY", "test-key")
+    monkeypatch.setattr(llm.app_config, "LLM_DISABLED", True)
+
+    decision = asyncio.run(llm.reason(None))  # type: ignore[arg-type]
+
+    assert "LLM disabled" in decision.reasoning
+    assert decision.target_updates == []
+    assert decision.new_experiments == []
+
+
 def test_invoke_llm_falls_back_to_backup_provider(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
@@ -154,5 +175,5 @@ def test_invoke_llm_falls_back_to_backup_provider(monkeypatch) -> None:
     assert calls[0]["base_url"] == "https://primary.example/v1"
     assert calls[0]["payload"]["model"] == "primary-model"
     assert calls[1]["base_url"] == "https://backup.example/v1"
-    assert calls[1]["api_key"] == "modal"
+    assert calls[1]["api_key"] == "primary-key"
     assert calls[1]["payload"]["model"] == "backup-model"

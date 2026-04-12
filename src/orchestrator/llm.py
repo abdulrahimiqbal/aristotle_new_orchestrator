@@ -325,7 +325,7 @@ async def _call_llm(system: str, user: str) -> str:
 
 
 async def decompose_prompt(prompt: str) -> list[Target]:
-    if not app_config.LLM_API_KEY:
+    if not app_config.LLM_API_KEY or app_config.LLM_DISABLED:
         return [
             Target(
                 id="",
@@ -364,7 +364,7 @@ Return JSON:
                     out.append(Target(id="", campaign_id="", description=desc))
         if out:
             return out
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError):
+    except (LLMDisabledError, httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError):
         pass
 
     return [
@@ -609,6 +609,10 @@ async def reason(state: CampaignState) -> ManagerDecision:
         return ManagerDecision(
             reasoning="LLM_API_KEY not set; skipping automated reasoning this tick.",
         )
+    if app_config.LLM_DISABLED:
+        return ManagerDecision(
+            reasoning="LLM disabled (LLM_DISABLED=1); skipping automated reasoning this tick.",
+        )
 
     system = """You are an autonomous research manager driving a formal verification campaign toward **solving the stated problem** (the campaign prompt). Aristotle runs Lean 4 proof attempts; your job is to steer **map → discovery via verification → interpret → advance**, over and over, until targets reflect real progress or well-justified blockage.
 
@@ -675,7 +679,7 @@ Return JSON:
         if not isinstance(data, dict):
             return ManagerDecision(reasoning="Invalid JSON from LLM.")
         return _parse_manager_decision(data)
-    except httpx.HTTPError as e:
+    except (LLMDisabledError, httpx.HTTPError) as e:
         return ManagerDecision(reasoning=f"LLM HTTP error: {e!s}")
     except (json.JSONDecodeError, TypeError, ValueError) as e:
         return ManagerDecision(reasoning=f"LLM parse error: {e!s}")
@@ -685,7 +689,11 @@ async def reason_skeptic(
     state: CampaignState, primary: ManagerDecision
 ) -> list[NewExperiment]:
     """Optional second pass: propose refute/explore experiments to stress-test the primary plan."""
-    if not app_config.LLM_API_KEY or not primary.new_experiments:
+    if (
+        not app_config.LLM_API_KEY
+        or app_config.LLM_DISABLED
+        or not primary.new_experiments
+    ):
         return []
 
     system = """You are a skeptical reviewer for a Lean 4 / Aristotle formal verification campaign.
@@ -759,7 +767,7 @@ If nothing useful to add, return {"new_experiments": []}."""
                 )
             )
         return out[: app_config.SKEPTIC_PASS_MAX_EXPERIMENTS]
-    except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
+    except (LLMDisabledError, httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
         return []
 
 
@@ -773,7 +781,7 @@ async def update_problem_map(
     targets_summary: str,
 ) -> str | None:
     """LLM refresh of problem_map_json. Returns serialized JSON or None on failure/skip."""
-    if not app_config.LLM_API_KEY:
+    if not app_config.LLM_API_KEY or app_config.LLM_DISABLED:
         return None
 
     prev = parse_problem_map(previous_map_json)
@@ -840,7 +848,7 @@ Produce an updated full problem map JSON (all keys required). Set node statuses 
             data, previous=prev, tick_number=tick_number
         )
         return json.dumps(coerced, ensure_ascii=False)
-    except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
+    except (LLMDisabledError, httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
         return None
 
 
@@ -854,7 +862,7 @@ async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
 
     cap = app_config.LLM_SUMMARIZE_INPUT_CHARS
 
-    if not app_config.LLM_API_KEY or not use_llm:
+    if not app_config.LLM_API_KEY or app_config.LLM_DISABLED or not use_llm:
         return _summarize_fallback(raw_output)
 
     system = (
@@ -882,5 +890,5 @@ async def summarize_result(raw_output: str, *, use_llm: bool = True) -> str:
         )
         text = _extract_message_text(data["choices"][0]["message"])
         return text or _summarize_fallback(raw_output)
-    except (httpx.HTTPError, KeyError, TypeError):
+    except (LLMDisabledError, httpx.HTTPError, KeyError, TypeError):
         return _summarize_fallback(raw_output)
