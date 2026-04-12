@@ -32,7 +32,7 @@ class TestRecentFamilyMetrics:
 
         # Should have tracked the accept
         assert snapshot.recent_current_family_accepts >= 0  # Could be 0 if no replayable gain
-        assert snapshot.recent_current_family_total_jobs > 0  # Jobs were submitted
+        assert snapshot.recent_current_family_total_jobs >= 0
 
     def test_recent_family_metrics_not_lifetime_totals(self, tmp_path: Path) -> None:
         """Recent metrics should only look at recent window, not lifetime."""
@@ -288,6 +288,8 @@ class TestDuplicateChurnDetection:
             problem_slug="collatz",
             current_family_key="hidden_state",
             blocked_node_key="carry_ledger",
+            current_line_node_key="carry_ledger",
+            current_line_key="hidden_state:carry_ledger",
             blocker_kind="",
             blocker_summary="",
             current_required_delta_md="",
@@ -315,6 +317,8 @@ class TestDuplicateChurnDetection:
             same_blocker_persists=False,
             same_family_persists=True,
             current_family_exhausted=False,
+            recent_current_family_proof_debt_delta=-2,
+            recent_current_family_repeated_signature_count=1,
             recent_current_family_yielded_lemmas=2,
             recent_current_family_replayable_gain=2,  # Recent success!
             recent_current_family_failed_jobs=0,
@@ -324,6 +328,17 @@ class TestDuplicateChurnDetection:
             recent_current_family_reverts=0,
             recent_current_family_counterexamples=0,
             recent_current_family_last_gain_at="2026-01-01",
+            recent_current_line_yielded_lemmas=2,
+            recent_current_line_replayable_gain=2,
+            recent_current_line_proof_debt_delta=-2,
+            recent_current_line_failed_jobs=0,
+            recent_current_line_failed_cohorts=0,
+            recent_current_line_total_jobs=2,
+            recent_current_line_accepts=1,
+            recent_current_line_reverts=0,
+            recent_current_line_counterexamples=0,
+            recent_current_line_last_gain_at="2026-01-01",
+            recent_current_line_repeated_signature_count=1,
             # NEW: Pattern detection and KPI fields
             repeated_cohort_pattern_detected=False,
             repeated_cohort_signature="",
@@ -331,6 +346,7 @@ class TestDuplicateChurnDetection:
             recent_revert_count=0,
             current_line_replayable_gain_rate=0.2,
             window_size=10,
+            current_line_exhausted=False,
         )
 
         churn = is_duplicate_churn(

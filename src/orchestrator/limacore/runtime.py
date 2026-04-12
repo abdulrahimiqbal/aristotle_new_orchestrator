@@ -161,10 +161,10 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         "current_family_exhausted": snapshot.current_family_exhausted,
         "repeated_cohort_pattern_detected": snapshot.repeated_cohort_pattern_detected,
         "repeated_cohort_signature": snapshot.repeated_cohort_signature,
-        "recent_current_family_replayable_gain": snapshot.recent_current_family_replayable_gain,
-        "recent_current_family_yielded_lemmas": snapshot.recent_current_family_yielded_lemmas,
-        "recent_accept_count": snapshot.recent_accept_count,
-        "recent_revert_count": snapshot.recent_revert_count,
+        "recent_current_family_replayable_gain": snapshot.recent_current_line_replayable_gain,
+        "recent_current_family_yielded_lemmas": snapshot.recent_current_line_yielded_lemmas,
+        "recent_accept_count": snapshot.recent_current_line_accepts,
+        "recent_revert_count": snapshot.recent_current_line_reverts,
     }
 
     def _view(**kwargs: Any) -> RuntimeStatusView:
@@ -197,24 +197,24 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         )
 
     blocked_node = next((node for node in frontier if str(node.get("status") or "") == "blocked"), None)
-    current_family_recently_dead = (
-        snapshot.recent_current_family_replayable_gain <= 0
-        and snapshot.recent_current_family_yielded_lemmas == 0
-        and snapshot.recent_current_family_failed_jobs >= 4
-        and snapshot.recent_current_family_failed_cohorts >= 2
+    current_line_recently_dead = (
+        snapshot.recent_current_line_replayable_gain <= 0
+        and snapshot.recent_current_line_yielded_lemmas == 0
+        and snapshot.recent_current_line_failed_jobs >= 4
+        and snapshot.recent_current_line_failed_cohorts >= 2
     )
+    line_is_stale = snapshot.current_line_exhausted or current_line_recently_dead
 
     blocked_now = bool(
         blocked_node
         and (
-            snapshot.current_family_exhausted
+            line_is_stale
             or snapshot.same_blocker_persists
-            or current_family_recently_dead
             or (
                 snapshot.recent_replayable_gain <= 0
                 and snapshot.recent_proof_debt_delta >= 0
                 and snapshot.recent_fracture_gain <= 0
-                and snapshot.recent_current_family_replayable_gain <= 0
+                and snapshot.recent_current_line_replayable_gain <= 0
             )
         )
     )
@@ -240,14 +240,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_gain_at=str(problem.get("last_gain_at") or ""),
         )
 
-    if stored_status == "running" and not events and blocked_node is None:
-        return _view(
-            status="running",
-            reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
-            last_gain_at=str(problem.get("last_gain_at") or ""),
-        )
-
-    if stored_status == "running" and snapshot.recent_replayable_gain > 0:
+    if stored_status == "running" and not line_is_stale:
         return _view(
             status="running",
             reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
@@ -262,10 +255,19 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_meaningful_change_at=str(problem.get("created_at") or ""),
         )
 
+    if runtime_status == "stalled" and not line_is_stale:
+        return _view(
+            status="stalled",
+            reason=str(problem.get("status_reason_md") or "Stalled: no replayable formal gain in the last window."),
+            stalled_iteration_window=stall_window,
+            stalled_since=str(problem.get("stalled_since") or events[-1]["created_at"] if events else problem.get("created_at") or ""),
+            last_gain_at=str(problem.get("last_gain_at") or ""),
+        )
+
     has_recent_real_movement = (
         snapshot.recent_replayable_gain > 0
-        or snapshot.recent_current_family_replayable_gain > 0
-        or snapshot.recent_current_family_accepts > 0
+        or snapshot.recent_current_line_replayable_gain > 0
+        or snapshot.recent_current_line_accepts > 0
     )
 
     if snapshot.live_family_count >= 2 and has_recent_real_movement:
@@ -275,22 +277,22 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             last_gain_at=str(problem.get("last_gain_at") or ""),
         )
 
-    if snapshot.live_family_count >= 2 and not snapshot.current_family_exhausted and has_recent_real_movement:
+    if snapshot.live_family_count >= 2 and not line_is_stale and has_recent_real_movement:
         return _view(
             status="running",
             reason="Running: multiple non-stale world lines are active.",
         )
 
-    if snapshot.current_family_exhausted and blocked_node is not None:
+    if line_is_stale and blocked_node is not None:
         return _view(
             status="blocked",
-            reason=str(problem.get("status_reason_md") or f"Blocked: family {snapshot.current_family_key} is exhausted."),
+            reason=str(problem.get("status_reason_md") or f"Blocked: current line {snapshot.current_line_key} is exhausted."),
             blocked_node_key=snapshot.blocked_node_key,
             blocker_kind=snapshot.blocker_kind,
             blocker_summary=snapshot.blocker_summary,
         )
 
-    if stored_status == "running" and (events or frontier) and snapshot.recent_replayable_gain > 0:
+    if stored_status == "running" and (events or frontier) and not line_is_stale:
         return _view(
             status="running",
             reason=str(problem.get("status_reason_md") or "Running: autopilot active."),
@@ -298,10 +300,10 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
         )
 
     return _view(
-        status="stalled" if snapshot.recent_replayable_gain <= 0 else "running",
+        status="stalled" if line_is_stale else "running",
         reason=(
-            "Stalled: no replayable formal gain in the last window."
-            if snapshot.recent_replayable_gain <= 0
+            "Stalled: no replayable formal gain on the current line in the last window."
+            if line_is_stale
             else "Running: autopilot active."
         ),
         last_gain_at=str(problem.get("last_gain_at") or ""),

@@ -78,9 +78,8 @@ class Proposer:
         # FIXED: Collatz proposer now checks current family before emitting kill cohorts
         if problem.slug == "collatz":
             current_family = snapshot.current_family_key
-            
-            # Only emit "Kill stale quotient world" if current family IS quotient
-            if current_family == "quotient":
+
+            if current_family == "quotient" and not snapshot.current_family_exhausted:
                 required_delta = snapshot.current_required_delta_md or "Rotate away from the stale quotient family before retrying the same frontier line."
                 return DeltaProposal(
                     delta_type="kill_delta",
@@ -97,8 +96,7 @@ class Proposer:
                         "obligations": ["bounded odd-step expansion fails on a small witness"],
                     },
                 )
-            
-            # If current family is hidden_state, prefer hidden-state bridge/local-law/reduction deltas
+
             if current_family == "hidden_state":
                 return DeltaProposal(
                     delta_type="lemma_delta",
@@ -118,28 +116,27 @@ class Proposer:
                         ],
                     },
                 )
-            
-            # If current family is exhausted, rotate to a different family (not back to quotient)
+
             if snapshot.current_family_exhausted and current_family:
-                rotation_family = snapshot.suggested_family_key
-                if rotation_family and rotation_family != current_family and rotation_family != "quotient":
-                    packet = self.worldsmith.propose_world(
-                        problem,
-                        gap,
-                        preferred_family_key=rotation_family,
-                        avoid_family_keys={current_family, "quotient"},  # Avoid exhausted family and quotient
-                    ).world_packet
-                    if packet is not None:
-                        return DeltaProposal(
-                            delta_type="world_delta",
-                            title=packet.world_name,
-                            summary_md=packet.novelty_note,
-                            family_key=packet.family_key,
-                            world_packet=packet,
-                            target_node_key=str(gap["node_key"]),
-                        )
-            
-            # For any other family or if rotation failed, propose a world rotation away from stale lines
+                rotation_family = snapshot.suggested_family_key or "hidden_state"
+                if rotation_family == current_family:
+                    rotation_family = "hidden_state" if current_family != "hidden_state" else "cocycle"
+                packet = self.worldsmith.propose_world(
+                    problem,
+                    gap,
+                    preferred_family_key=rotation_family,
+                    avoid_family_keys={current_family},
+                ).world_packet
+                if packet is not None:
+                    return DeltaProposal(
+                        delta_type="world_delta",
+                        title=packet.world_name,
+                        summary_md=packet.novelty_note,
+                        family_key=packet.family_key,
+                        world_packet=packet,
+                        target_node_key=str(gap["node_key"]),
+                    )
+
             packet = self.worldsmith.propose_world(
                 problem,
                 gap,

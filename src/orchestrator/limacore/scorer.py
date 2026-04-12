@@ -95,21 +95,18 @@ def score_results(
         theorem_skeleton_md=theorem_skeleton_md,
         replayable_gain=replayable_gain,
         proof_debt_delta=proof_debt_delta,
-        yielded_lemmas=snapshot.recent_current_family_yielded_lemmas,  # FIXED: Use recent family metrics
+        yielded_lemmas=snapshot.recent_current_line_yielded_lemmas,
+        current_line_node_key=snapshot.current_line_node_key,
     )
     
     # NEW: Calculate maintenance churn penalty
     churn_penalty = maintenance_churn_penalty(snapshot)
-    
-    # STRONGER rejection: repeated maintenance cohorts with same outcomes
+
     repeated_maintenance_pattern = (
         snapshot.repeated_cohort_pattern_detected
-        and replayable_gain == 0
-        and proof_debt_delta == 0
-        and not required_delta_changed
-        and not theorem_skeleton_changed
+        or snapshot.recent_current_line_repeated_signature_count >= 3
     )
-    
+
     narrative_only = (
         replayable_gain == 0
         and proof_debt_delta == 0
@@ -117,27 +114,30 @@ def score_results(
         and not required_delta_md.strip()
         and not theorem_skeleton_md.strip()
     )
-    
+
     novelty = max(0.0, (delta.world_packet.confidence_prior if delta.world_packet else 0.4) - duplication_penalty - churn_penalty)
-    
-    # World rotation only accepted if it materially changes trajectory
+
     world_rotation = (
         delta.delta_type == "world_delta"
         and delta.world_packet is not None
         and not duplicate_churn
         and (required_delta_changed or theorem_skeleton_changed or not snapshot.same_family_persists)
     )
-    
-    # STRONGER acceptance criteria:
-    # 1. Replayable gain > 0 (real structure)
-    # 2. Proof debt reduced (frontier advanced)
-    # 3. Material world rotation (different family/trajectory)
-    # 4. Actionable fracture with low penalties
-    # REJECTED: repeated maintenance churn, narrative-only, duplicate patterns
+
+    repeated_current_line_churn = (
+        delta.family_key == snapshot.current_family_key
+        and snapshot.current_line_node_key == (snapshot.blocked_node_key or delta.target_node_key)
+        and replayable_gain == 0
+        and proof_debt_delta == 0
+        and snapshot.recent_current_line_accepts == 0
+        and repeated_maintenance_pattern
+    )
+
     accepted = (
         not narrative_only
         and not duplicate_churn
         and not repeated_maintenance_pattern
+        and not repeated_current_line_churn
         and (
             replayable_gain > 0
             or proof_debt_delta < 0
@@ -158,7 +158,9 @@ def score_results(
         summary_parts.append(f"pattern={snapshot.repeated_cohort_signature}")
     if repeated_maintenance_pattern:
         summary_parts.append("repeated_maintenance_rejected")
-    
+    if repeated_current_line_churn:
+        summary_parts.append("current_line_stale")
+
     summary = "; ".join(summary_parts)
     
     return ScoreDelta(

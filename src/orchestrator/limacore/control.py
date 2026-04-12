@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,6 +73,22 @@ class ControlSnapshot:
     # NEW: Current-line KPIs
     current_line_replayable_gain_rate: float
     window_size: int
+    current_line_node_key: str = ""
+    current_line_key: str = ""
+    recent_current_family_proof_debt_delta: int = 0
+    recent_current_family_repeated_signature_count: int = 0
+    recent_current_line_yielded_lemmas: int = 0
+    recent_current_line_replayable_gain: int = 0
+    recent_current_line_proof_debt_delta: int = 0
+    recent_current_line_failed_jobs: int = 0
+    recent_current_line_failed_cohorts: int = 0
+    recent_current_line_total_jobs: int = 0
+    recent_current_line_accepts: int = 0
+    recent_current_line_reverts: int = 0
+    recent_current_line_counterexamples: int = 0
+    recent_current_line_last_gain_at: str = ""
+    recent_current_line_repeated_signature_count: int = 0
+    current_line_exhausted: bool = False
 
 
 def _family_key_for_world_id(world_id: str | None, problem_id: str) -> str:
@@ -115,8 +132,32 @@ def _recent_reverts(events: list[dict[str, Any]]) -> int:
     return sum(1 for event in events if str(event.get("decision") or "") == "reverted" or str(event.get("event_type") or "") == "delta_reverted")
 
 
-def _current_family_failed_jobs(db: LimaCoreDB, problem_id: str, family_key: str) -> tuple[int, int, int]:
-    """Get lifetime failed jobs for current family (for backward compatibility)."""
+def _current_line_key(family_key: str, frontier_node_key: str) -> str:
+    if not family_key or not frontier_node_key:
+        return ""
+    return f"{family_key}:{frontier_node_key}"
+
+
+def _current_frontier_node_key(frontier: list[dict[str, Any]], blocked_node: dict[str, Any] | None) -> str:
+    if blocked_node is not None:
+        key = str(blocked_node.get("node_key") or "")
+        if key:
+            return key
+    target = next((node for node in frontier if str(node.get("node_key") or "") == "target_theorem"), None)
+    if target is not None:
+        return str(target.get("node_key") or "")
+    open_node = next((node for node in frontier if str(node.get("status") or "") == "open"), None)
+    if open_node is not None:
+        return str(open_node.get("node_key") or "")
+    return str(frontier[0].get("node_key") or "") if frontier else ""
+
+
+def _current_family_failed_jobs(
+    db: LimaCoreDB,
+    problem_id: str,
+    family_key: str,
+    frontier_node_key: str = "",
+) -> tuple[int, int, int]:
     if not family_key:
         return 0, 0, 0
     family_cohorts = [
@@ -124,6 +165,15 @@ def _current_family_failed_jobs(db: LimaCoreDB, problem_id: str, family_key: str
         for cohort in db.list_cohorts(problem_id)
         if _family_key_for_world_id(str(cohort.get("world_id") or ""), problem_id) == family_key
     ]
+    if frontier_node_key:
+        family_cohorts = [
+            cohort
+            for cohort in family_cohorts
+            if any(
+                str(job.get("frontier_node_key") or "") == frontier_node_key
+                for job in db.list_jobs(problem_id, cohort_id=str(cohort.get("id") or ""))
+            )
+        ]
     failed_jobs = 0
     total_jobs = 0
     failed_cohorts = 0
@@ -135,22 +185,36 @@ def _current_family_failed_jobs(db: LimaCoreDB, problem_id: str, family_key: str
     return failed_cohorts, failed_jobs, total_jobs
 
 
-def _recent_family_metrics(
+def _line_signature(
+    family_key: str,
+    frontier_node_key: str,
+    cohort: dict[str, Any],
+) -> str:
+    return "|".join(
+        [
+            family_key,
+            frontier_node_key,
+            str(cohort.get("title") or ""),
+            str(int(cohort.get("yielded_lemmas") or 0)),
+            str(int(cohort.get("failed_jobs") or 0)),
+            str(int(cohort.get("succeeded_jobs") or 0)),
+        ]
+    )
+
+
+def _recent_current_line_metrics(
     db: LimaCoreDB,
     problem_id: str,
     family_key: str,
+    frontier_node_key: str,
     recent_events: list[dict[str, Any]],
     window: int = 10,
 ) -> dict[str, Any]:
-    """Compute recent current-family specific metrics (not lifetime problem-wide).
-    
-    This is the key fix: instead of using lifetime totals, we look at recent
-    current-family activity to determine if the current line is actually making progress.
-    """
     if not family_key:
         return {
             "yielded_lemmas": 0,
             "replayable_gain": 0,
+            "proof_debt_delta": 0,
             "failed_jobs": 0,
             "failed_cohorts": 0,
             "total_jobs": 0,
@@ -158,34 +222,52 @@ def _recent_family_metrics(
             "reverts": 0,
             "counterexamples": 0,
             "last_gain_at": "",
+            "repeated_signature_count": 0,
+            "repeated_signature": "",
         }
-    
-    # Get recent cohorts for this family (limit to recent window)
+
     all_cohorts = db.list_cohorts(problem_id)
-    family_cohorts = [
+    line_cohorts = [
         cohort
         for cohort in all_cohorts
         if _family_key_for_world_id(str(cohort.get("world_id") or ""), problem_id) == family_key
     ]
-    # Sort by updated_at and take most recent
-    family_cohorts.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
-    recent_family_cohorts = family_cohorts[:window]
-    
-    yielded_lemmas = sum(int(c.get("yielded_lemmas") or 0) for c in recent_family_cohorts)
-    failed_jobs = sum(int(c.get("failed_jobs") or 0) for c in recent_family_cohorts)
-    total_jobs = sum(int(c.get("total_jobs") or 0) for c in recent_family_cohorts)
-    counterexamples = sum(int(c.get("yielded_counterexamples") or 0) for c in recent_family_cohorts)
-    
+    if frontier_node_key:
+        line_cohorts = [
+            cohort
+            for cohort in line_cohorts
+            if any(
+                str(job.get("frontier_node_key") or "") == frontier_node_key
+                for job in db.list_jobs(problem_id, cohort_id=str(cohort.get("id") or ""))
+            )
+        ]
+    line_cohorts.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+    recent_line_cohorts = line_cohorts[:window]
+
+    yielded_lemmas = sum(int(c.get("yielded_lemmas") or 0) for c in recent_line_cohorts)
+    failed_jobs = sum(int(c.get("failed_jobs") or 0) for c in recent_line_cohorts)
+    total_jobs = sum(int(c.get("total_jobs") or 0) for c in recent_line_cohorts)
+    counterexamples = sum(int(c.get("yielded_counterexamples") or 0) for c in recent_line_cohorts)
     failed_cohorts = sum(
-        1 for c in recent_family_cohorts
+        1
+        for c in recent_line_cohorts
         if int(c.get("failed_jobs") or 0) > 0 and int(c.get("yielded_lemmas") or 0) == 0
     )
-    
-    # Count accepts/reverts from recent events for this family
+
+    signatures = [
+        _line_signature(family_key, frontier_node_key, cohort)
+        for cohort in recent_line_cohorts
+        if int(cohort.get("total_jobs") or 0) > 0
+    ]
+    signature = ""
+    signature_count = 0
+    if signatures:
+        counts = Counter(signatures)
+        signature, signature_count = counts.most_common(1)[0]
+
     accepts = 0
     reverts = 0
     last_gain_at = ""
-    
     for event in recent_events:
         event_family = str(event.get("family_key") or "")
         if event_family == family_key:
@@ -197,17 +279,22 @@ def _recent_family_metrics(
                     last_gain_at = str(event.get("created_at") or last_gain_at)
             elif decision == "reverted":
                 reverts += 1
-    
-    # Compute replayable gain from recent events for this family
+
     replayable_gain = sum(
         int((event.get("score_delta") or {}).get("replayable_gain", 0))
         for event in recent_events
         if str(event.get("family_key") or "") == family_key
     )
-    
+    proof_debt_delta = sum(
+        int((event.get("score_delta") or {}).get("proof_debt_delta", 0))
+        for event in recent_events
+        if str(event.get("family_key") or "") == family_key
+    )
+
     return {
         "yielded_lemmas": yielded_lemmas,
         "replayable_gain": replayable_gain,
+        "proof_debt_delta": proof_debt_delta,
         "failed_jobs": failed_jobs,
         "failed_cohorts": failed_cohorts,
         "total_jobs": total_jobs,
@@ -215,6 +302,8 @@ def _recent_family_metrics(
         "reverts": reverts,
         "counterexamples": counterexamples,
         "last_gain_at": last_gain_at,
+        "repeated_signature_count": signature_count,
+        "repeated_signature": signature,
     }
 
 
@@ -266,12 +355,15 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
     theorem_node = next((node for node in frontier if str(node.get("node_key") or "") == "terminal_form_uniqueness"), None)
     current_theorem_skeleton_md = str((theorem_node or {}).get("formal_statement") or (theorem_node or {}).get("statement_md") or "")
     
+    current_line_node_key = _current_frontier_node_key(frontier, blocked_node)
+    current_line_key = _current_line_key(current_family_key, current_line_node_key)
+
     # Recent metrics (problem-wide window)
     recent_replayable_gain = _sum_score_delta(recent, "replayable_gain")
     recent_proof_debt_delta = _sum_score_delta(recent, "proof_debt_delta")
     recent_fracture_gain = _sum_score_delta(recent, "fracture_gain")
     recent_reverts = _recent_reverts(recent)
-    
+
     # Lifetime problem-wide totals (for backward compatibility, but not used for control decisions)
     yielded_lemmas = sum(int(cohort.get("yielded_lemmas") or 0) for cohort in db.list_cohorts(problem_id))
     total_jobs = len(jobs)
@@ -279,33 +371,37 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
     running_jobs = sum(1 for job in jobs if str(job.get("status") or "") == "running")
     queued_jobs = sum(1 for job in jobs if str(job.get("status") or "") == "queued")
     succeeded_jobs = sum(1 for job in jobs if str(job.get("status") or "") == "succeeded")
-    
-    # Legacy lifetime family metrics (for backward compatibility)
-    failed_cohorts, current_family_failed_jobs, current_family_total_jobs = _current_family_failed_jobs(db, problem_id, current_family_key)
-    
-    # NEW: Recent current-family specific metrics (the key fix)
-    recent_family_metrics = _recent_family_metrics(db, problem_id, current_family_key, recent, window)
-    
-    # NEW: Detect repeated cohort patterns
-    pattern_detected, pattern_signature = _detect_repeated_cohort_pattern(
-        db, problem_id, current_family_key, recent, window
+
+    # Line-specific metrics: current family + current frontier node
+    current_line_metrics = _recent_current_line_metrics(
+        db,
+        problem_id,
+        current_family_key,
+        current_line_node_key,
+        recent,
+        window,
     )
-    
-    # NEW: Count accepts/reverts in recent window
+    failed_cohorts, current_family_failed_jobs, current_family_total_jobs = _current_family_failed_jobs(
+        db,
+        problem_id,
+        current_family_key,
+        current_line_node_key,
+    )
+
+    pattern_detected, pattern_signature, pattern_count = _detect_repeated_cohort_pattern(
+        db,
+        problem_id,
+        current_family_key,
+        current_line_node_key,
+        window,
+    )
+
     accept_count = _recent_accept_count(events, window)
     revert_count = _recent_revert_count(events, window)
-    
-    # NEW: Calculate current-line replayable gain rate
-    gain_rate = _current_line_replayable_gain_rate(recent_family_metrics, window)
-    
+    gain_rate = _current_line_replayable_gain_rate(current_line_metrics, window)
+
     active_alternative_families = _live_family_keys(worlds, current_family_key=current_family_key)
     live_family_count = len(active_alternative_families) + (1 if current_family_key else 0)
-    current_family_repeat_count = 0
-    if current_family_key:
-        current_family_repeat_count = max(
-            (int(row.get("repeat_count") or 0) for row in fractures if str(row.get("family_key") or "") == current_family_key),
-            default=0,
-        )
     same_blocker_persists = bool(
         blocked_node
         and (
@@ -314,35 +410,34 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
         )
     )
     same_family_persists = bool(worlds and current_family_key and current_family_key == str(worlds[0].get("family_key") or ""))
-    
-    # NEW: Use recent current-family metrics for exhaustion, not lifetime problem totals
-    no_recent_verified_progress = recent_family_metrics["replayable_gain"] <= 0
-    recent_family_yields_nothing = recent_family_metrics["yielded_lemmas"] == 0
-    recent_family_failing = (
-        recent_family_metrics["failed_cohorts"] >= 2
-        or recent_family_metrics["failed_jobs"] >= 4
-        or (current_family_repeat_count >= 2 and recent_family_metrics["reverts"] >= 2)
+
+    line_no_progress = (
+        current_line_metrics["replayable_gain"] <= 0
+        and current_line_metrics["accepts"] == 0
+        and current_line_metrics["proof_debt_delta"] >= 0
     )
-    
-    # FIXED: Family exhaustion now uses recent current-family metrics, not lifetime totals
-    # This allows a currently dead line to become exhausted even if the problem had earlier successes
-    current_family_exhausted = bool(
-        current_family_key
+    line_exhausted_by_pattern = (
+        current_line_metrics["repeated_signature_count"] >= 3
+        or current_line_metrics["failed_cohorts"] >= 2
+        or current_line_metrics["failed_jobs"] >= 4
+    )
+    current_line_exhausted_flag = bool(
+        current_line_key
         and same_blocker_persists
-        and no_recent_verified_progress
-        and recent_family_yields_nothing  # KEY FIX: uses recent family yield, not lifetime problem total
-        and recent_family_failing  # KEY FIX: uses recent family failures
-        and same_family_persists  # Family hasn't changed
+        and line_no_progress
+        and line_exhausted_by_pattern
+        and same_family_persists
     )
-    
-    exhausted_family_key = current_family_key if current_family_exhausted else ""
+
+    exhausted_family_key = current_family_key if current_line_exhausted_flag else ""
     exhausted_reason = ""
-    if current_family_exhausted:
+    if current_line_exhausted_flag:
         exhausted_reason = (
-            f"Family {current_family_key} is exhausted after {recent_family_metrics['failed_cohorts']} failed cohorts "
-            f"({recent_family_metrics['failed_jobs']} failed jobs) with zero replayable gain in recent window, "
-            f"and the same blocker persisting."
+            f"Current line {current_line_key} is exhausted after {current_line_metrics['failed_cohorts']} failed cohorts "
+            f"({current_line_metrics['failed_jobs']} failed jobs), zero replayable gain in the recent window, "
+            f"and repeated identical maintenance."
         )
+    current_line_replayable_gain_rate = _current_line_replayable_gain_rate(current_line_metrics, window)
     return ControlSnapshot(
         problem_id=problem_id,
         problem_slug=str(problem.get("slug") or ""),
@@ -367,36 +462,50 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
         succeeded_jobs=succeeded_jobs,
         total_jobs=total_jobs,
         failed_cohorts=failed_cohorts,
-        current_family_failed_cohorts=recent_family_metrics["failed_cohorts"],  # Now uses recent metrics
-        current_family_failed_jobs=recent_family_metrics["failed_jobs"],  # Now uses recent metrics
-        current_family_total_jobs=recent_family_metrics["total_jobs"],  # Now uses recent metrics
+        current_family_failed_cohorts=current_line_metrics["failed_cohorts"],
+        current_family_failed_jobs=current_line_metrics["failed_jobs"],
+        current_family_total_jobs=current_line_metrics["total_jobs"],
         live_family_count=live_family_count,
         active_alternative_families=active_alternative_families,
         same_blocker_persists=same_blocker_persists,
         same_family_persists=same_family_persists,
-        current_family_exhausted=current_family_exhausted,
-        # NEW: Recent current-family specific metrics
-        recent_current_family_yielded_lemmas=recent_family_metrics["yielded_lemmas"],
-        recent_current_family_replayable_gain=recent_family_metrics["replayable_gain"],
-        recent_current_family_failed_jobs=recent_family_metrics["failed_jobs"],
-        recent_current_family_failed_cohorts=recent_family_metrics["failed_cohorts"],
-        recent_current_family_total_jobs=recent_family_metrics["total_jobs"],
-        recent_current_family_accepts=recent_family_metrics["accepts"],
-        recent_current_family_reverts=recent_family_metrics["reverts"],
-        recent_current_family_counterexamples=recent_family_metrics["counterexamples"],
-        recent_current_family_last_gain_at=recent_family_metrics["last_gain_at"],
-        # NEW: Repeated cohort pattern detection and current-line KPIs
+        current_family_exhausted=current_line_exhausted_flag,
+        recent_current_family_yielded_lemmas=current_line_metrics["yielded_lemmas"],
+        recent_current_family_replayable_gain=current_line_metrics["replayable_gain"],
+        recent_current_family_failed_jobs=current_line_metrics["failed_jobs"],
+        recent_current_family_failed_cohorts=current_line_metrics["failed_cohorts"],
+        recent_current_family_total_jobs=current_line_metrics["total_jobs"],
+        recent_current_family_accepts=current_line_metrics["accepts"],
+        recent_current_family_reverts=current_line_metrics["reverts"],
+        recent_current_family_counterexamples=current_line_metrics["counterexamples"],
+        recent_current_family_last_gain_at=current_line_metrics["last_gain_at"],
         repeated_cohort_pattern_detected=pattern_detected,
-        repeated_cohort_signature=pattern_signature,
+        repeated_cohort_signature=pattern_signature or str(current_line_metrics["repeated_signature"] or ""),
         recent_accept_count=accept_count,
         recent_revert_count=revert_count,
-        current_line_replayable_gain_rate=gain_rate,
+        current_line_replayable_gain_rate=current_line_replayable_gain_rate,
         window_size=window,
+        current_line_node_key=current_line_node_key,
+        current_line_key=current_line_key,
+        recent_current_family_proof_debt_delta=current_line_metrics["proof_debt_delta"],
+        recent_current_family_repeated_signature_count=current_line_metrics["repeated_signature_count"],
+        recent_current_line_yielded_lemmas=current_line_metrics["yielded_lemmas"],
+        recent_current_line_replayable_gain=current_line_metrics["replayable_gain"],
+        recent_current_line_proof_debt_delta=current_line_metrics["proof_debt_delta"],
+        recent_current_line_failed_jobs=current_line_metrics["failed_jobs"],
+        recent_current_line_failed_cohorts=current_line_metrics["failed_cohorts"],
+        recent_current_line_total_jobs=current_line_metrics["total_jobs"],
+        recent_current_line_accepts=current_line_metrics["accepts"],
+        recent_current_line_reverts=current_line_metrics["reverts"],
+        recent_current_line_counterexamples=current_line_metrics["counterexamples"],
+        recent_current_line_last_gain_at=current_line_metrics["last_gain_at"],
+        recent_current_line_repeated_signature_count=pattern_count or int(current_line_metrics["repeated_signature_count"] or 0),
+        current_line_exhausted=current_line_exhausted_flag,
     )
 
 
 def family_exhausted(snapshot: ControlSnapshot) -> bool:
-    return snapshot.current_family_exhausted
+    return snapshot.current_line_exhausted
 
 
 def is_duplicate_churn(
@@ -410,79 +519,85 @@ def is_duplicate_churn(
     replayable_gain: int,
     proof_debt_delta: int,
     yielded_lemmas: int,
+    current_line_node_key: str = "",
 ) -> bool:
-    # FIXED: Now uses recent current-family metrics, not lifetime problem totals
-    # This ensures repeated zero-gain same-family same-frontier churn is rejected
-    
-    # Check if the current family had a recent ACCEPTED delta with replayable gain
-    # If so, the family is healthy and we shouldn't mark it as churn
-    had_recent_success = (
-        snapshot.recent_current_family_accepts > 0
-        and snapshot.recent_current_family_replayable_gain > 0
+    line_node_key = current_line_node_key or blocked_node_key
+    snapshot_line_node_key = snapshot.current_line_node_key or snapshot.blocked_node_key
+    same_line = (
+        family_key == snapshot.current_family_key
+        and line_node_key == snapshot_line_node_key
     )
-    
-    # If the family recently succeeded with replayable gain, don't consider it churn
+
+    had_recent_success = (
+        snapshot.recent_current_line_accepts > 0
+        and snapshot.recent_current_line_replayable_gain > 0
+    )
+
     if had_recent_success:
         return False
-    
-    # Check for recent activity that indicates the family is trying but failing
+
     has_recent_family_attempts = (
-        snapshot.recent_current_family_total_jobs > 0
-        or snapshot.recent_current_family_reverts > 0
-        or snapshot.recent_current_family_accepts > 0  # Also count accepts that didn't yield replayable gain
+        snapshot.recent_current_line_total_jobs > 0
+        or snapshot.recent_current_line_reverts > 0
+        or snapshot.recent_current_line_accepts > 0
     )
-    
+
     if has_recent_family_attempts:
-        # Family has been trying but without replayable success
-        recent_family_no_yield = snapshot.recent_current_family_yielded_lemmas == 0
-        recent_family_no_gain = snapshot.recent_current_family_replayable_gain <= 0
-        # Consider it "failing" if there are reverts OR if accepts didn't produce replayable gain
+        recent_family_no_yield = snapshot.recent_current_line_yielded_lemmas == 0
+        recent_family_no_gain = snapshot.recent_current_line_replayable_gain <= 0
         recent_family_failing = (
-            snapshot.recent_current_family_reverts >= 1
-            or snapshot.recent_current_family_failed_cohorts >= 1
-            or (snapshot.recent_current_family_accepts > 0 and snapshot.recent_current_family_replayable_gain <= 0)
+            snapshot.recent_current_line_reverts >= 1
+            or snapshot.recent_current_line_failed_cohorts >= 1
+            or (snapshot.recent_current_line_accepts > 0 and snapshot.recent_current_line_replayable_gain <= 0)
         )
     else:
-        # No recent activity - use the delta's own metrics
         recent_family_no_yield = yielded_lemmas == 0
         recent_family_no_gain = replayable_gain == 0
         recent_family_failing = False
-    
-    # Base churn: same family, same blocker, no replayable progress
+
     same_family_and_blocker = (
-        family_key == snapshot.current_family_key
+        same_line
         and blocked_node_key == snapshot.blocked_node_key
         and blocker_kind == snapshot.blocker_kind
     )
-    
+
     no_progress = (
         replayable_gain == 0
         and proof_debt_delta == 0
         and yielded_lemmas == 0
     )
-    
-    # RELAXED: required_delta_md check
-    # If delta provides required_delta_md but snapshot doesn't have one, it's still churn
-    # if all other conditions match (same family, same blocker, no progress)
+
     required_delta_similar = (
         required_delta_md.strip() == snapshot.current_required_delta_md.strip()
         or (required_delta_md.strip() and not snapshot.current_required_delta_md.strip())
     )
-    
+
     theorem_skeleton_similar = (
         theorem_skeleton_md.strip() == snapshot.current_theorem_skeleton_md.strip()
         or not snapshot.current_theorem_skeleton_md.strip()
     )
-    
+
     base_churn = (
         no_progress
         and same_family_and_blocker
         and required_delta_similar
         and theorem_skeleton_similar
     )
-    
-    # Duplicate churn = same pattern AND no recent success AND (no yield or actively failing)
-    return base_churn and (recent_family_no_yield or recent_family_no_gain or recent_family_failing)
+
+    repeated_signature = (
+        snapshot.repeated_cohort_signature
+        and snapshot.recent_current_line_repeated_signature_count >= 3
+    )
+    stale_line = (
+        snapshot.current_line_exhausted
+        or (snapshot.recent_current_line_replayable_gain <= 0 and snapshot.recent_current_line_accepts == 0)
+    )
+
+    return bool(
+        base_churn
+        and stale_line
+        and (repeated_signature or recent_family_no_yield or recent_family_no_gain or recent_family_failing)
+    )
 
 
 def is_actionable_fracture(
@@ -518,68 +633,22 @@ def _detect_repeated_cohort_pattern(
     db: LimaCoreDB,
     problem_id: str,
     current_family_key: str,
-    recent_events: list[dict[str, Any]],
+    frontier_node_key: str,
     window: int = 10,
-) -> tuple[bool, str]:
-    """Detect if the same cohort pattern is repeating in recent history.
-    
-    Returns (pattern_detected, signature_string)
-    """
+) -> tuple[bool, str, int]:
     if not current_family_key:
-        return False, ""
-    
-    # Get recent cohorts for current family
-    all_cohorts = db.list_cohorts(problem_id)
-    family_cohorts = [
-        cohort for cohort in all_cohorts
-        if _family_key_for_world_id(str(cohort.get("world_id") or ""), problem_id) == current_family_key
-    ]
-    
-    if len(family_cohorts) < 3:
-        return False, ""
-    
-    # Sort by updated_at and take most recent
-    family_cohorts.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
-    recent_cohorts = family_cohorts[:window]
-    
-    if len(recent_cohorts) < 3:
-        return False, ""
-    
-    # Check for repeated pattern: similar outcome distribution
-    # Pattern: same family, similar job counts, similar outcome distribution
-    signatures = []
-    for cohort in recent_cohorts:
-        total = int(cohort.get("total_jobs") or 0)
-        failed = int(cohort.get("failed_jobs") or 0)
-        lemmas = int(cohort.get("yielded_lemmas") or 0)
-        cex = int(cohort.get("yielded_counterexamples") or 0)
-        
-        # Create a simple signature based on outcome ratios
-        if total > 0:
-            sig = f"{failed}:{lemmas}:{cex}"
-            signatures.append(sig)
-    
-    if len(signatures) < 3:
-        return False, ""
-    
-    # Check if at least 3 recent cohorts have the same signature
-    from collections import Counter
-    sig_counts = Counter(signatures)
-    most_common = sig_counts.most_common(1)[0]
-    
-    if most_common[1] >= 3:
-        return True, f"repeated_{most_common[0]}"
-    
-    # Also detect if all recent cohorts have zero replayable gain
-    all_zero_gain = all(
-        int(c.get("yielded_lemmas") or 0) == 0
-        for c in recent_cohorts[:3]
+        return False, "", 0
+    metrics = _recent_current_line_metrics(
+        db,
+        problem_id,
+        current_family_key,
+        frontier_node_key,
+        recent_events=[],
+        window=window,
     )
-    
-    if all_zero_gain and len(recent_cohorts) >= 3:
-        return True, "repeated_zero_gain"
-    
-    return False, ""
+    signature = str(metrics["repeated_signature"] or "")
+    count = int(metrics["repeated_signature_count"] or 0)
+    return (count >= 3, signature, count)
 
 
 def _recent_accept_count(events: list[dict[str, Any]], window: int = 10) -> int:
@@ -601,6 +670,20 @@ def _current_line_replayable_gain_rate(
     """Calculate replayable gain rate per iteration in the recent window."""
     gain = recent_family_metrics.get("replayable_gain", 0)
     return gain / window if window > 0 else 0.0
+
+
+def current_line_exhausted(snapshot: ControlSnapshot) -> bool:
+    no_recent_progress = (
+        snapshot.recent_current_line_replayable_gain <= 0
+        and snapshot.recent_current_line_accepts == 0
+        and snapshot.recent_current_line_proof_debt_delta >= 0
+    )
+    repeated_maintenance = (
+        snapshot.recent_current_line_repeated_signature_count >= 3
+        or snapshot.repeated_cohort_pattern_detected
+    )
+    failed_line = snapshot.recent_current_line_failed_cohorts >= 2 or snapshot.recent_current_line_failed_jobs >= 4
+    return bool(snapshot.current_line_key and no_recent_progress and (repeated_maintenance or failed_line))
 
 
 def materially_changed_required_delta(current: str, proposed: str) -> bool:
@@ -645,23 +728,19 @@ def maintenance_churn_penalty(snapshot: ControlSnapshot) -> float:
     line is exhibiting maintenance churn behavior.
     """
     penalty = 0.0
-    
-    # Repeated pattern detected
-    if snapshot.repeated_cohort_pattern_detected:
+
+    if snapshot.repeated_cohort_pattern_detected or snapshot.recent_current_line_repeated_signature_count >= 3:
         penalty += 0.4
-    
-    # Zero replayable gain in recent window
-    if snapshot.recent_current_family_replayable_gain <= 0:
+
+    if snapshot.recent_current_line_replayable_gain <= 0:
         penalty += 0.3
-    
-    # More reverts than accepts
-    if snapshot.recent_revert_count > snapshot.recent_accept_count:
+
+    if snapshot.recent_current_line_reverts > snapshot.recent_current_line_accepts:
         penalty += 0.2
-    
-    # Family exhausted
-    if snapshot.current_family_exhausted:
+
+    if snapshot.current_line_exhausted:
         penalty += 0.3
-    
+
     return min(penalty, 1.0)
 
 
@@ -673,8 +752,9 @@ def current_line_stagnant(snapshot: ControlSnapshot, threshold: int = 3) -> bool
     - No yielded lemmas in recent window
     - Failed cohorts exceed threshold
     """
-    no_gain = snapshot.recent_current_family_replayable_gain <= 0
-    no_lemmas = snapshot.recent_current_family_yielded_lemmas == 0
-    failing = snapshot.recent_current_family_failed_cohorts >= threshold
-    
-    return no_gain and no_lemmas and failing
+    no_gain = snapshot.recent_current_line_replayable_gain <= 0
+    no_lemmas = snapshot.recent_current_line_yielded_lemmas == 0
+    failing = snapshot.recent_current_line_failed_cohorts >= threshold
+    repeated = snapshot.recent_current_line_repeated_signature_count >= threshold
+
+    return no_gain and no_lemmas and (failing or repeated or snapshot.recent_current_line_accepts == 0)
