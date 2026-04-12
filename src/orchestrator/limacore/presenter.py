@@ -145,6 +145,12 @@ def get_problem_status_view(db: LimaCoreDB, problem: dict[str, Any], *, events: 
         "scheduler_pass_count": scheduler_ui["scheduler_pass_count"],
         "scheduler_failure_count": scheduler_ui["scheduler_failure_count"],
         "scheduler_age_text": scheduler_ui["scheduler_age_text"],
+        "unblock_available": runtime.unblock_available,
+        "unblock_reason": runtime.unblock_reason,
+        "unblock_strategy_kind": runtime.unblock_strategy_kind,
+        "unblock_current_family": runtime.unblock_current_family,
+        "unblock_suggested_family": runtime.unblock_suggested_family,
+        "unblock_candidate_count": runtime.unblock_candidate_count,
         # NEW: Current-line KPIs
         **current_line_metrics,
     }
@@ -181,6 +187,15 @@ def get_workspace_alert_banner(
             f"Suggested next family: {status_view['suggested_family_key'] or 'unknown'}",
             f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
         ]
+        if status_view.get("unblock_available"):
+            summary.extend(
+                [
+                    "Unblock plan ready.",
+                    f"Strategy: {status_view.get('unblock_strategy_kind') or 'unknown'}",
+                    f"Suggested successor family: {status_view.get('unblock_suggested_family') or 'unknown'}",
+                    f"Candidate count: {status_view.get('unblock_candidate_count') or 0}",
+                ]
+            )
         # Add current-line metrics if available
         if status_view.get('current_family_key'):
             summary.append(f"Current family: {status_view['current_family_key']}")
@@ -203,6 +218,15 @@ def get_workspace_alert_banner(
             f"Last meaningful gain: {status_view['last_gain_at'] or 'none recorded'}",
             f"Strongest world: {(strongest_world or {}).get('world_name', 'None yet')}",
         ]
+        if status_view.get("unblock_available"):
+            summary.extend(
+                [
+                    "Unblock plan ready.",
+                    f"Strategy: {status_view.get('unblock_strategy_kind') or 'unknown'}",
+                    f"Suggested successor family: {status_view.get('unblock_suggested_family') or 'unknown'}",
+                    f"Candidate count: {status_view.get('unblock_candidate_count') or 0}",
+                ]
+            )
         # Add current-line metrics
         if status_view.get('current_family_key'):
             summary.append(f"Current family: {status_view['current_family_key']}")
@@ -242,8 +266,19 @@ def get_problem_card_summary(card: dict[str, Any]) -> str:
         return card["status_view"].get("scheduler_headline") or "Autopilot unhealthy."
     if status == "blocked":
         family = card["status_view"].get("exhausted_family_key") or "unknown"
+        if card["status_view"].get("unblock_available"):
+            strategy = card["status_view"].get("unblock_strategy_kind") or "unblock"
+            suggested = card["status_view"].get("unblock_suggested_family") or "unknown"
+            return (
+                f"Blocked on {card['status_view']['blocked_node_key'] or 'unknown'}; "
+                f"unblock plan ready ({strategy} -> {suggested})."
+            )
         return f"Blocked on {card['status_view']['blocked_node_key'] or 'unknown'}; family {family} exhausted."
     if status == "stalled":
+        if card["status_view"].get("unblock_available"):
+            strategy = card["status_view"].get("unblock_strategy_kind") or "unblock"
+            suggested = card["status_view"].get("unblock_suggested_family") or "unknown"
+            return f"Stalled current line; unblock plan ready ({strategy} -> {suggested})."
         return f"Stalled after {card['status_view']['stalled_iteration_window']} iterations with zero replayable gain."
     return card["status_view"]["reason"]
 
@@ -472,6 +507,14 @@ def build_workspace_context(db: LimaCoreDB, problem_slug_or_id: str, *, flash: d
         "alert_banner": get_workspace_alert_banner(snapshot["problem"], status_view, strongest_world, solved),
         "autopilot_state": autopilot_state,
         "has_legacy_frontier_cleanup_available": _detect_legacy_cleanup_available(db, str(snapshot["problem"]["id"])),
+        "unblock": {
+            "available": bool(status_view.get("unblock_available")),
+            "reason": str(status_view.get("unblock_reason") or ""),
+            "strategy_kind": str(status_view.get("unblock_strategy_kind") or ""),
+            "current_family": str(status_view.get("unblock_current_family") or ""),
+            "suggested_family": str(status_view.get("unblock_suggested_family") or ""),
+            "candidate_count": int(status_view.get("unblock_candidate_count") or 0),
+        },
         # NEW: Current-line KPIs for UI
         "current_line": current_line_kpis,
         **scheduler_ui,

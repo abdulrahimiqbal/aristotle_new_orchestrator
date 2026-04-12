@@ -35,17 +35,31 @@
       <dd class="mt-1 font-medium">{{ card.status_view.blocker_summary or card.status_view.reason }}</dd>
       <dd class="mt-1 text-xs uppercase tracking-[0.25em] text-slate-400">Family {{ card.status_view.exhausted_family_key or "unknown" }} exhausted</dd>
     </div>
-    {% elif card.status_view.status == "stalled" %}
+  {% elif card.status_view.status == "stalled" %}
     <div class="rounded-2xl bg-brass/10 p-3 col-span-2">
       <dt class="text-slate-400">Stall summary</dt>
       <dd class="mt-1 font-medium">{{ card.status_view.reason }}</dd>
     </div>
-    {% elif card.status_view.status == "solved" %}
+    {% if card.status_view.unblock_available %}
+    <div class="rounded-2xl bg-brass/10 p-3 col-span-2">
+      <dt class="text-slate-400">Unblock plan</dt>
+      <dd class="mt-1 font-medium">{{ card.status_view.unblock_strategy_kind }} · {{ card.status_view.unblock_current_family or card.status_view.current_family_key }} → {{ card.status_view.unblock_suggested_family }}</dd>
+      <dd class="mt-1 text-xs uppercase tracking-[0.25em] text-slate-400">{{ card.status_view.unblock_candidate_count }} candidate{{ "" if card.status_view.unblock_candidate_count == 1 else "s" }}</dd>
+    </div>
+    {% endif %}
+  {% elif card.status_view.status == "solved" %}
     <div class="rounded-2xl bg-algae/10 p-3 col-span-2">
       <dt class="text-slate-400">Solved summary</dt>
       <dd class="mt-1 font-medium">{{ card.summary_text }}</dd>
     </div>
-    {% endif %}
+  {% endif %}
+  {% if card.status_view.status == "blocked" and card.status_view.unblock_available %}
+    <div class="rounded-2xl bg-rust/10 p-3 col-span-2">
+      <dt class="text-slate-400">Unblock plan</dt>
+      <dd class="mt-1 font-medium">{{ card.status_view.unblock_strategy_kind }} · {{ card.status_view.unblock_current_family or card.status_view.current_family_key }} → {{ card.status_view.unblock_suggested_family }}</dd>
+      <dd class="mt-1 text-xs uppercase tracking-[0.25em] text-slate-400">{{ card.status_view.unblock_candidate_count }} candidate{{ "" if card.status_view.unblock_candidate_count == 1 else "s" }}</dd>
+    </div>
+  {% endif %}
     <div class="rounded-2xl bg-black/20 p-3 col-span-2">
       <dt class="text-slate-400">Status summary</dt>
       <dd class="mt-1 font-medium">{{ card.summary_text }}</dd>

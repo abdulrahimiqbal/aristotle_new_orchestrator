@@ -319,14 +319,7 @@ def _live_family_keys(worlds: list[dict[str, Any]], *, current_family_key: str) 
 
 
 def suggest_rotation_family(problem_slug: str, current_family_key: str, exhausted_family_key: str = "") -> str:
-    if problem_slug == "collatz":
-        for candidate in ("hidden_state", "cocycle", "operator_world", "coordinate_lift", "other"):
-            if candidate != current_family_key:
-                return candidate
-    if problem_slug == "inward-compression-conjecture":
-        for candidate in ("balancing_world", "order_or_convexity", "coordinate_lift", "other"):
-            if candidate != current_family_key:
-                return candidate
+    _ = problem_slug
     for candidate in ROTATION_ORDER:
         if candidate != current_family_key and candidate != exhausted_family_key:
             return candidate
@@ -413,13 +406,13 @@ def build_control_snapshot(db: LimaCoreDB, problem_id: str, *, window: int = 10)
 
     line_no_progress = (
         current_line_metrics["replayable_gain"] <= 0
-        and current_line_metrics["accepts"] == 0
         and current_line_metrics["proof_debt_delta"] >= 0
     )
     line_exhausted_by_pattern = (
-        current_line_metrics["repeated_signature_count"] >= 3
+        current_line_metrics["repeated_signature_count"] >= 2
         or current_line_metrics["failed_cohorts"] >= 2
-        or current_line_metrics["failed_jobs"] >= 4
+        or current_line_metrics["failed_jobs"] >= 1
+        or current_line_metrics["accepts"] >= 1
     )
     current_line_exhausted_flag = bool(
         current_line_key
@@ -675,15 +668,21 @@ def _current_line_replayable_gain_rate(
 def current_line_exhausted(snapshot: ControlSnapshot) -> bool:
     no_recent_progress = (
         snapshot.recent_current_line_replayable_gain <= 0
-        and snapshot.recent_current_line_accepts == 0
         and snapshot.recent_current_line_proof_debt_delta >= 0
     )
     repeated_maintenance = (
-        snapshot.recent_current_line_repeated_signature_count >= 3
+        snapshot.recent_current_line_repeated_signature_count >= 2
         or snapshot.repeated_cohort_pattern_detected
     )
-    failed_line = snapshot.recent_current_line_failed_cohorts >= 2 or snapshot.recent_current_line_failed_jobs >= 4
-    return bool(snapshot.current_line_key and no_recent_progress and (repeated_maintenance or failed_line))
+    failed_line = snapshot.recent_current_line_failed_cohorts >= 1 or snapshot.recent_current_line_failed_jobs >= 1
+    accepted_but_stale = snapshot.recent_current_line_accepts >= 1
+    return bool(
+        snapshot.current_line_key
+        and snapshot.same_blocker_persists
+        and snapshot.same_family_persists
+        and no_recent_progress
+        and (repeated_maintenance or failed_line or accepted_but_stale)
+    )
 
 
 def materially_changed_required_delta(current: str, proposed: str) -> bool:

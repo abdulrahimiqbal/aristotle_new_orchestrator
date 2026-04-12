@@ -105,7 +105,7 @@ def _derive_collatz_hidden_state_frontier(
         downstream_title = "Accelerated odd step control"
 
     downstream = FrontierNode(
-        id=f"{problem.id}-downstream",
+        id=f"{problem.id}-downstream-{downstream_key}",
         problem_id=problem.id,
         node_key=downstream_key,
         node_kind="theorem_skeleton",
@@ -214,7 +214,7 @@ def _derive_generic_frontier(
         blocker_note = f"Need to complete {family_key or 'current'} line proof structure."
 
     downstream = FrontierNode(
-        id=f"{problem.id}-skeleton",
+        id=f"{problem.id}-skeleton-{downstream_key}",
         problem_id=problem.id,
         node_key=downstream_key,
         node_kind="theorem_skeleton",

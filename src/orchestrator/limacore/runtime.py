@@ -9,8 +9,10 @@ from orchestrator import config as app_config
 from .artifacts import utc_now
 from .control import build_control_snapshot
 from .db import LimaCoreDB
-from .frontier import proof_debt
+from .frontier import proof_debt, select_frontier_gap
+from .models import ProblemSpec
 from .solved import solved_checker
+from .unblock_manager import UnblockManager
 
 
 STATUS_PRIORITY = {
@@ -63,6 +65,12 @@ class RuntimeStatusView:
     scheduler_expected_next_pass_at: str = ""
     scheduler_status_reason: str = ""
     scheduler_name: str = "limacore_autopilot"
+    unblock_available: bool = False
+    unblock_reason: str = ""
+    unblock_strategy_kind: str = ""
+    unblock_current_family: str = ""
+    unblock_suggested_family: str = ""
+    unblock_candidate_count: int = 0
 
 
 def _parse_timestamp(value: str) -> datetime | None:
@@ -156,6 +164,44 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
     )
     replayable_gain_rate = sum(int((event.get("score_delta") or {}).get("replayable_gain", 0)) for event in events[-stall_window:])
     scheduler_view = get_scheduler_health_view(db, interval_sec=app_config.LIMACORE_LOOP_INTERVAL_SEC)
+    unblock_view: dict[str, Any] = {
+        "unblock_available": False,
+        "unblock_reason": "",
+        "unblock_strategy_kind": "",
+        "unblock_current_family": snapshot.current_family_key,
+        "unblock_suggested_family": snapshot.suggested_family_key,
+        "unblock_candidate_count": 0,
+    }
+    if (
+        str(problem.get("runtime_status") or "") in {"blocked", "stalled"}
+        or snapshot.current_line_exhausted
+        or snapshot.current_family_exhausted
+    ):
+        try:
+            gap = select_frontier_gap(db, problem_id)
+        except Exception:
+            gap = {
+                "node_key": snapshot.blocked_node_key or snapshot.current_line_node_key or "target_theorem",
+                "title": snapshot.blocker_kind or "frontier gap",
+            }
+        manager = UnblockManager()
+        suggestion = manager.suggest(
+            problem=ProblemSpec(**problem),
+            gap=gap,
+            control_snapshot=snapshot,
+            strongest_worlds=db.list_world_heads(problem_id),
+            recent_fractures=db.list_fracture_heads(problem_id),
+            recent_events=events,
+        )
+        chosen = suggestion.chosen_delta
+        unblock_view = {
+            "unblock_available": chosen is not None,
+            "unblock_reason": suggestion.reason_md,
+            "unblock_strategy_kind": suggestion.strategy_kind,
+            "unblock_current_family": suggestion.current_family,
+            "unblock_suggested_family": suggestion.suggested_family,
+            "unblock_candidate_count": len(suggestion.candidates),
+        }
     current_line_kpis = {
         "current_family_key": snapshot.current_family_key,
         "current_family_exhausted": snapshot.current_family_exhausted,
@@ -175,6 +221,7 @@ def detect_runtime_status(db: LimaCoreDB, problem_id: str, *, stall_window: int 
             suggested_family_key=snapshot.suggested_family_key,
             **scheduler_view,
             **current_line_kpis,
+            **unblock_view,
             **kwargs,
         )
 

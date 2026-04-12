@@ -8,6 +8,7 @@ from typing import Any
 from .aristotle import AristotleBackend, LocalAristotleBackend, poll_results, submit_aristotle_jobs
 from .artifacts import utc_now
 from .compiler import CompileError, compile_delta_to_reduction
+from .control import build_control_snapshot
 from .cohorts import build_aristotle_cohorts
 from .db import LimaCoreDB
 from .events import apply_event_artifacts
@@ -26,6 +27,7 @@ from .retriever import Retriever
 from .runtime import detect_runtime_status, persist_runtime_status
 from .scorer import score_results
 from .solved import solved_checker
+from .unblock_manager import UnblockManager
 
 
 logger = logging.getLogger(__name__)
@@ -39,11 +41,13 @@ class LimaCoreLoop:
         backend: AristotleBackend | None = None,
         proposer: Proposer | None = None,
         retriever: Retriever | None = None,
+        unblock_manager: UnblockManager | None = None,
     ) -> None:
         self.db = db
         self.backend = backend or LocalAristotleBackend()
         self.proposer = proposer or Proposer(db)
         self.retriever = retriever or Retriever(db)
+        self.unblock_manager = unblock_manager or UnblockManager(worldsmith=self.proposer.worldsmith)
 
     def create_problem_from_prompt(self, prompt: str) -> dict:
         parsed = normalize_problem_prompt(prompt)
@@ -166,7 +170,33 @@ class LimaCoreLoop:
             "selected",
             summary_md=f"Selected gap `{gap['node_key']}`.",
         )
-        delta = forced_delta or self.proposer.propose_delta(problem, gap)
+        delta = forced_delta
+        if delta is None:
+            snapshot = build_control_snapshot(self.db, problem.id)
+            if self.unblock_manager.should_activate(problem, snapshot):
+                suggestion = self.unblock_manager.suggest(
+                    problem=problem,
+                    gap=gap,
+                    control_snapshot=snapshot,
+                    strongest_worlds=self.db.list_world_heads(problem.id),
+                    recent_fractures=self.db.list_fracture_heads(problem.id),
+                    recent_events=self.db.list_events(problem.id, limit=max(snapshot.window_size, 20)),
+                )
+                chosen = suggestion.chosen_delta
+                if chosen is not None:
+                    delta = chosen
+                    plan_ref = self.db.store_artifact("unblock_plan", suggestion.to_dict())
+                    self.db.append_event(
+                        problem.id,
+                        "unblock_plan_selected",
+                        "planned",
+                        parent_event_id=select_event,
+                        artifact_refs=[plan_ref],
+                        summary_md=suggestion.reason_md,
+                        family_key=suggestion.suggested_family,
+                    )
+        if delta is None:
+            delta = self.proposer.propose_delta(problem, gap)
         delta_ref = self.db.store_artifact("delta_proposal", asdict(delta))
         proposed_event = self.db.append_event(
             problem.id,

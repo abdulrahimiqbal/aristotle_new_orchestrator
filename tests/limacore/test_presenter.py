@@ -116,3 +116,29 @@ def test_workspace_banners_render_for_blocked_stalled_solved(tmp_path: Path) -> 
     loop.run_iteration("inward-compression-conjecture")
     solved_view = get_problem_status_view(db, db.get_problem("inward-compression-conjecture"))
     assert solved_view["status"] in {"running", "blocked", "stalled", "solved"}
+
+
+def test_workspace_exposes_unblock_plan_fields_when_blocked_or_stalled(tmp_path: Path) -> None:
+    db = LimaCoreDB(str(tmp_path / "limacore.db"))
+    db.initialize()
+    loop = LimaCoreLoop(db, backend=LocalAristotleBackend())
+    loop.run_iteration("collatz")
+    problem = db.get_problem("collatz")
+    assert problem is not None
+    db.update_problem_runtime(
+        str(problem["id"]),
+        runtime_status="blocked",
+        status_reason_md="Blocked for unblock presentation test.",
+        blocked_node_key="target_theorem",
+        blocker_kind="missing_bridge_lemma",
+    )
+
+    ctx = build_workspace_context(db, "collatz")
+    status_view = ctx["status_view"]
+    assert "unblock_available" in status_view
+    assert "unblock_strategy_kind" in status_view
+    assert "unblock_suggested_family" in status_view
+    assert "unblock_candidate_count" in status_view
+    if status_view["unblock_available"]:
+        summary = " ".join(ctx["alert_banner"]["summary"]) if ctx.get("alert_banner") else ""
+        assert "Unblock plan ready" in summary

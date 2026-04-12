@@ -4,13 +4,34 @@ from .control import build_control_snapshot, family_exhausted
 from .db import LimaCoreDB
 from .models import DeltaProposal, ProblemSpec
 from .program import get_program_state
+from .unblock_manager import UnblockManager, UnblockSuggestion
 from .worldsmith import Worldsmith
 
 
 class Proposer:
-    def __init__(self, db: LimaCoreDB, *, worldsmith: Worldsmith | None = None) -> None:
+    def __init__(
+        self,
+        db: LimaCoreDB,
+        *,
+        worldsmith: Worldsmith | None = None,
+        unblock_manager: UnblockManager | None = None,
+    ) -> None:
         self.db = db
         self.worldsmith = worldsmith or Worldsmith()
+        self.unblock_manager = unblock_manager or UnblockManager(worldsmith=self.worldsmith)
+
+    def propose_unblock(self, problem: ProblemSpec, gap: dict) -> UnblockSuggestion | None:
+        snapshot = build_control_snapshot(self.db, problem.id)
+        if not self.unblock_manager.should_activate(problem, snapshot):
+            return None
+        return self.unblock_manager.suggest(
+            problem=problem,
+            gap=gap,
+            control_snapshot=snapshot,
+            strongest_worlds=self.db.list_world_heads(problem.id),
+            recent_fractures=self.db.list_fracture_heads(problem.id),
+            recent_events=self.db.list_events(problem.id, limit=max(snapshot.window_size, 20)),
+        )
 
     def propose_delta(self, problem: ProblemSpec, gap: dict) -> DeltaProposal:
         _program = get_program_state(self.db, problem.id)
