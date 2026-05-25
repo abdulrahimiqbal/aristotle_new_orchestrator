@@ -20,6 +20,33 @@ One **FastAPI** process serves the **HTMX + Tailwind** dashboard and a **backgro
                                                └─────────────────┘
 ```
 
+## First 5 Minutes: One Sample Campaign
+
+For a deterministic, no-API inspection path, run:
+
+```bash
+PYTHONPATH=src python examples/erdos_44_sample_campaign.py
+```
+
+This loads `docs/research_packets/erdos_44_packet.json` and prints the
+campaign chain:
+
+```txt
+research question
+-> research packet
+-> active frontier targets
+-> selected attack families
+-> next proof/experiment shape
+-> result interpretation
+```
+
+Read the walkthrough in
+[`docs/sample_campaign_erdos_44.md`](docs/sample_campaign_erdos_44.md).
+
+The sample does not claim the Erdős 44 campaign is solved. It shows the
+orchestration layer that converts a broad research problem into focused formal
+targets, anti-goals, and next experiments.
+
 ## Problem map (JSON structure)
 
 Each campaign stores **`campaigns.problem_map_json`**: a single JSON object the manager refreshes on a schedule (see `MAP_REFRESH_MAX_INTERVAL_TICKS` / manager tick). It is **not** the same as verification **targets** (those are separate rows); the map is a **landscape graph** for the LLM and dashboard.
